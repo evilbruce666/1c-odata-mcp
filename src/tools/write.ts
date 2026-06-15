@@ -7,7 +7,7 @@ import { listOrganizations, resolveOrganization } from "../odata/orgs.js";
 import { ensurePublished, requireEntity } from "../odata/publication.js";
 import { accountsByCode, nomenclatureAccounts, type NomAccounts } from "../odata/accounting.js";
 import { fetchAll } from "../odata/pagination.js";
-import { buildQuery, cmp, contains, odataString } from "../odata/query.js";
+import { and, buildQuery, cmp, contains, odataGuid, odataString } from "../odata/query.js";
 import type { ODataEntity } from "../types/odata.js";
 
 /** Тип ссылки на номенклатуру в табличной части (полиморфная ссылка 1С). */
@@ -224,7 +224,7 @@ async function goodsAccounts(
   conn: Connection,
   orgKey: string,
   lines: GoodsLine[],
-  kind: "purchase" | "shipment",
+  kind: "purchase" | "shipment" | "service",
 ): Promise<{ settlement?: string | undefined; lineAccountsFor: LineAccountsFor }> {
   const nomRefs = lines.map((l) => l.nomenclatureRef);
   if (kind === "purchase") {
@@ -245,6 +245,7 @@ async function goodsAccounts(
       },
     };
   }
+  // shipment (товары) и service (услуги) — продажа: Дт 62 Кт 90, у товаров ещё Дт 90 Кт 41.
   const codes = await accountsByCode(conn, ["41.01", "41", "62.01", "62", "90.01.1", "90.01", "90.02.1", "90.02", "90.03"]);
   const defaults: NomAccounts = {
     goods: pickAccount(codes, "41.01", "41"),
@@ -257,14 +258,77 @@ async function goodsAccounts(
     settlement: pickAccount(codes, "62.01", "62"),
     lineAccountsFor: (nomRef, vat) => {
       const a = accMap.get(nomRef);
+      const vatField = vat !== "БезНДС" ? { СчетУчетаНДСПоРеализации_Key: a?.outgoingVat } : {};
+      // Услуги — без счёта учёта 41 (нет склада); товары — со счётом учёта.
+      const goods = kind === "service" ? {} : { СчетУчета_Key: a?.goods };
       return clean({
-        СчетУчета_Key: a?.goods,
+        ...goods,
         СчетДоходов_Key: a?.income,
         СчетРасходов_Key: a?.expense,
-        ...(vat !== "БезНДС" ? { СчетУчетаНДСПоРеализации_Key: a?.outgoingVat } : {}),
+        ...vatField,
       }) as Record<string, string>;
     },
   };
+}
+
+/** Читает документ: организация, проведён ли, и текущие строки «Товары» как GoodsLine[]. */
+async function getDocInfo(
+  conn: Connection,
+  entitySet: string,
+  guid: string,
+): Promise<{ orgKey: string; posted: boolean; lines: GoodsLine[] }> {
+  const doc = await conn.client.getEntity(`${entitySet}(guid'${guid}')${buildQuery({})}`);
+  const rows = (doc["Товары"] as Array<Record<string, unknown>>) ?? [];
+  const lines: GoodsLine[] = rows.map((r) => ({
+    nomenclatureRef: String(r["Номенклатура_Key"] ?? r["Номенклатура"] ?? ""),
+    quantity: Number(r["Количество"] ?? 0),
+    price: Number(r["Цена"] ?? 0),
+    vatRate: String(r["СтавкаНДС"] ?? "БезНДС"),
+  }));
+  return { orgKey: String(doc["Организация_Key"] ?? ""), posted: doc["Posted"] === true, lines };
+}
+
+/** Собирает строки табличной части под тип документа (счёт/поступление/реализация). */
+async function buildSectionRows(
+  conn: Connection,
+  entitySet: string,
+  orgKey: string,
+  lines: GoodsLine[],
+): Promise<{ rows: Array<Record<string, unknown>>; total: number } | undefined> {
+  const inList = (arr: readonly string[]): boolean => arr.includes(entitySet);
+  if (inList(DOCUMENTS.customerInvoice)) {
+    const rows = buildInvoiceRows(lines);
+    return { rows, total: rowsTotal(rows) };
+  }
+  if (inList(DOCUMENTS.purchases) || inList(DOCUMENTS.sales)) {
+    const kind = inList(DOCUMENTS.purchases) ? "purchase" : "shipment";
+    const { lineAccountsFor } = await goodsAccounts(conn, orgKey, lines, kind);
+    const rows = buildGoodsRows(lines, lineAccountsFor);
+    return { rows, total: rowsTotal(rows) };
+  }
+  return undefined;
+}
+
+/** Банковский счёт организации (для документов оплаты). По названию или первый. */
+async function resolveOrgBankAccount(
+  conn: Connection,
+  orgKey: string,
+  query: string | undefined,
+): Promise<string | undefined> {
+  const set = resolveEntity(CATALOGS.bankAccounts, await conn.available());
+  if (!set) return undefined;
+  // Владелец банковского счёта — полиморфная ссылка Owner (+ Owner_Type), не Owner_Key.
+  const filter = and(
+    cmp("Owner", "eq", odataGuid(orgKey)),
+    query ? contains("Description", query) : undefined,
+  );
+  try {
+    const { rows } = await fetchAll(conn.client, set, { filter, select: ["Ref_Key"] }, 5, 5);
+    return rows[0] ? String(rows[0]["Ref_Key"]) : undefined;
+  } catch {
+    // Не удалось подобрать — не критично: 1С подставит счёт организации по умолчанию.
+    return undefined;
+  }
 }
 
 const confirmField = z
@@ -771,33 +835,171 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       guard("update_document_lines", async () => {
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
-        const guid = ref.replace(/[{}']/g, "");
-        const doc = await conn.client.getEntity(
-          `${entitySet}(guid'${guid}')${buildQuery({ select: ["Организация_Key", "Posted"] })}`,
-        );
-        if (doc["Posted"] === true) {
-          return fail(
-            "Документ проведён. Сначала отмените проведение (post_document с post=false), затем меняйте строки.",
-          );
+        const info = await getDocInfo(conn, entitySet, ref.replace(/[{}']/g, ""));
+        if (info.posted) {
+          return fail("Документ проведён. Сначала отмените проведение (post_document с post=false), затем меняйте строки.");
         }
-        const orgKey = String(doc["Организация_Key"] ?? "");
+        const built = await buildSectionRows(conn, entitySet, info.orgKey, lines);
+        if (!built) {
+          return fail("Поддерживаются: счёт покупателю, поступление товаров и услуг, реализация товаров и услуг.");
+        }
+        return patchOrPreview(conn, entitySet, ref, { Товары: built.rows, СуммаДокумента: built.total }, confirm);
+      }),
+  );
 
-        const inList = (arr: readonly string[]): boolean => arr.includes(entitySet);
-        let rows: Array<Record<string, unknown>>;
-        if (inList(DOCUMENTS.customerInvoice)) {
-          rows = buildInvoiceRows(lines);
-        } else if (inList(DOCUMENTS.purchases)) {
-          const { lineAccountsFor } = await goodsAccounts(conn, orgKey, lines, "purchase");
-          rows = buildGoodsRows(lines, lineAccountsFor);
-        } else if (inList(DOCUMENTS.sales)) {
-          const { lineAccountsFor } = await goodsAccounts(conn, orgKey, lines, "shipment");
-          rows = buildGoodsRows(lines, lineAccountsFor);
-        } else {
-          return fail(
-            "update_document_lines поддерживает: счёт покупателю, поступление товаров и услуг, реализацию товаров и услуг.",
-          );
-        }
-        return patchOrPreview(conn, entitySet, ref, { Товары: rows, СуммаДокумента: rowsTotal(rows) }, confirm);
+  const lineObject = z.object({
+    nomenclatureRef: z.string().describe("Ref_Key номенклатуры"),
+    quantity: z.number().positive().describe("Количество"),
+    price: z.number().nonnegative().describe("Цена за единицу"),
+    vatRate: z.enum(VAT_RATES).default("БезНДС").describe("Ставка НДС"),
+  });
+
+  server.registerTool(
+    "add_document_line",
+    {
+      title: "Добавить строку в документ",
+      description:
+        "Добавляет одну позицию в табличную часть «Товары» существующего НЕПРОВЕДЁННОГО документа " +
+        "(счёт/поступление/реализация), сохраняя прежние строки. dry-run/confirm.",
+      inputSchema: { database: databaseField, entitySet: z.string(), ref: z.string(), line: lineObject, confirm: confirmField },
+    },
+    ({ database, entitySet, ref, line, confirm }) =>
+      guard("add_document_line", async () => {
+        const conn = ctx.db(database);
+        ensurePublished(await conn.available(), entitySet);
+        const info = await getDocInfo(conn, entitySet, ref.replace(/[{}']/g, ""));
+        if (info.posted) return fail("Документ проведён. Сначала отмените проведение, затем меняйте строки.");
+        const built = await buildSectionRows(conn, entitySet, info.orgKey, [...info.lines, line]);
+        if (!built) return fail("Поддерживаются: счёт, поступление, реализация.");
+        return patchOrPreview(conn, entitySet, ref, { Товары: built.rows, СуммаДокумента: built.total }, confirm);
+      }),
+  );
+
+  server.registerTool(
+    "remove_document_line",
+    {
+      title: "Удалить строку документа",
+      description:
+        "Удаляет строку (по номеру LineNumber, начиная с 1) из табличной части «Товары» существующего " +
+        "НЕПРОВЕДЁННОГО документа. Нельзя удалить последнюю строку. dry-run/confirm.",
+      inputSchema: {
+        database: databaseField,
+        entitySet: z.string(),
+        ref: z.string(),
+        lineNumber: z.number().int().positive().describe("Номер строки (с 1)"),
+        confirm: confirmField,
+      },
+    },
+    ({ database, entitySet, ref, lineNumber, confirm }) =>
+      guard("remove_document_line", async () => {
+        const conn = ctx.db(database);
+        ensurePublished(await conn.available(), entitySet);
+        const info = await getDocInfo(conn, entitySet, ref.replace(/[{}']/g, ""));
+        if (info.posted) return fail("Документ проведён. Сначала отмените проведение, затем меняйте строки.");
+        if (lineNumber > info.lines.length) return fail(`В документе всего ${info.lines.length} строк(и).`);
+        const kept = info.lines.filter((_, i) => i + 1 !== lineNumber);
+        if (kept.length === 0) return fail("Нельзя удалить последнюю строку — в документе должна остаться хотя бы одна позиция.");
+        const built = await buildSectionRows(conn, entitySet, info.orgKey, kept);
+        if (!built) return fail("Поддерживаются: счёт, поступление, реализация.");
+        return patchOrPreview(conn, entitySet, ref, { Товары: built.rows, СуммаДокумента: built.total }, confirm);
+      }),
+  );
+
+  server.registerTool(
+    "create_act",
+    {
+      title: "Создать акт (реализация услуг)",
+      description:
+        "Создаёт «Реализация (акт, накладная)» с табличной частью УСЛУГИ (без склада/остатков). " +
+        "Документ НЕПРОВЕДЁННЫЙ; проводки при проведении Дт 62 Кт 90.01 (без 41). " +
+        "dry-run/confirm. Контрагент — покупатель; позиции — услуги-номенклатура.",
+      inputSchema: {
+        database: databaseField,
+        organization: organizationField,
+        counterpartyRef: z.string().describe("Ref_Key покупателя"),
+        contractRef: z.string().optional().describe("Ref_Key договора"),
+        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
+        sumIncludesVat: z.boolean().default(true).describe("Сумма включает НДС"),
+        lines: z.array(lineObject).min(1).describe("Позиции-услуги"),
+        confirm: confirmField,
+      },
+    },
+    ({ database, organization, counterpartyRef, contractRef, date, sumIncludesVat, lines, confirm }) =>
+      guard("create_act", async () => {
+        const conn = ctx.db(database);
+        const set = await requireEntity(conn, DOCUMENTS.sales, "Документ «Реализация товаров и услуг»");
+        const org = await resolveOrg(conn, organization);
+        const { settlement, lineAccountsFor } = await goodsAccounts(conn, org.key, lines, "service");
+        const rows = buildGoodsRows(lines, lineAccountsFor);
+        const payload = clean({
+          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Posted: false,
+          ВидОперации: "Услуги", // иначе табличная часть «Услуги» не сохраняется
+          Организация_Key: org.key,
+          Контрагент_Key: counterpartyRef,
+          ДоговорКонтрагента_Key: contractRef,
+          СчетУчетаРасчетовСКонтрагентом_Key: settlement,
+          СуммаВключаетНДС: sumIncludesVat,
+          СуммаДокумента: rowsTotal(rows),
+          Услуги: rows,
+        });
+        return createOrPreview(conn, set, payload, confirm);
+      }),
+  );
+
+  server.registerTool(
+    "create_payment",
+    {
+      title: "Создать оплату от покупателя",
+      description:
+        "Создаёт «Поступление на расчётный счёт» (оплата от покупателя) на сумму, по контрагенту и договору. " +
+        "Документ НЕПРОВЕДЁННЫЙ; при проведении проводка Дт 51 Кт 62. " +
+        "Банковский счёт организации берётся по названию или первый. dry-run/confirm.",
+      inputSchema: {
+        database: databaseField,
+        organization: organizationField,
+        counterpartyRef: z.string().describe("Ref_Key покупателя"),
+        contractRef: z.string().describe("Ref_Key договора"),
+        amount: z.number().positive().describe("Сумма оплаты"),
+        bankAccount: z.string().optional().describe("Название банковского счёта организации (если несколько)"),
+        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
+        confirm: confirmField,
+      },
+    },
+    ({ database, organization, counterpartyRef, contractRef, amount, bankAccount, date, confirm }) =>
+      guard("create_payment", async () => {
+        const conn = ctx.db(database);
+        const set = await requireEntity(conn, DOCUMENTS.bankIn, "Документ «Поступление на расчётный счёт»");
+        const org = await resolveOrg(conn, organization);
+        const bank = await resolveOrgBankAccount(conn, org.key, bankAccount);
+        const codes = await accountsByCode(conn, ["62.01", "62", "62.02"]);
+        const settle = pickAccount(codes, "62.01", "62");
+        const advance = pickAccount(codes, "62.02");
+        const cpSet = resolveEntity(CATALOGS.counterparties, await conn.available());
+        const payload = clean({
+          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Posted: false,
+          ВидОперации: "ОплатаПокупателя",
+          Организация_Key: org.key,
+          СчетОрганизации_Key: bank,
+          Контрагент: counterpartyRef,
+          ...(cpSet ? { Контрагент_Type: `StandardODATA.${cpSet}` } : {}),
+          ДоговорКонтрагента_Key: contractRef,
+          СуммаДокумента: amount,
+          СчетУчетаРасчетовСКонтрагентом_Key: settle,
+          РасшифровкаПлатежа: [
+            clean({
+              LineNumber: 1,
+              ДоговорКонтрагента_Key: contractRef,
+              СпособПогашенияЗадолженности: "Автоматически", // иначе платёж не распределяется и нет проводок
+              СуммаПлатежа: amount,
+              СтавкаНДС: "БезНДС",
+              СчетУчетаРасчетовСКонтрагентом_Key: settle,
+              СчетУчетаРасчетовПоАвансам_Key: advance,
+            }),
+          ],
+        });
+        return createOrPreview(conn, set, payload, confirm);
       }),
   );
 }
