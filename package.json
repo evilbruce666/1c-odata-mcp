@@ -1,0 +1,45 @@
+{
+  "name": "1c-odata-mcp",
+  "version": "0.1.0",
+  "description": "Read-only MCP server for 1C (1С:Предприятие) via the standard OData interface. High-level tools for executives and accountants.",
+  "type": "module",
+  "bin": {
+    "1c-odata-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    ".env.example"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch",
+    "probe": "node dist/scripts/probe-metadata.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "1c",
+    "1с",
+    "odata",
+    "scloud",
+    "accounting",
+    "erp"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "fast-xml-parser": "^4.5.0",
+    "pino": "^9.5.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}
