@@ -138,7 +138,11 @@ function findSchema(doc: Record<string, unknown>): {
 }
 
 function detectVersion(doc: Record<string, unknown>): string {
-  const edmx = (doc.Edmx ?? doc["edmx:Edmx"]) as Record<string, string> | undefined;
-  // 1С обычно отдаёт OData 3.0.
-  return edmx?.["@_Version"] ?? "3.0";
+  // Реальная версия OData — в DataServices/@m:DataServiceVersion (напр. "3.0").
+  // Атрибут Version у Edmx — это версия EDMX-обёртки ("1.0"), не путать.
+  const edmx = (doc.Edmx ?? doc["edmx:Edmx"]) as Record<string, unknown> | undefined;
+  const services = (edmx?.DataServices ?? edmx?.["edmx:DataServices"]) as
+    | Record<string, string>
+    | undefined;
+  return services?.["@_DataServiceVersion"] ?? services?.["@_m:DataServiceVersion"] ?? "3.0";
 }
