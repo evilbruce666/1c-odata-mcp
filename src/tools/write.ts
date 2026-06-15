@@ -4,6 +4,8 @@ import type { Connection, ServerContext } from "../context.js";
 import { ok, fail, guard, databaseField, organizationField } from "./_shared.js";
 import { CATALOGS, DOCUMENTS, resolveEntity } from "../config/mapping.js";
 import { listOrganizations, resolveOrganization } from "../odata/orgs.js";
+import { fetchAll } from "../odata/pagination.js";
+import { contains } from "../odata/query.js";
 import type { ODataEntity } from "../types/odata.js";
 
 /** Тип ссылки на номенклатуру в табличной части (полиморфная ссылка 1С). */
@@ -43,6 +45,64 @@ async function resolveOrg(
   throw new Error(
     `В базе несколько организаций — укажите organization. Доступные: ${orgs.map((o) => o.name).join(", ")}`,
   );
+}
+
+/** Резолвит склад по названию; если не задан и склад один — берёт его; иначе undefined. */
+async function resolveWarehouse(conn: Connection, name: string | undefined): Promise<string | undefined> {
+  const set = resolveEntity(CATALOGS.warehouses, await conn.available());
+  if (!set) return undefined;
+  if (name) {
+    const { rows } = await fetchAll(
+      conn.client,
+      set,
+      { filter: contains("Description", name), select: ["Ref_Key", "Description"] },
+      5,
+      5,
+    );
+    const first = rows[0];
+    if (!first) throw new Error(`Склад "${name}" не найден (см. list_entities / справочник Склады).`);
+    return String(first["Ref_Key"]);
+  }
+  const { rows } = await fetchAll(conn.client, set, { select: ["Ref_Key"] }, 2, 2);
+  return rows.length === 1 ? String((rows[0] as ODataEntity)["Ref_Key"]) : undefined;
+}
+
+/** Строит и создаёт/предпросматривает товарный документ (поступление/реализация). */
+async function createGoodsDoc(
+  conn: Connection,
+  entitySet: string,
+  p: {
+    orgKey: string;
+    counterpartyRef: string;
+    contractRef?: string | undefined;
+    warehouseKey?: string | undefined;
+    date?: string | undefined;
+    sumIncludesVat: boolean;
+    lines: Array<{ nomenclatureRef: string; quantity: number; price: number; vatRate: string }>;
+  },
+  confirm: boolean,
+) {
+  const rows = p.lines.map((l, i) => ({
+    LineNumber: i + 1,
+    Номенклатура_Key: l.nomenclatureRef,
+    Количество: l.quantity,
+    Цена: l.price,
+    Сумма: Math.round(l.quantity * l.price * 100) / 100,
+    СтавкаНДС: l.vatRate,
+  }));
+  const total = Math.round(rows.reduce((s, r) => s + r.Сумма, 0) * 100) / 100;
+  const payload = clean({
+    Date: odataDate(p.date ? new Date(`${p.date}T00:00:00`) : new Date()),
+    Posted: false,
+    Организация_Key: p.orgKey,
+    Контрагент_Key: p.counterpartyRef,
+    ДоговорКонтрагента_Key: p.contractRef,
+    Склад_Key: p.warehouseKey,
+    СуммаВключаетНДС: p.sumIncludesVat,
+    СуммаДокумента: total,
+    Товары: rows,
+  });
+  return createOrPreview(conn, entitySet, payload, confirm);
 }
 
 const confirmField = z
@@ -332,6 +392,81 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         }
         await conn.client.action(path);
         return ok({ done: true, database: conn.cfg.name, ref: guid, action });
+      }),
+  );
+
+  // Общая схема входов для товарных документов (поступление/реализация).
+  const goodsDocInput = {
+    database: databaseField,
+    organization: organizationField,
+    counterpartyRef: z.string().describe("Ref_Key контрагента"),
+    contractRef: z.string().optional().describe("Ref_Key договора (необязательно)"),
+    warehouse: z.string().optional().describe("Название склада (если в базе несколько)"),
+    date: z.string().optional().describe("Дата документа YYYY-MM-DD (по умолчанию сегодня)"),
+    sumIncludesVat: z.boolean().default(true).describe("Сумма включает НДС"),
+    lines: z
+      .array(
+        z.object({
+          nomenclatureRef: z.string().describe("Ref_Key номенклатуры"),
+          quantity: z.number().positive().describe("Количество"),
+          price: z.number().nonnegative().describe("Цена за единицу"),
+          vatRate: z.enum(VAT_RATES).default("БезНДС").describe("Ставка НДС"),
+        }),
+      )
+      .min(1)
+      .describe("Позиции документа"),
+    confirm: confirmField,
+  };
+
+  server.registerTool(
+    "create_purchase",
+    {
+      title: "Создать поступление от поставщика",
+      description:
+        "Создаёт документ «Поступление товаров и услуг» (закупка у поставщика) с табличной частью «Товары». " +
+        "Документ НЕПРОВЕДЁННЫЙ; провести — вручную в 1С или post_document (тогда 1С сформирует проводки Дт 41/19 Кт 60). " +
+        "По умолчанию dry-run; создание — при confirm=true. Контрагент — поставщик, договор — вида «СПоставщиком».",
+      inputSchema: goodsDocInput,
+    },
+    ({ database, organization, counterpartyRef, contractRef, warehouse, date, sumIncludesVat, lines, confirm }) =>
+      guard("create_purchase", async () => {
+        const conn = ctx.db(database);
+        const set = resolveEntity(DOCUMENTS.purchases, await conn.available());
+        if (!set) return fail("Документ «Поступление товаров и услуг» не опубликован в OData.");
+        const org = await resolveOrg(conn, organization);
+        const warehouseKey = await resolveWarehouse(conn, warehouse);
+        return createGoodsDoc(
+          conn,
+          set,
+          { orgKey: org.key, counterpartyRef, contractRef, warehouseKey, date, sumIncludesVat, lines },
+          confirm,
+        );
+      }),
+  );
+
+  server.registerTool(
+    "create_shipment",
+    {
+      title: "Создать реализацию покупателю",
+      description:
+        "Создаёт документ «Реализация товаров и услуг» (отгрузка покупателю) с табличной частью «Товары». " +
+        "Документ НЕПРОВЕДЁННЫЙ; провести — вручную в 1С или post_document (тогда 1С сформирует проводки Дт 62 Кт 90, Дт 90 Кт 41 и др.). " +
+        "По умолчанию dry-run; создание — при confirm=true. Контрагент — покупатель, договор — вида «СПокупателем».",
+      inputSchema: goodsDocInput,
+    },
+    ({ database, organization, counterpartyRef, contractRef, warehouse, date, sumIncludesVat, lines, confirm }) =>
+      guard("create_shipment", async () => {
+        const conn = ctx.db(database);
+        const set = resolveEntity(DOCUMENTS.sales, await conn.available());
+        if (!set) return fail("Документ «Реализация товаров и услуг» не опубликован в OData.");
+        const org = await resolveOrg(conn, organization);
+        const warehouseKey = await resolveWarehouse(conn, warehouse);
+        return createGoodsDoc(
+          conn,
+          set,
+          { orgKey: org.key, counterpartyRef, contractRef, warehouseKey, date, sumIncludesVat, lines },
+          confirm,
+        );
       }),
   );
 }
