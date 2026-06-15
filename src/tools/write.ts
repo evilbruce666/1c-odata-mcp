@@ -7,7 +7,7 @@ import { listOrganizations, resolveOrganization } from "../odata/orgs.js";
 import { ensurePublished, requireEntity } from "../odata/publication.js";
 import { accountsByCode, nomenclatureAccounts, type NomAccounts } from "../odata/accounting.js";
 import { fetchAll } from "../odata/pagination.js";
-import { contains } from "../odata/query.js";
+import { buildQuery, cmp, contains, odataString } from "../odata/query.js";
 import type { ODataEntity } from "../types/odata.js";
 
 /** Тип ссылки на номенклатуру в табличной части (полиморфная ссылка 1С). */
@@ -69,6 +69,86 @@ async function resolveWarehouse(conn: Connection, name: string | undefined): Pro
   return rows.length === 1 ? String((rows[0] as ODataEntity)["Ref_Key"]) : undefined;
 }
 
+/**
+ * Резолвит элемент справочника по точному коду или части наименования.
+ * Публикацию проверяет (requireEntity). Бросает Error, если не найдено.
+ */
+async function resolveCatalogItem(
+  conn: Connection,
+  candidates: readonly string[],
+  label: string,
+  query: string,
+): Promise<{ ref: string; code?: string; name?: string }> {
+  const set = await requireEntity(conn, candidates, label);
+  const byCode = await fetchAll(
+    conn.client,
+    set,
+    { filter: cmp("Code", "eq", odataString(query)), select: ["Ref_Key", "Code", "Description"] },
+    3,
+    3,
+  );
+  const rows = byCode.rows.length
+    ? byCode.rows
+    : (
+        await fetchAll(
+          conn.client,
+          set,
+          { filter: contains("Description", query), select: ["Ref_Key", "Code", "Description"] },
+          5,
+          5,
+        )
+      ).rows;
+  const first = rows[0];
+  if (!first) throw new Error(`${label}: «${query}» не найдено (по коду или наименованию).`);
+  return {
+    ref: String(first["Ref_Key"]),
+    code: first["Code"] ? String(first["Code"]) : undefined,
+    name: first["Description"] ? String(first["Description"]) : undefined,
+  };
+}
+
+interface GoodsLine {
+  nomenclatureRef: string;
+  quantity: number;
+  price: number;
+  vatRate: string;
+}
+type LineAccountsFor = (nomRef: string, vatRate: string) => Record<string, string>;
+
+const lineSum = (l: GoodsLine): number => Math.round(l.quantity * l.price * 100) / 100;
+const rowsTotal = (rows: Array<Record<string, unknown>>): number =>
+  Math.round(rows.reduce((s, r) => s + (r["Сумма"] as number), 0) * 100) / 100;
+
+/** Строки табличной части «Товары» для поступления/реализации (Номенклатура_Key + счета). */
+function buildGoodsRows(lines: GoodsLine[], lineAccountsFor: LineAccountsFor): Array<Record<string, unknown>> {
+  return lines.map((l, i) =>
+    clean({
+      LineNumber: i + 1,
+      Номенклатура_Key: l.nomenclatureRef,
+      Количество: l.quantity,
+      Цена: l.price,
+      Сумма: lineSum(l),
+      СтавкаНДС: l.vatRate,
+      ...lineAccountsFor(l.nomenclatureRef, l.vatRate),
+    }),
+  );
+}
+
+/** Строки «Товары» для счёта покупателю (полиморфная ссылка Номенклатура+_Type). */
+function buildInvoiceRows(lines: GoodsLine[]): Array<Record<string, unknown>> {
+  return lines.map((l, i) =>
+    clean({
+      LineNumber: i + 1,
+      Номенклатура: l.nomenclatureRef,
+      Номенклатура_Type: NOMENCLATURE_TYPE,
+      Количество: l.quantity,
+      Цена: l.price,
+      Сумма: lineSum(l),
+      СтавкаНДС: l.vatRate,
+    }),
+  );
+}
+
 /** Строит и создаёт/предпросматривает товарный документ (поступление/реализация). */
 async function createGoodsDoc(
   conn: Connection,
@@ -80,24 +160,13 @@ async function createGoodsDoc(
     warehouseKey?: string | undefined;
     date?: string | undefined;
     sumIncludesVat: boolean;
-    lines: Array<{ nomenclatureRef: string; quantity: number; price: number; vatRate: string }>;
+    lines: GoodsLine[];
     settlement?: string | undefined; // СчетУчетаРасчетовСКонтрагентом_Key (шапка)
-    lineAccountsFor: (nomRef: string, vatRate: string) => Record<string, string>; // счета строки
+    lineAccountsFor: LineAccountsFor; // счета строки
   },
   confirm: boolean,
 ) {
-  const rows = p.lines.map((l, i) =>
-    clean({
-      LineNumber: i + 1,
-      Номенклатура_Key: l.nomenclatureRef,
-      Количество: l.quantity,
-      Цена: l.price,
-      Сумма: Math.round(l.quantity * l.price * 100) / 100,
-      СтавкаНДС: l.vatRate,
-      ...p.lineAccountsFor(l.nomenclatureRef, l.vatRate),
-    }),
-  );
-  const total = Math.round(rows.reduce((s, r) => s + (r["Сумма"] as number), 0) * 100) / 100;
+  const rows = buildGoodsRows(p.lines, p.lineAccountsFor);
   const payload = clean({
     Date: odataDate(p.date ? new Date(`${p.date}T00:00:00`) : new Date()),
     Posted: false,
@@ -107,7 +176,7 @@ async function createGoodsDoc(
     Склад_Key: p.warehouseKey,
     СчетУчетаРасчетовСКонтрагентом_Key: p.settlement,
     СуммаВключаетНДС: p.sumIncludesVat,
-    СуммаДокумента: total,
+    СуммаДокумента: rowsTotal(rows),
     Товары: rows,
   });
   return createOrPreview(conn, entitySet, payload, confirm);
@@ -144,6 +213,58 @@ async function resolveLineAccounts(
     });
   }
   return map;
+}
+
+/**
+ * Готовит счета учёта для товарного документа: счёт расчётов (шапка) и функцию
+ * счетов строки по номенклатуре. kind различает поступление (Дт 41 Кт 60) и
+ * реализацию (Дт 62 Кт 90, Дт 90 Кт 41).
+ */
+async function goodsAccounts(
+  conn: Connection,
+  orgKey: string,
+  lines: GoodsLine[],
+  kind: "purchase" | "shipment",
+): Promise<{ settlement?: string | undefined; lineAccountsFor: LineAccountsFor }> {
+  const nomRefs = lines.map((l) => l.nomenclatureRef);
+  if (kind === "purchase") {
+    const codes = await accountsByCode(conn, ["41.01", "41", "60.01", "60", "19.03", "19"]);
+    const defaults: NomAccounts = {
+      goods: pickAccount(codes, "41.01", "41"),
+      incomingVat: pickAccount(codes, "19.03", "19"),
+    };
+    const accMap = await resolveLineAccounts(conn, orgKey, nomRefs, defaults);
+    return {
+      settlement: pickAccount(codes, "60.01", "60"),
+      lineAccountsFor: (nomRef, vat) => {
+        const a = accMap.get(nomRef);
+        return clean({
+          СчетУчета_Key: a?.goods,
+          ...(vat !== "БезНДС" ? { СчетУчетаНДС_Key: a?.incomingVat } : {}),
+        }) as Record<string, string>;
+      },
+    };
+  }
+  const codes = await accountsByCode(conn, ["41.01", "41", "62.01", "62", "90.01.1", "90.01", "90.02.1", "90.02", "90.03"]);
+  const defaults: NomAccounts = {
+    goods: pickAccount(codes, "41.01", "41"),
+    income: pickAccount(codes, "90.01.1", "90.01"),
+    expense: pickAccount(codes, "90.02.1", "90.02"),
+    outgoingVat: pickAccount(codes, "90.03"),
+  };
+  const accMap = await resolveLineAccounts(conn, orgKey, nomRefs, defaults);
+  return {
+    settlement: pickAccount(codes, "62.01", "62"),
+    lineAccountsFor: (nomRef, vat) => {
+      const a = accMap.get(nomRef);
+      return clean({
+        СчетУчета_Key: a?.goods,
+        СчетДоходов_Key: a?.income,
+        СчетРасходов_Key: a?.expense,
+        ...(vat !== "БезНДС" ? { СчетУчетаНДСПоРеализации_Key: a?.outgoingVat } : {}),
+      }) as Record<string, string>;
+    },
+  };
 }
 
 const confirmField = z
@@ -344,19 +465,32 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .enum(CONTRACT_KINDS)
           .default("СПокупателем")
           .describe("Вид договора"),
+        currency: z.string().optional().describe("Валюта взаиморасчётов — код (напр. 643/840) или название (RUB/USD)"),
+        priceType: z.string().optional().describe("Тип цен — название или код (из справочника Типы цен номенклатуры)"),
         confirm: confirmField,
       },
     },
-    ({ database, organization, counterpartyRef, name, kind, confirm }) =>
+    ({ database, organization, counterpartyRef, name, kind, currency, priceType, confirm }) =>
       guard("create_contract", async () => {
         const conn = ctx.db(database);
         const set = await resolveSet(conn, CATALOGS.contracts, "Договоры контрагентов");
         const org = await resolveOrg(conn, organization);
+
+        let cur: { ref: string; code?: string } | undefined;
+        if (currency) cur = await resolveCatalogItem(conn, CATALOGS.currencies, "Справочник «Валюты»", currency);
+        const pt = priceType
+          ? await resolveCatalogItem(conn, CATALOGS.priceTypes, "Справочник «Типы цен номенклатуры»", priceType)
+          : undefined;
+        const foreign = cur ? cur.code !== "643" : undefined; // 643 = рубль
+
         const payload = clean({
           Description: name,
           Owner_Key: counterpartyRef,
           ВидДоговора: kind,
           Организация_Key: org.key,
+          ВалютаВзаиморасчетов_Key: cur?.ref,
+          ТипЦен_Key: pt?.ref,
+          ...(foreign !== undefined ? { Валютный: foreign } : {}),
         });
         return createOrPreview(conn, set, payload, confirm);
       }),
@@ -397,30 +531,15 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const conn = ctx.db(database);
         const set = await requireEntity(conn, DOCUMENTS.customerInvoice, "Документ «Счёт на оплату покупателю»");
         const org = await resolveOrg(conn, organization);
-        const docDate = odataDate(date ? new Date(`${date}T00:00:00`) : new Date());
-
-        const rows = lines.map((l, i) => {
-          const сумма = Math.round(l.quantity * l.price * 100) / 100;
-          return {
-            LineNumber: i + 1,
-            Номенклатура: l.nomenclatureRef,
-            Номенклатура_Type: NOMENCLATURE_TYPE,
-            Количество: l.quantity,
-            Цена: l.price,
-            Сумма: сумма,
-            СтавкаНДС: l.vatRate,
-          };
-        });
-        const total = Math.round(rows.reduce((s, r) => s + r.Сумма, 0) * 100) / 100;
-
+        const rows = buildInvoiceRows(lines);
         const payload = clean({
-          Date: docDate,
+          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
           Posted: false,
           Организация_Key: org.key,
           Контрагент_Key: counterpartyRef,
           ДоговорКонтрагента_Key: contractRef,
           СуммаВключаетНДС: sumIncludesVat,
-          СуммаДокумента: total,
+          СуммаДокумента: rowsTotal(rows),
           Товары: rows,
         });
         return createOrPreview(conn, set, payload, confirm);
@@ -521,6 +640,32 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       }),
   );
 
+  server.registerTool(
+    "update_nomenclature",
+    {
+      title: "Изменить номенклатуру",
+      description:
+        "Изменяет реквизиты номенклатуры по Ref_Key (наименование/полное имя/артикул). " +
+        "По умолчанию предпросмотр (dry-run); применение — при confirm=true. Указывайте только меняемые поля.",
+      inputSchema: {
+        database: databaseField,
+        ref: z.string().describe("Ref_Key номенклатуры"),
+        name: z.string().optional().describe("Новое наименование (Description)"),
+        fullName: z.string().optional().describe("Полное наименование"),
+        article: z.string().optional().describe("Артикул"),
+        confirm: confirmField,
+      },
+    },
+    ({ database, ref, name, fullName, article, confirm }) =>
+      guard("update_nomenclature", async () => {
+        const conn = ctx.db(database);
+        const set = await resolveSet(conn, CATALOGS.nomenclature, "Справочник «Номенклатура»");
+        const fields = clean({ Description: name, НаименованиеПолное: fullName, Артикул: article });
+        if (Object.keys(fields).length === 0) return fail("Не задано ни одного поля для изменения.");
+        return patchOrPreview(conn, set, ref, fields, confirm);
+      }),
+  );
+
   // Общая схема входов для товарных документов (поступление/реализация).
   const goodsDocInput = {
     database: databaseField,
@@ -560,24 +705,11 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const set = await requireEntity(conn, DOCUMENTS.purchases, "Документ «Поступление товаров и услуг»");
         const org = await resolveOrg(conn, organization);
         const warehouseKey = await resolveWarehouse(conn, warehouse);
-        // Счета учёта: из регистра по номенклатуре, дефолты по кодам (Дт 41 Кт 60, +19 при НДС).
-        const codes = await accountsByCode(conn, ["41.01", "41", "60.01", "60", "19.03", "19"]);
-        const defaults: NomAccounts = {
-          goods: pickAccount(codes, "41.01", "41"),
-          incomingVat: pickAccount(codes, "19.03", "19"),
-        };
-        const accMap = await resolveLineAccounts(conn, org.key, lines.map((l) => l.nomenclatureRef), defaults);
-        const lineAccountsFor = (nomRef: string, vat: string): Record<string, string> => {
-          const a = accMap.get(nomRef);
-          return clean({
-            СчетУчета_Key: a?.goods,
-            ...(vat !== "БезНДС" ? { СчетУчетаНДС_Key: a?.incomingVat } : {}),
-          }) as Record<string, string>;
-        };
+        const { settlement, lineAccountsFor } = await goodsAccounts(conn, org.key, lines, "purchase");
         return createGoodsDoc(
           conn,
           set,
-          { orgKey: org.key, counterpartyRef, contractRef, warehouseKey, date, sumIncludesVat, lines, settlement: pickAccount(codes, "60.01", "60"), lineAccountsFor },
+          { orgKey: org.key, counterpartyRef, contractRef, warehouseKey, date, sumIncludesVat, lines, settlement, lineAccountsFor },
           confirm,
         );
       }),
@@ -599,30 +731,73 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const set = await requireEntity(conn, DOCUMENTS.sales, "Документ «Реализация товаров и услуг»");
         const org = await resolveOrg(conn, organization);
         const warehouseKey = await resolveWarehouse(conn, warehouse);
-        // Счета учёта: из регистра по номенклатуре, дефолты по кодам (Дт 62 Кт 90.01, Дт 90.02 Кт 41, +90.03 при НДС).
-        const codes = await accountsByCode(conn, ["41.01", "41", "62.01", "62", "90.01.1", "90.01", "90.02.1", "90.02", "90.03"]);
-        const defaults: NomAccounts = {
-          goods: pickAccount(codes, "41.01", "41"),
-          income: pickAccount(codes, "90.01.1", "90.01"),
-          expense: pickAccount(codes, "90.02.1", "90.02"),
-          outgoingVat: pickAccount(codes, "90.03"),
-        };
-        const accMap = await resolveLineAccounts(conn, org.key, lines.map((l) => l.nomenclatureRef), defaults);
-        const lineAccountsFor = (nomRef: string, vat: string): Record<string, string> => {
-          const a = accMap.get(nomRef);
-          return clean({
-            СчетУчета_Key: a?.goods,
-            СчетДоходов_Key: a?.income,
-            СчетРасходов_Key: a?.expense,
-            ...(vat !== "БезНДС" ? { СчетУчетаНДСПоРеализации_Key: a?.outgoingVat } : {}),
-          }) as Record<string, string>;
-        };
+        const { settlement, lineAccountsFor } = await goodsAccounts(conn, org.key, lines, "shipment");
         return createGoodsDoc(
           conn,
           set,
-          { orgKey: org.key, counterpartyRef, contractRef, warehouseKey, date, sumIncludesVat, lines, settlement: pickAccount(codes, "62.01", "62"), lineAccountsFor },
+          { orgKey: org.key, counterpartyRef, contractRef, warehouseKey, date, sumIncludesVat, lines, settlement, lineAccountsFor },
           confirm,
         );
+      }),
+  );
+
+  server.registerTool(
+    "update_document_lines",
+    {
+      title: "Изменить строки документа",
+      description:
+        "Заменяет табличную часть «Товары» существующего документа новым набором строк и пересчитывает сумму. " +
+        "Поддержаны: счёт покупателю, поступление, реализация. Документ должен быть НЕПРОВЕДЁННЫМ " +
+        "(если проведён — сначала отмените проведение через post_document). По умолчанию dry-run; применение — при confirm=true.",
+      inputSchema: {
+        database: databaseField,
+        entitySet: z.string().describe("Имя документа, напр. Document_РеализацияТоваровУслуг"),
+        ref: z.string().describe("Ref_Key документа"),
+        lines: z
+          .array(
+            z.object({
+              nomenclatureRef: z.string().describe("Ref_Key номенклатуры"),
+              quantity: z.number().positive().describe("Количество"),
+              price: z.number().nonnegative().describe("Цена за единицу"),
+              vatRate: z.enum(VAT_RATES).default("БезНДС").describe("Ставка НДС"),
+            }),
+          )
+          .min(1)
+          .describe("Новый полный набор строк (заменяет прежние)"),
+        confirm: confirmField,
+      },
+    },
+    ({ database, entitySet, ref, lines, confirm }) =>
+      guard("update_document_lines", async () => {
+        const conn = ctx.db(database);
+        ensurePublished(await conn.available(), entitySet);
+        const guid = ref.replace(/[{}']/g, "");
+        const doc = await conn.client.getEntity(
+          `${entitySet}(guid'${guid}')${buildQuery({ select: ["Организация_Key", "Posted"] })}`,
+        );
+        if (doc["Posted"] === true) {
+          return fail(
+            "Документ проведён. Сначала отмените проведение (post_document с post=false), затем меняйте строки.",
+          );
+        }
+        const orgKey = String(doc["Организация_Key"] ?? "");
+
+        const inList = (arr: readonly string[]): boolean => arr.includes(entitySet);
+        let rows: Array<Record<string, unknown>>;
+        if (inList(DOCUMENTS.customerInvoice)) {
+          rows = buildInvoiceRows(lines);
+        } else if (inList(DOCUMENTS.purchases)) {
+          const { lineAccountsFor } = await goodsAccounts(conn, orgKey, lines, "purchase");
+          rows = buildGoodsRows(lines, lineAccountsFor);
+        } else if (inList(DOCUMENTS.sales)) {
+          const { lineAccountsFor } = await goodsAccounts(conn, orgKey, lines, "shipment");
+          rows = buildGoodsRows(lines, lineAccountsFor);
+        } else {
+          return fail(
+            "update_document_lines поддерживает: счёт покупателю, поступление товаров и услуг, реализацию товаров и услуг.",
+          );
+        }
+        return patchOrPreview(conn, entitySet, ref, { Товары: rows, СуммаДокумента: rowsTotal(rows) }, confirm);
       }),
   );
 }

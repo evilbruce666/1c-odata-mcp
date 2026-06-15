@@ -14,6 +14,8 @@ export const CATALOGS = {
   contracts: ["Catalog_ДоговорыКонтрагентов", "Catalog_Договоры"],
   warehouses: ["Catalog_Склады", "Catalog_СкладыМеста"],
   bankAccounts: ["Catalog_БанковскиеСчета"],
+  currencies: ["Catalog_Валюты"],
+  priceTypes: ["Catalog_ТипыЦенНоменклатуры", "Catalog_ТипыЦен"],
 } as const;
 
 export const DOCUMENTS = {
