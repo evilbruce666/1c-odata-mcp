@@ -1,7 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ServerContext } from "../context.js";
-import { ok, fail, guard } from "./_shared.js";
+import { ok, fail, guard, databaseField } from "./_shared.js";
+import { listOrganizations } from "../odata/orgs.js";
 import type { EntityClass } from "../types/odata.js";
 
 const CLASS_LABEL: Record<EntityClass, string> = {
@@ -24,25 +25,59 @@ const CLASS_LABEL: Record<EntityClass, string> = {
 
 export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
   server.registerTool(
+    "list_databases",
+    {
+      title: "Список баз 1С",
+      description:
+        "Показывает настроенные базы 1С, к которым подключён сервер, и какая из них основная. " +
+        "Имя базы передаётся в параметр database остальных инструментов. " +
+        "Вызывайте, если нужно понять, какие базы доступны или сравнить данные нескольких баз.",
+      inputSchema: {},
+    },
+    () =>
+      guard("list_databases", async () => ok({ default: ctx.defaultName, databases: ctx.databases() })),
+  );
+
+  server.registerTool(
     "health_check",
     {
       title: "Проверка соединения",
       description:
-        "Проверяет доступность OData-сервиса 1С и корректность авторизации. " +
+        "Проверяет доступность OData-сервиса 1С и корректность авторизации для выбранной базы. " +
         "Возвращает версию OData и число опубликованных объектов. " +
         "Вызывайте первым, если другие инструменты выдают ошибки.",
-      inputSchema: {},
+      inputSchema: { database: databaseField },
     },
-    () =>
+    ({ database }) =>
       guard("health_check", async () => {
-        const meta = await ctx.getMetadata();
+        const conn = ctx.db(database);
+        const meta = await conn.getMetadata();
         return ok({
           status: "ok",
+          database: conn.cfg.name,
+          label: conn.cfg.label,
           odataVersion: meta.odataVersion,
           entityCount: meta.entities.size,
-          baseUrl: ctx.cfg.ODATA_BASE_URL,
-          readOnly: ctx.cfg.READ_ONLY,
+          baseUrl: conn.cfg.baseUrl,
+          readOnly: conn.behavior.readOnly,
         });
+      }),
+  );
+
+  server.registerTool(
+    "list_organizations",
+    {
+      title: "Организации базы",
+      description:
+        "Список организаций (юрлиц) внутри выбранной базы 1С. " +
+        "Название организации передаётся в параметр organization аналитических инструментов " +
+        "(get_sales, get_debtors, get_cashflow, get_inventory и др.), чтобы получить данные по одному юрлицу.",
+      inputSchema: { database: databaseField },
+    },
+    ({ database }) =>
+      guard("list_organizations", async () => {
+        const orgs = await listOrganizations(ctx.db(database));
+        return ok({ count: orgs.length, organizations: orgs });
       }),
   );
 
@@ -56,6 +91,7 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
         "Используйте, чтобы понять, какие данные доступны в базе. " +
         "Можно отфильтровать по классу и/или подстроке имени.",
       inputSchema: {
+        database: databaseField,
         class: z
           .enum([
             "catalog",
@@ -71,9 +107,9 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
         search: z.string().optional().describe("Подстрока в имени объекта (без учёта регистра)"),
       },
     },
-    ({ class: cls, search }) =>
+    ({ database, class: cls, search }) =>
       guard("list_entities", async () => {
-        const meta = await ctx.getMetadata();
+        const meta = await ctx.db(database).getMetadata();
         const needle = search?.toLowerCase();
         const grouped: Record<string, Array<{ entitySet: string; name: string }>> = {};
 
@@ -84,7 +120,7 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
           (grouped[label] ??= []).push({ entitySet: e.entitySet, name: e.shortName });
         }
 
-        return ok({ odataVersion: meta.odataVersion, groups: grouped });
+        return ok({ database: ctx.db(database).cfg.name, odataVersion: meta.odataVersion, groups: grouped });
       }),
   );
 
@@ -97,12 +133,13 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
         "Принимает техническое имя EntitySet, напр. 'Catalog_Контрагенты' или " +
         "'Document_РеализацияТоваровУслуг'. Используйте перед поиском, чтобы узнать доступные поля.",
       inputSchema: {
+        database: databaseField,
         entitySet: z.string().describe("Техническое имя объекта, напр. Catalog_Контрагенты"),
       },
     },
-    ({ entitySet }) =>
+    ({ database, entitySet }) =>
       guard("describe_entity", async () => {
-        const meta = await ctx.getMetadata();
+        const meta = await ctx.db(database).getMetadata();
         const e = meta.entities.get(entitySet);
         if (!e) {
           return fail(

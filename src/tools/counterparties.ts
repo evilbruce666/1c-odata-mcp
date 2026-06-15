@@ -1,10 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { ServerContext } from "../context.js";
-import { ok, fail, guard, withTruncationNote } from "./_shared.js";
+import type { Connection, ServerContext } from "../context.js";
+import { ok, fail, guard, withTruncationNote, databaseField, organizationField } from "./_shared.js";
 import { fetchAll } from "../odata/pagination.js";
-import { and, cmp, contains, odataGuid, odataString } from "../odata/query.js";
-import { buildQuery } from "../odata/query.js";
+import { and, cmp, contains, odataGuid, odataString, buildQuery } from "../odata/query.js";
 import {
   CATALOGS,
   COUNTERPARTY_FIELDS as CF,
@@ -12,6 +11,7 @@ import {
   DOCUMENTS,
   resolveEntity,
 } from "../config/mapping.js";
+import { resolveOrganization } from "../odata/orgs.js";
 import type { Counterparty, DocumentSummary } from "../types/domain.js";
 import type { ODataEntity } from "../types/odata.js";
 
@@ -27,13 +27,11 @@ function toCounterparty(r: ODataEntity): Counterparty {
   };
 }
 
-async function resolveCounterpartySet(ctx: ServerContext): Promise<string> {
-  const available = await ctx.available();
-  const set = resolveEntity(CATALOGS.counterparties, available);
+async function counterpartySet(conn: Connection): Promise<string> {
+  const set = resolveEntity(CATALOGS.counterparties, await conn.available());
   if (!set) {
     throw new Error(
-      "Справочник контрагентов не опубликован в OData. " +
-        "Добавьте Catalog_Контрагенты в «Состав OData».",
+      "Справочник контрагентов не опубликован в OData. Добавьте Catalog_Контрагенты в «Состав OData».",
     );
   }
   return set;
@@ -49,24 +47,26 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
         "с Ref_Key (используйте его в get_counterparty и истории взаиморасчётов). " +
         "Пример: «найди контрагента Ромашка» или «контрагент с ИНН 7701234567».",
       inputSchema: {
+        database: databaseField,
         query: z.string().min(1).describe("Часть названия или ИНН контрагента"),
         limit: z.number().int().positive().max(100).default(20).describe("Сколько вернуть"),
       },
     },
-    ({ query, limit }) =>
+    ({ database, query, limit }) =>
       guard("find_counterparty", async () => {
-        const set = await resolveCounterpartySet(ctx);
+        const conn = ctx.db(database);
+        const set = await counterpartySet(conn);
         const isInn = /^\d{10,12}$/.test(query.trim());
         const filter = isInn
           ? cmp(CF.inn, "eq", odataString(query.trim()))
           : contains(CF.name, query);
 
         const { rows, truncated } = await fetchAll(
-          ctx.client,
+          conn.client,
           set,
           { filter, select: [CF.ref, CF.name, CF.code, CF.inn, CF.kpp, CF.isFolder] },
-          ctx.cfg.ODATA_PAGE_SIZE,
-          Math.min(limit, ctx.cfg.ODATA_MAX_ROWS),
+          conn.behavior.pageSize,
+          Math.min(limit, conn.behavior.maxRows),
         );
 
         const items = rows.map(toCounterparty).filter((c) => !c.isFolder);
@@ -82,20 +82,23 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
         "Возвращает полную карточку контрагента по его Ref_Key: реквизиты (ИНН/КПП), " +
         "наименования, код. Ref_Key берётся из find_counterparty.",
       inputSchema: {
+        database: databaseField,
         ref: z.string().describe("Ref_Key контрагента (GUID)"),
       },
     },
-    ({ ref }) =>
+    ({ database, ref }) =>
       guard("get_counterparty", async () => {
-        const set = await resolveCounterpartySet(ctx);
+        const conn = ctx.db(database);
+        const set = await counterpartySet(conn);
         const path = `${set}(guid'${ref.replace(/[{}']/g, "")}')${buildQuery({})}`;
-        const entity = await ctx.client.getEntity(path);
+        const entity = await conn.client.getEntity(path);
         return ok(toCounterparty(entity));
       }),
   );
 
-  // История взаиморасчётов: документы по контрагенту за период.
   const historyInput = {
+    database: databaseField,
+    organization: organizationField,
     ref: z.string().describe("Ref_Key контрагента"),
     from: z.string().optional().describe("Дата начала периода (YYYY-MM-DD)"),
     to: z.string().optional().describe("Дата конца периода (YYYY-MM-DD)"),
@@ -103,14 +106,15 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
   };
 
   async function history(
-    ctx_: ServerContext,
+    conn: Connection,
     docKeys: readonly string[],
     ref: string,
+    orgKey: string | undefined,
     from: string | undefined,
     to: string | undefined,
     limit: number,
   ): Promise<{ docs: DocumentSummary[]; truncated: boolean; usedSets: string[] }> {
-    const available = await ctx_.available();
+    const available = await conn.available();
     const guid = odataGuid(ref);
     const docs: DocumentSummary[] = [];
     const usedSets: string[] = [];
@@ -122,14 +126,15 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
       usedSets.push(set);
       const filter = and(
         cmp(DOC_FIELDS.counterparty, "eq", guid),
+        orgKey ? cmp(DOC_FIELDS.organization, "eq", odataGuid(orgKey)) : undefined,
         from ? cmp(DOC_FIELDS.date, "ge", `datetime'${from}T00:00:00'`) : undefined,
         to ? cmp(DOC_FIELDS.date, "le", `datetime'${to}T23:59:59'`) : undefined,
       );
       const { rows, truncated: t } = await fetchAll(
-        ctx_.client,
+        conn.client,
         set,
         { filter, orderby: `${DOC_FIELDS.date} desc` },
-        ctx_.cfg.ODATA_PAGE_SIZE,
+        conn.behavior.pageSize,
         limit,
       );
       truncated ||= t;
@@ -149,6 +154,10 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
     return { docs: docs.slice(0, limit), truncated, usedSets };
   }
 
+  async function orgKeyOf(conn: Connection, organization?: string): Promise<string | undefined> {
+    return organization ? (await resolveOrganization(conn, organization)).ref : undefined;
+  }
+
   server.registerTool(
     "get_customer_history",
     {
@@ -158,9 +167,11 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
         "Показывает, что и на какие суммы продавали клиенту. Ref_Key — из find_counterparty.",
       inputSchema: historyInput,
     },
-    ({ ref, from, to, limit }) =>
+    ({ database, organization, ref, from, to, limit }) =>
       guard("get_customer_history", async () => {
-        const r = await history(ctx, [...DOCUMENTS.sales, ...DOCUMENTS.customerInvoice], ref, from, to, limit);
+        const conn = ctx.db(database);
+        const orgKey = await orgKeyOf(conn, organization);
+        const r = await history(conn, [...DOCUMENTS.sales, ...DOCUMENTS.customerInvoice], ref, orgKey, from, to, limit);
         if (r.usedSets.length === 0) {
           return fail("Документы продаж не опубликованы в OData. Добавьте их в «Состав OData».");
         }
@@ -177,9 +188,11 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
         "Показывает закупки у поставщика. Ref_Key — из find_counterparty.",
       inputSchema: historyInput,
     },
-    ({ ref, from, to, limit }) =>
+    ({ database, organization, ref, from, to, limit }) =>
       guard("get_supplier_history", async () => {
-        const r = await history(ctx, [...DOCUMENTS.purchases], ref, from, to, limit);
+        const conn = ctx.db(database);
+        const orgKey = await orgKeyOf(conn, organization);
+        const r = await history(conn, [...DOCUMENTS.purchases], ref, orgKey, from, to, limit);
         if (r.usedSets.length === 0) {
           return fail("Документы поступлений не опубликованы в OData. Добавьте их в «Состав OData».");
         }

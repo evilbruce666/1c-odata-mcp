@@ -1,6 +1,19 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 import { ODataError } from "../odata/errors.js";
 import { logger } from "../logger.js";
+
+/** Общее поле выбора базы — добавляется во все инструменты. */
+export const databaseField = z
+  .string()
+  .optional()
+  .describe("Имя базы 1С из list_databases. Без указания — база по умолчанию.");
+
+/** Общее поле фильтра по организации (юрлицу) внутри базы. */
+export const organizationField = z
+  .string()
+  .optional()
+  .describe("Название организации (юрлица) для фильтра. Без указания — все организации базы.");
 
 /** Успешный результат инструмента: JSON-данные в текстовом блоке. */
 export function ok(data: unknown): CallToolResult {

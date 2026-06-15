@@ -1,4 +1,4 @@
-import type { AppConfig } from "../config/env.js";
+import type { Behavior, ConnectionConfig } from "../config/env.js";
 import { logger } from "../logger.js";
 import { ODataError, fromHttpStatus } from "./errors.js";
 import type { ODataCollection, ODataEntity } from "../types/odata.js";
@@ -9,14 +9,17 @@ const READ_METHODS = new Set(["GET", "HEAD"]);
 export class ODataClient {
   private readonly authHeader: string;
 
-  constructor(private readonly cfg: AppConfig) {
-    const token = Buffer.from(`${cfg.ODATA_USERNAME}:${cfg.ODATA_PASSWORD}`).toString("base64");
+  constructor(
+    private readonly conn: ConnectionConfig,
+    private readonly behavior: Behavior,
+  ) {
+    const token = Buffer.from(`${conn.username}:${conn.password}`).toString("base64");
     this.authHeader = `Basic ${token}`;
   }
 
   /** Гард: любая запись запрещена при READ_ONLY. */
   private assertReadOnly(method: string): void {
-    if (this.cfg.READ_ONLY && !READ_METHODS.has(method)) {
+    if (this.behavior.readOnly && !READ_METHODS.has(method)) {
       throw new ODataError({
         kind: "bad_request",
         message: `Операция ${method} запрещена: сервер работает в режиме только-чтение (READ_ONLY=true)`,
@@ -26,7 +29,7 @@ export class ODataClient {
 
   /** Абсолютный URL: базовый URL + относительный путь (path уже с query). */
   private url(path: string): string {
-    return new URL(path, this.cfg.ODATA_BASE_URL).toString();
+    return new URL(path, this.conn.baseUrl).toString();
   }
 
   /**
@@ -36,12 +39,12 @@ export class ODataClient {
   async request<T>(path: string, method = "GET"): Promise<T> {
     this.assertReadOnly(method);
     const url = this.url(path);
-    const maxAttempts = this.cfg.ODATA_RETRIES + 1;
+    const maxAttempts = this.behavior.retries + 1;
 
     let lastErr: ODataError | undefined;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), this.cfg.ODATA_TIMEOUT_MS);
+      const timer = setTimeout(() => controller.abort(), this.behavior.timeoutMs);
       const started = performance.now();
       try {
         logger.debug({ url, method, attempt }, "odata request");
@@ -102,7 +105,7 @@ export class ODataClient {
     this.assertReadOnly("GET");
     const url = this.url(path);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.cfg.ODATA_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), this.behavior.timeoutMs);
     try {
       const res = await fetch(url, {
         method: "GET",

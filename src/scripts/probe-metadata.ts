@@ -7,8 +7,7 @@
  * Секреты не печатаются.
  */
 import { loadConfig } from "../config/env.js";
-import { ODataClient } from "../odata/client.js";
-import { loadMetadata } from "../odata/metadata.js";
+import { ServerContext } from "../context.js";
 import { buildQuery } from "../odata/query.js";
 import {
   CATALOGS,
@@ -24,11 +23,11 @@ function line(s = ""): void {
 }
 
 async function main(): Promise<void> {
-  const cfg = loadConfig();
-  const client = new ODataClient(cfg);
+  const conn = new ServerContext(loadConfig()).db();
+  const client = conn.client;
 
-  line("=== $metadata ===");
-  const meta = await loadMetadata(client);
+  line(`=== $metadata (база: ${conn.cfg.name}) ===`);
+  const meta = await conn.getMetadata();
   const available = new Set(meta.entities.keys());
   line(`OData version: ${meta.odataVersion}`);
   line(`Всего EntitySet: ${meta.entities.size}`);

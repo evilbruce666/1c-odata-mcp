@@ -1,10 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ServerContext } from "../context.js";
-import { ok, fail, guard, withTruncationNote } from "./_shared.js";
+import { ok, fail, guard, withTruncationNote, databaseField, organizationField } from "./_shared.js";
 import { fetchAll } from "../odata/pagination.js";
 import { and, cmp, odataGuid, buildQuery } from "../odata/query.js";
 import { DOC_FIELDS } from "../config/mapping.js";
+import { resolveOrganization } from "../odata/orgs.js";
 import type { DocumentSummary } from "../types/domain.js";
 import type { ODataEntity } from "../types/odata.js";
 
@@ -28,10 +29,12 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
     {
       title: "Поиск документов",
       description:
-        "Ищет документы заданного типа по периоду, контрагенту, статусу проведения и сумме. " +
+        "Ищет документы заданного типа по периоду, контрагенту, организации, статусу проведения и сумме. " +
         "Тип документа — техническое имя из list_entities, напр. 'Document_РеализацияТоваровУслуг'. " +
         "Сначала уточните имя через list_entities (class=document), а поля — через describe_entity.",
       inputSchema: {
+        database: databaseField,
+        organization: organizationField,
         entitySet: z.string().describe("Имя документа, напр. Document_РеализацияТоваровУслуг"),
         from: z.string().optional().describe("Дата начала (YYYY-MM-DD)"),
         to: z.string().optional().describe("Дата конца (YYYY-MM-DD)"),
@@ -41,25 +44,28 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
         limit: z.number().int().positive().max(500).default(50),
       },
     },
-    ({ entitySet, from, to, counterpartyRef, postedOnly, minAmount, limit }) =>
+    ({ database, organization, entitySet, from, to, counterpartyRef, postedOnly, minAmount, limit }) =>
       guard("search_documents", async () => {
-        const available = await ctx.available();
+        const conn = ctx.db(database);
+        const available = await conn.available();
         if (!available.has(entitySet)) {
           return fail(`Документ '${entitySet}' не найден/не опубликован. Проверьте через list_entities.`);
         }
+        const orgKey = organization ? (await resolveOrganization(conn, organization)).ref : undefined;
         const filter = and(
           from ? cmp(DOC_FIELDS.date, "ge", `datetime'${from}T00:00:00'`) : undefined,
           to ? cmp(DOC_FIELDS.date, "le", `datetime'${to}T23:59:59'`) : undefined,
+          orgKey ? cmp(DOC_FIELDS.organization, "eq", odataGuid(orgKey)) : undefined,
           counterpartyRef ? cmp(DOC_FIELDS.counterparty, "eq", odataGuid(counterpartyRef)) : undefined,
           postedOnly ? cmp(DOC_FIELDS.posted, "eq", "true") : undefined,
           typeof minAmount === "number" ? cmp(DOC_FIELDS.amount, "ge", String(minAmount)) : undefined,
         );
 
         const { rows, truncated } = await fetchAll(
-          ctx.client,
+          conn.client,
           entitySet,
           { filter: filter || undefined, orderby: `${DOC_FIELDS.date} desc` },
-          ctx.cfg.ODATA_PAGE_SIZE,
+          conn.behavior.pageSize,
           limit,
         );
         const items = rows.map((r) => toSummary(r, entitySet));
@@ -75,18 +81,20 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
         "Возвращает документ по типу и Ref_Key со всеми полями, включая табличные части. " +
         "Ref_Key берётся из search_documents или истории взаиморасчётов.",
       inputSchema: {
+        database: databaseField,
         entitySet: z.string().describe("Имя документа, напр. Document_РеализацияТоваровУслуг"),
         ref: z.string().describe("Ref_Key документа (GUID)"),
       },
     },
-    ({ entitySet, ref }) =>
+    ({ database, entitySet, ref }) =>
       guard("get_document", async () => {
-        const available = await ctx.available();
+        const conn = ctx.db(database);
+        const available = await conn.available();
         if (!available.has(entitySet)) {
           return fail(`Документ '${entitySet}' не найден/не опубликован.`);
         }
         const path = `${entitySet}(guid'${ref.replace(/[{}']/g, "")}')${buildQuery({})}`;
-        const entity = await ctx.client.getEntity(path);
+        const entity = await conn.client.getEntity(path);
         return ok(entity);
       }),
   );

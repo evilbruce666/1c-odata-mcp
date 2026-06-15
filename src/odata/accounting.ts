@@ -1,4 +1,4 @@
-import type { ServerContext } from "../context.js";
+import type { Connection } from "../context.js";
 import { fetchAll } from "./pagination.js";
 import { and, cmp, odataGuid, odataString, or } from "./query.js";
 import { REGISTERS, resolveEntity } from "../config/mapping.js";
@@ -21,10 +21,10 @@ export interface Account {
 
 /** Возвращает счета, код которых начинается с одного из префиксов (напр. "62", "41"). */
 export async function resolveAccounts(
-  ctx: ServerContext,
+  conn: Connection,
   prefixes: readonly string[],
 ): Promise<Account[]> {
-  const available = await ctx.available();
+  const available = await conn.available();
   const chart = resolveEntity(CHART_CANDIDATES, available);
   if (!chart) {
     throw new Error(
@@ -33,11 +33,11 @@ export async function resolveAccounts(
   }
   const filter = or(...prefixes.map((p) => `startswith(Code, ${odataString(p)})`));
   const { rows } = await fetchAll(
-    ctx.client,
+    conn.client,
     chart,
     { filter, select: ["Ref_Key", "Code", "Description"], orderby: "Code" },
-    ctx.cfg.ODATA_PAGE_SIZE,
-    ctx.cfg.ODATA_MAX_ROWS,
+    conn.behavior.pageSize,
+    conn.behavior.maxRows,
   );
   return rows.map((r) => ({
     key: String(r["Ref_Key"] ?? ""),
@@ -46,13 +46,17 @@ export async function resolveAccounts(
   }));
 }
 
-/** Тянет строки сальдо регистра Хозрасчетный, отфильтрованные по набору счетов. */
+/**
+ * Тянет строки сальдо регистра Хозрасчетный, отфильтрованные по набору счетов
+ * и (необязательно) по организации.
+ */
 export async function balanceByAccounts(
-  ctx: ServerContext,
+  conn: Connection,
   accountKeys: string[],
   maxRows: number,
+  orgKey?: string,
 ): Promise<ODataEntity[]> {
-  const available = await ctx.available();
+  const available = await conn.available();
   const reg = resolveEntity(REGISTERS.accounting, available);
   if (!reg) {
     throw new Error(
@@ -60,8 +64,11 @@ export async function balanceByAccounts(
     );
   }
   if (accountKeys.length === 0) return [];
-  const filter = or(...accountKeys.map((k) => cmp("Account_Key", "eq", odataGuid(k))));
-  const { rows } = await fetchAll(ctx.client, `${reg}/Balance`, { filter }, ctx.cfg.ODATA_PAGE_SIZE, maxRows);
+  const filter = and(
+    or(...accountKeys.map((k) => cmp("Account_Key", "eq", odataGuid(k)))),
+    orgKey ? cmp("Организация_Key", "eq", odataGuid(orgKey)) : undefined,
+  );
+  const { rows } = await fetchAll(conn.client, `${reg}/Balance`, { filter }, conn.behavior.pageSize, maxRows);
   return rows;
 }
 
@@ -70,13 +77,13 @@ export async function balanceByAccounts(
  * Используется, чтобы показать имена контрагентов/номенклатуры вместо GUID.
  */
 export async function resolveNames(
-  ctx: ServerContext,
+  conn: Connection,
   entitySet: string,
   keys: Iterable<string>,
 ): Promise<Map<string, string>> {
   const unique = [...new Set([...keys].filter(Boolean))];
   const result = new Map<string, string>();
-  const available = await ctx.available();
+  const available = await conn.available();
   if (!available.has(entitySet)) return result;
 
   const BATCH = 20;
@@ -84,7 +91,7 @@ export async function resolveNames(
     const batch = unique.slice(i, i + BATCH);
     const filter = or(...batch.map((k) => cmp("Ref_Key", "eq", odataGuid(k))));
     const { rows } = await fetchAll(
-      ctx.client,
+      conn.client,
       entitySet,
       { filter, select: ["Ref_Key", "Description"] },
       BATCH,

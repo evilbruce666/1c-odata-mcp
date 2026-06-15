@@ -155,10 +155,12 @@ claude mcp add 1c-odata -s user -- /opt/homebrew/opt/node@22/bin/node \
 
 ## Инструменты
 
-> 🚧 Реализация в процессе. Набор и сигнатуры могут уточняться.
+У всех инструментов есть необязательный параметр **`database`** (какая база 1С — см. `list_databases`); у аналитических — ещё и **`organization`** (фильтр по юрлицу — см. `list_organizations`).
 
 | Инструмент | Что делает | Статус |
 |---|---|---|
+| `list_databases` | Список настроенных баз 1С (для параметра `database`) | ✅ |
+| `list_organizations` | Организации (юрлица) внутри базы (для параметра `organization`) | ✅ |
 | `list_entities` | Карта объектов базы по классам (справочники/документы/регистры) | ✅ |
 | `describe_entity` | Поля и связи конкретного объекта (из `$metadata`) | ✅ |
 | `find_counterparty` | Поиск контрагента по названию или ИНН | ✅ |
@@ -185,11 +187,50 @@ claude mcp add 1c-odata -s user -- /opt/homebrew/opt/node@22/bin/node \
 
 ---
 
+## Несколько баз и несколько организаций
+
+Это два разных случая — и решаются они по-разному:
+
+### Несколько отдельных баз (разные OData-адреса)
+
+Один сервер обслуживает несколько баз. В `.env` опишите каждую тройкой переменных
+(полный пример — в `.env.example`):
+
+```bash
+ODATA_DB_BUH_BASE_URL=https://terminal.scloud.ru/05/firma1/odata/standard.odata/
+ODATA_DB_BUH_USERNAME=cloud_login_1
+ODATA_DB_BUH_PASSWORD=secret1
+ODATA_DB_BUH_LABEL=Бухгалтерия ООО «Ромашка»
+
+ODATA_DB_TORG_BASE_URL=https://terminal.scloud.ru/05/firma2/odata/standard.odata/
+ODATA_DB_TORG_USERNAME=cloud_login_2
+ODATA_DB_TORG_PASSWORD=secret2
+
+ODATA_DEFAULT_DB=buh
+```
+
+`<ИМЯ>` (BUH, TORG) — это и есть значение параметра `database`. Узнать список —
+инструментом `list_databases`. У каждой базы свой кеш `$metadata`. Старый формат с
+одной базой (`ODATA_BASE_URL`) продолжает работать как база `default`.
+
+Примеры запросов: «дебиторка в базе torg», «сравни выручку buh и torg за май».
+
+### Несколько организаций (юрлиц) в одной базе
+
+Бухгалтерия 3.0 ведёт несколько юрлиц в одной базе — отдельное подключение тут не
+нужно. У аналитических инструментов есть параметр `organization`: укажите название
+юрлица, и данные отфильтруются по нему (`Организация_Key`). Список — `list_organizations`.
+
+Примеры: «остатки по организации Ромашка», «движение денег ИП Иванов за квартал».
+
+---
+
 ## Архитектура
 
 ```
 src/
   index.ts            # точка входа
+  context.ts          # реестр баз: Connection (клиент + кеш $metadata) + ServerContext
   mcp/
     server.ts         # инициализация MCP SDK, регистрация инструментов, stdio
   odata/
@@ -197,9 +238,11 @@ src/
     query.ts          # типобезопасный билдер $filter/$select/$top/$skip/$expand
     pagination.ts     # автопрокрутка страниц до лимита
     metadata.ts       # загрузка и парсинг $metadata (EDMX → карта сущностей)
+    accounting.ts     # план счетов + сальдо регистра Хозрасчетный (дебиторка/остатки)
+    orgs.ts           # список и резолв организаций (юрлиц)
     errors.ts         # классификация и нормализация ошибок
   tools/
-    meta.ts           # list_entities, describe_entity, health_check
+    meta.ts           # list_databases, list_organizations, list_entities, describe_entity, health_check
     counterparties.ts # find/get_counterparty, customer/supplier_history
     documents.ts      # search_documents, get_document
     registers.ts      # get_inventory, get_debtors, get_sales, get_cashflow
@@ -207,8 +250,9 @@ src/
     odata.ts          # типы EDMX и ответов OData
     domain.ts         # доменные типы (Counterparty, Document, Balance…)
   config/
-    env.ts            # чтение и валидация .env (zod)
+    env.ts            # конфигурация: одна или несколько баз + поведение (zod)
     mapping.ts        # маппинг «человеческое имя ↔ объект 1С / счёт»
+  scripts/            # read-only probe-скрипты (metadata / analytics / mcp)
 ```
 
 **Стек:** Node.js 20+, TypeScript (strict), официальный `@modelcontextprotocol/sdk`, нативный `fetch`, `zod` (валидация), `pino` (логи в stderr), `fast-xml-parser` (разбор EDMX).
@@ -226,6 +270,7 @@ src/
 - [x] Публикация на GitHub
 - [x] Калибровка `get_inventory` / `get_debtors` на живой базе (регистр Хозрасчетный)
 - [x] Прогон на реальном `$metadata` → сверка имён объектов БП 3.0 (1479 объектов, все совпали)
+- [x] Несколько баз (`database`) и несколько организаций (`organization`) — проверено e2e
 - [ ] (позже) npm-пакет с запуском через `npx`
 - [ ] (позже, отдельный этап) операции записи — пока запрещены
 

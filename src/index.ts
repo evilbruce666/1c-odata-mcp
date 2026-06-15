@@ -15,7 +15,11 @@ async function main(): Promise<void> {
 
   // Логи только в stderr — stdout занят JSON-RPC.
   logger.info(
-    { baseUrl: cfg.ODATA_BASE_URL, readOnly: cfg.READ_ONLY },
+    {
+      databases: cfg.connections.map((c) => c.name),
+      default: cfg.defaultName,
+      readOnly: cfg.behavior.readOnly,
+    },
     "1c-odata-mcp запущен (stdio)",
   );
 }
