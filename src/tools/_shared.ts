@@ -1,6 +1,7 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { ODataError } from "../odata/errors.js";
+import { NotPublishedError, publicationHelp } from "../odata/publication.js";
 import { logger } from "../logger.js";
 
 /** Общее поле выбора базы — добавляется во все инструменты. */
@@ -41,6 +42,10 @@ export async function guard(
   try {
     return await fn();
   } catch (e) {
+    if (e instanceof NotPublishedError) {
+      logger.warn({ tool: toolName, missing: e.missing.map((m) => m.label) }, "not published");
+      return fail(publicationHelp(e.missing));
+    }
     if (e instanceof ODataError) {
       logger.warn({ tool: toolName, kind: e.kind }, e.message);
       return fail(`[${e.kind}] ${e.message}`);

@@ -1,9 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
-import { ok, fail, guard, databaseField, organizationField } from "./_shared.js";
+import { ok, guard, databaseField, organizationField } from "./_shared.js";
 import { CATALOGS, DOCUMENTS, resolveEntity } from "../config/mapping.js";
 import { listOrganizations, resolveOrganization } from "../odata/orgs.js";
+import { ensurePublished, requireEntity } from "../odata/publication.js";
+import { accountsByCode } from "../odata/accounting.js";
 import { fetchAll } from "../odata/pagination.js";
 import { contains } from "../odata/query.js";
 import type { ODataEntity } from "../types/odata.js";
@@ -67,6 +69,14 @@ async function resolveWarehouse(conn: Connection, name: string | undefined): Pro
   return rows.length === 1 ? String((rows[0] as ODataEntity)["Ref_Key"]) : undefined;
 }
 
+/** Счета учёта для заполнения документа (через OData автозаполнение 1С не работает). */
+interface DocAccounts {
+  settlement?: string | undefined; // СчетУчетаРасчетовСКонтрагентом_Key (шапка)
+  line: Record<string, string>; // постоянные счета строки (СчетУчета_Key и т.п.)
+  vatField?: string; // имя поля НДС-счёта в строке
+  vatAccount?: string | undefined; // ref НДС-счёта (если ставка ≠ БезНДС)
+}
+
 /** Строит и создаёт/предпросматривает товарный документ (поступление/реализация). */
 async function createGoodsDoc(
   conn: Connection,
@@ -79,18 +89,27 @@ async function createGoodsDoc(
     date?: string | undefined;
     sumIncludesVat: boolean;
     lines: Array<{ nomenclatureRef: string; quantity: number; price: number; vatRate: string }>;
+    accounts: DocAccounts;
   },
   confirm: boolean,
 ) {
-  const rows = p.lines.map((l, i) => ({
-    LineNumber: i + 1,
-    Номенклатура_Key: l.nomenclatureRef,
-    Количество: l.quantity,
-    Цена: l.price,
-    Сумма: Math.round(l.quantity * l.price * 100) / 100,
-    СтавкаНДС: l.vatRate,
-  }));
-  const total = Math.round(rows.reduce((s, r) => s + r.Сумма, 0) * 100) / 100;
+  const rows = p.lines.map((l, i) => {
+    const vat =
+      l.vatRate !== "БезНДС" && p.accounts.vatField && p.accounts.vatAccount
+        ? { [p.accounts.vatField]: p.accounts.vatAccount }
+        : {};
+    return clean({
+      LineNumber: i + 1,
+      Номенклатура_Key: l.nomenclatureRef,
+      Количество: l.quantity,
+      Цена: l.price,
+      Сумма: Math.round(l.quantity * l.price * 100) / 100,
+      СтавкаНДС: l.vatRate,
+      ...p.accounts.line,
+      ...vat,
+    });
+  });
+  const total = Math.round(rows.reduce((s, r) => s + (r["Сумма"] as number), 0) * 100) / 100;
   const payload = clean({
     Date: odataDate(p.date ? new Date(`${p.date}T00:00:00`) : new Date()),
     Posted: false,
@@ -98,11 +117,21 @@ async function createGoodsDoc(
     Контрагент_Key: p.counterpartyRef,
     ДоговорКонтрагента_Key: p.contractRef,
     Склад_Key: p.warehouseKey,
+    СчетУчетаРасчетовСКонтрагентом_Key: p.accounts.settlement,
     СуммаВключаетНДС: p.sumIncludesVat,
     СуммаДокумента: total,
     Товары: rows,
   });
   return createOrPreview(conn, entitySet, payload, confirm);
+}
+
+/** Первый найденный Ref среди кодов-кандидатов. */
+function pickAccount(map: Map<string, string>, ...codes: string[]): string | undefined {
+  for (const c of codes) {
+    const r = map.get(c);
+    if (r) return r;
+  }
+  return undefined;
 }
 
 const confirmField = z
@@ -118,11 +147,8 @@ function clean(obj: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined && v !== ""));
 }
 
-async function resolveSet(conn: Connection, candidates: readonly string[], human: string): Promise<string> {
-  const set = resolveEntity(candidates, await conn.available());
-  if (!set) throw new Error(`Справочник «${human}» не опубликован в OData. Добавьте его в «Состав OData».`);
-  return set;
-}
+const resolveSet = (conn: Connection, candidates: readonly string[], human: string): Promise<string> =>
+  requireEntity(conn, candidates, human);
 
 /**
  * Общий путь создания: при confirm=false возвращает предпросмотр (ничего не пишет),
@@ -213,6 +239,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, entitySet, ref, mark, confirm }) =>
       guard("mark_for_deletion", async () => {
         const conn = ctx.db(database);
+        ensurePublished(await conn.available(), entitySet);
         const guid = ref.replace(/[{}']/g, "");
         const path = `${entitySet}(guid'${guid}')?$format=json`;
         if (!confirm) {
@@ -326,10 +353,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, organization, counterpartyRef, contractRef, date, sumIncludesVat, lines, confirm }) =>
       guard("create_invoice", async () => {
         const conn = ctx.db(database);
-        const set = resolveEntity(DOCUMENTS.customerInvoice, await conn.available());
-        if (!set) {
-          return fail("Документ «Счёт покупателю» не опубликован в OData. Добавьте его в «Состав OData».");
-        }
+        const set = await requireEntity(conn, DOCUMENTS.customerInvoice, "Документ «Счёт на оплату покупателю»");
         const org = await resolveOrg(conn, organization);
         const docDate = odataDate(date ? new Date(`${date}T00:00:00`) : new Date());
 
@@ -379,6 +403,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, entitySet, ref, post, confirm }) =>
       guard("post_document", async () => {
         const conn = ctx.db(database);
+        ensurePublished(await conn.available(), entitySet);
         const guid = ref.replace(/[{}']/g, "");
         const action = post ? "Post" : "Unpost";
         const path = `${entitySet}(guid'${guid}')/${action}?$format=json`;
@@ -431,14 +456,21 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, organization, counterpartyRef, contractRef, warehouse, date, sumIncludesVat, lines, confirm }) =>
       guard("create_purchase", async () => {
         const conn = ctx.db(database);
-        const set = resolveEntity(DOCUMENTS.purchases, await conn.available());
-        if (!set) return fail("Документ «Поступление товаров и услуг» не опубликован в OData.");
+        const set = await requireEntity(conn, DOCUMENTS.purchases, "Документ «Поступление товаров и услуг»");
         const org = await resolveOrg(conn, organization);
         const warehouseKey = await resolveWarehouse(conn, warehouse);
+        // Счета учёта для проводок Дт 41 Кт 60 (+19 при НДС).
+        const acc = await accountsByCode(conn, ["41.01", "41", "60.01", "60", "19.03", "19"]);
+        const accounts = {
+          settlement: pickAccount(acc, "60.01", "60"),
+          line: clean({ СчетУчета_Key: pickAccount(acc, "41.01", "41") }) as Record<string, string>,
+          vatField: "СчетУчетаНДС_Key",
+          vatAccount: pickAccount(acc, "19.03", "19"),
+        };
         return createGoodsDoc(
           conn,
           set,
-          { orgKey: org.key, counterpartyRef, contractRef, warehouseKey, date, sumIncludesVat, lines },
+          { orgKey: org.key, counterpartyRef, contractRef, warehouseKey, date, sumIncludesVat, lines, accounts },
           confirm,
         );
       }),
@@ -457,14 +489,25 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, organization, counterpartyRef, contractRef, warehouse, date, sumIncludesVat, lines, confirm }) =>
       guard("create_shipment", async () => {
         const conn = ctx.db(database);
-        const set = resolveEntity(DOCUMENTS.sales, await conn.available());
-        if (!set) return fail("Документ «Реализация товаров и услуг» не опубликован в OData.");
+        const set = await requireEntity(conn, DOCUMENTS.sales, "Документ «Реализация товаров и услуг»");
         const org = await resolveOrg(conn, organization);
         const warehouseKey = await resolveWarehouse(conn, warehouse);
+        // Счета учёта для проводок Дт 62 Кт 90.01, Дт 90.02 Кт 41 (+90.03 при НДС).
+        const acc = await accountsByCode(conn, ["41.01", "41", "62.01", "62", "90.01.1", "90.01", "90.02.1", "90.02", "90.03"]);
+        const accounts = {
+          settlement: pickAccount(acc, "62.01", "62"),
+          line: clean({
+            СчетУчета_Key: pickAccount(acc, "41.01", "41"),
+            СчетДоходов_Key: pickAccount(acc, "90.01.1", "90.01"),
+            СчетРасходов_Key: pickAccount(acc, "90.02.1", "90.02"),
+          }) as Record<string, string>,
+          vatField: "СчетУчетаНДСПоРеализации_Key",
+          vatAccount: pickAccount(acc, "90.03"),
+        };
         return createGoodsDoc(
           conn,
           set,
-          { orgKey: org.key, counterpartyRef, contractRef, warehouseKey, date, sumIncludesVat, lines },
+          { orgKey: org.key, counterpartyRef, contractRef, warehouseKey, date, sumIncludesVat, lines, accounts },
           confirm,
         );
       }),

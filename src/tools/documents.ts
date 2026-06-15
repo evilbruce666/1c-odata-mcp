@@ -1,11 +1,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ServerContext } from "../context.js";
-import { ok, fail, guard, withTruncationNote, databaseField, organizationField } from "./_shared.js";
+import { ok, guard, withTruncationNote, databaseField, organizationField } from "./_shared.js";
 import { fetchAll } from "../odata/pagination.js";
 import { and, cmp, odataGuid, buildQuery } from "../odata/query.js";
 import { DOC_FIELDS } from "../config/mapping.js";
 import { resolveOrganization } from "../odata/orgs.js";
+import { ensurePublished } from "../odata/publication.js";
 import type { DocumentSummary } from "../types/domain.js";
 import type { ODataEntity } from "../types/odata.js";
 
@@ -47,10 +48,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
     ({ database, organization, entitySet, from, to, counterpartyRef, postedOnly, minAmount, limit }) =>
       guard("search_documents", async () => {
         const conn = ctx.db(database);
-        const available = await conn.available();
-        if (!available.has(entitySet)) {
-          return fail(`Документ '${entitySet}' не найден/не опубликован. Проверьте через list_entities.`);
-        }
+        ensurePublished(await conn.available(), entitySet);
         const orgKey = organization ? (await resolveOrganization(conn, organization)).ref : undefined;
         const filter = and(
           from ? cmp(DOC_FIELDS.date, "ge", `datetime'${from}T00:00:00'`) : undefined,
@@ -89,10 +87,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
     ({ database, entitySet, ref }) =>
       guard("get_document", async () => {
         const conn = ctx.db(database);
-        const available = await conn.available();
-        if (!available.has(entitySet)) {
-          return fail(`Документ '${entitySet}' не найден/не опубликован.`);
-        }
+        ensurePublished(await conn.available(), entitySet);
         const path = `${entitySet}(guid'${ref.replace(/[{}']/g, "")}')${buildQuery({})}`;
         const entity = await conn.client.getEntity(path);
         return ok(entity);

@@ -12,6 +12,7 @@ import {
   resolveEntity,
 } from "../config/mapping.js";
 import { resolveOrganization } from "../odata/orgs.js";
+import { requireEntity } from "../odata/publication.js";
 import type { Counterparty, DocumentSummary } from "../types/domain.js";
 import type { ODataEntity } from "../types/odata.js";
 
@@ -27,15 +28,8 @@ function toCounterparty(r: ODataEntity): Counterparty {
   };
 }
 
-async function counterpartySet(conn: Connection): Promise<string> {
-  const set = resolveEntity(CATALOGS.counterparties, await conn.available());
-  if (!set) {
-    throw new Error(
-      "Справочник контрагентов не опубликован в OData. Добавьте Catalog_Контрагенты в «Состав OData».",
-    );
-  }
-  return set;
-}
+const counterpartySet = (conn: Connection): Promise<string> =>
+  requireEntity(conn, CATALOGS.counterparties, "Справочник «Контрагенты»");
 
 export function registerCounterpartyTools(server: McpServer, ctx: ServerContext): void {
   server.registerTool(

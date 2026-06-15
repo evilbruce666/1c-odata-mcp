@@ -85,7 +85,9 @@ export class ODataClient {
         }
 
         logger.debug({ url, status: res.status, ms }, "odata ok");
-        return (await res.json()) as T;
+        // Действия (Post/Unpost) могут вернуть пустое тело — это не ошибка.
+        const text = await res.text();
+        return (text ? JSON.parse(text) : undefined) as T;
       } catch (e) {
         const err = normalize(e, url);
         if (err.retryable && attempt < maxAttempts) {

@@ -1,7 +1,8 @@
 import type { Connection } from "../context.js";
 import { fetchAll } from "./pagination.js";
 import { contains } from "./query.js";
-import { CATALOGS, resolveEntity } from "../config/mapping.js";
+import { CATALOGS } from "../config/mapping.js";
+import { requireEntity } from "./publication.js";
 
 export interface Organization {
   ref: string;
@@ -9,19 +10,12 @@ export interface Organization {
   inn?: string;
 }
 
-function orgSet(available: ReadonlySet<string>): string {
-  const set = resolveEntity(CATALOGS.organizations, available);
-  if (!set) {
-    throw new Error(
-      "Справочник организаций не опубликован в OData. Добавьте Catalog_Организации в «Состав OData».",
-    );
-  }
-  return set;
-}
+const orgSet = (conn: Connection): Promise<string> =>
+  requireEntity(conn, CATALOGS.organizations, "Справочник «Организации»");
 
 /** Все организации (юрлица) базы. */
 export async function listOrganizations(conn: Connection): Promise<Organization[]> {
-  const set = orgSet(await conn.available());
+  const set = await orgSet(conn);
   const { rows } = await fetchAll(
     conn.client,
     set,
@@ -41,7 +35,7 @@ export async function listOrganizations(conn: Connection): Promise<Organization[
  * Бросает понятную ошибку, если ничего не найдено или найдено неоднозначно.
  */
 export async function resolveOrganization(conn: Connection, query: string): Promise<Organization> {
-  const set = orgSet(await conn.available());
+  const set = await orgSet(conn);
   const { rows } = await fetchAll(
     conn.client,
     set,

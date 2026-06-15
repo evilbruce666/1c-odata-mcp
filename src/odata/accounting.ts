@@ -1,7 +1,8 @@
 import type { Connection } from "../context.js";
 import { fetchAll } from "./pagination.js";
 import { and, cmp, odataGuid, odataString, or } from "./query.js";
-import { REGISTERS, resolveEntity } from "../config/mapping.js";
+import { REGISTERS } from "../config/mapping.js";
+import { requireEntity } from "./publication.js";
 import type { ODataEntity } from "../types/odata.js";
 
 /**
@@ -24,13 +25,7 @@ export async function resolveAccounts(
   conn: Connection,
   prefixes: readonly string[],
 ): Promise<Account[]> {
-  const available = await conn.available();
-  const chart = resolveEntity(CHART_CANDIDATES, available);
-  if (!chart) {
-    throw new Error(
-      "План счетов Хозрасчетный не опубликован в OData. Добавьте ChartOfAccounts_Хозрасчетный в «Состав OData».",
-    );
-  }
+  const chart = await requireEntity(conn, CHART_CANDIDATES, "План счетов «Хозрасчётный»");
   const filter = or(...prefixes.map((p) => `startswith(Code, ${odataString(p)})`));
   const { rows } = await fetchAll(
     conn.client,
@@ -47,6 +42,30 @@ export async function resolveAccounts(
 }
 
 /**
+ * Возвращает карту «код счёта → Ref_Key» для заданных точных кодов
+ * (напр. ["41.01","60.01","90.01.1"]). Нужно для заполнения счетов учёта
+ * в документах — через OData автозаполнение 1С не срабатывает.
+ */
+export async function accountsByCode(
+  conn: Connection,
+  codes: readonly string[],
+): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  if (codes.length === 0) return result;
+  const chart = await requireEntity(conn, CHART_CANDIDATES, "План счетов «Хозрасчётный»");
+  const filter = or(...codes.map((c) => cmp("Code", "eq", odataString(c))));
+  const { rows } = await fetchAll(
+    conn.client,
+    chart,
+    { filter, select: ["Ref_Key", "Code"] },
+    codes.length,
+    codes.length,
+  );
+  for (const r of rows) result.set(String(r["Code"]), String(r["Ref_Key"]));
+  return result;
+}
+
+/**
  * Тянет строки сальдо регистра Хозрасчетный, отфильтрованные по набору счетов
  * и (необязательно) по организации.
  */
@@ -56,14 +75,8 @@ export async function balanceByAccounts(
   maxRows: number,
   orgKey?: string,
 ): Promise<ODataEntity[]> {
-  const available = await conn.available();
-  const reg = resolveEntity(REGISTERS.accounting, available);
-  if (!reg) {
-    throw new Error(
-      "Регистр бухгалтерии не опубликован в OData. Добавьте AccountingRegister_Хозрасчетный в «Состав OData».",
-    );
-  }
   if (accountKeys.length === 0) return [];
+  const reg = await requireEntity(conn, REGISTERS.accounting, "Регистр бухгалтерии «Хозрасчётный»");
   const filter = and(
     or(...accountKeys.map((k) => cmp("Account_Key", "eq", odataGuid(k)))),
     orgKey ? cmp("Организация_Key", "eq", odataGuid(orgKey)) : undefined,
