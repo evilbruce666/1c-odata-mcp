@@ -124,6 +124,11 @@ export class ODataClient {
     return this.request<T>(path, "PATCH", payload);
   }
 
+  /** Вызывает bound-действие (напр. .../Post). POST без тела. */
+  async action<T = unknown>(path: string): Promise<T> {
+    return this.request<T>(path, "POST");
+  }
+
   /** Сырой текст (для $metadata — это XML, не JSON). */
   async getText(path: string): Promise<string> {
     this.assertWritable("GET");

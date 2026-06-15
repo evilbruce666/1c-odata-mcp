@@ -190,9 +190,12 @@ claude mcp add 1c-odata -s user -- /opt/homebrew/opt/node@22/bin/node \
 | `health_check` | Проверка соединения и авторизации | ✅ |
 | `create_counterparty` | Создать контрагента (dry-run по умолч.) | ✍️ запись |
 | `create_nomenclature` | Создать номенклатуру (dry-run по умолч.) | ✍️ запись |
+| `create_contract` | Создать договор контрагента | ✍️ запись |
+| `create_invoice` | Создать счёт покупателю (непроведённым) | ✍️ запись |
+| `post_document` | Провести / отменить проведение документа | ✍️ запись |
 | `mark_for_deletion` | Пометить объект на удаление / снять пометку | ✍️ запись |
 
-Инструменты ✍️ требуют включённой записи (`READ_ONLY=false` + `…_WRITABLE=true`) и работают через dry-run/`confirm=true` (см. [Безопасность](#безопасность)). На очереди: создание договора и счёта (документы — непроведёнными).
+Инструменты ✍️ требуют включённой записи (`READ_ONLY=false` + `…_WRITABLE=true`) и работают через dry-run/`confirm=true` (см. [Безопасность](#безопасность)). Счёт создаётся **непроведённым**; проведение — вручную в 1С или `post_document`.
 
 Все инструменты проверены на живой базе 1С:Бухгалтерия 3.0.
 
@@ -265,7 +268,7 @@ src/
     counterparties.ts # find/get_counterparty, customer/supplier_history
     documents.ts      # search_documents, get_document
     registers.ts      # get_inventory, get_debtors, get_sales, get_cashflow
-    write.ts          # create_counterparty, create_nomenclature, mark_for_deletion (gated)
+    write.ts          # create_counterparty/nomenclature/contract/invoice, post_document, mark_for_deletion (gated)
   types/
     odata.ts          # типы EDMX и ответов OData
     domain.ts         # доменные типы (Counterparty, Document, Balance…)
@@ -292,7 +295,7 @@ src/
 - [x] Прогон на реальном `$metadata` → сверка имён объектов БП 3.0 (1479 объектов, все совпали)
 - [x] Несколько баз (`database`) и несколько организаций (`organization`) — проверено e2e
 - [x] Запись: справочники (контрагент, номенклатура) + пометка на удаление, двойной гейт + dry-run — проверено вживую
-- [ ] Запись: договор (подчинённый справочник) и счёт покупателю (документ, непроведённым)
+- [x] Запись: договор (подчинённый справочник) и счёт покупателю (документ, непроведённым) + проведение — проверено вживую (цепочка контрагент→номенклатура→договор→счёт)
 - [ ] (позже) npm-пакет с запуском через `npx`
 
 ## Заметки по реализации
