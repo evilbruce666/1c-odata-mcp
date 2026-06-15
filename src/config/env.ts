@@ -19,6 +19,8 @@ export interface ConnectionConfig {
   baseUrl: string;
   username: string;
   password: string;
+  /** Разрешена ли запись в эту базу (POST/PATCH). По умолчанию false. */
+  writable: boolean;
 }
 
 export interface Behavior {
@@ -55,6 +57,7 @@ const ConnSchema = z.object({
   baseUrl: z.string().url("должен быть валидным URL").transform(normalizeUrl),
   username: z.string().min(1, "обязателен"),
   password: z.string().min(1, "обязателен"),
+  writable: z.preprocess((v) => v === true || v === "true", z.boolean()).default(false),
 });
 
 type Env = Record<string, string | undefined>;
@@ -74,6 +77,7 @@ function collectRawConnections(env: Env): Array<Record<string, unknown>> {
       baseUrl: env[key],
       username: env[`ODATA_DB_${tag}_USERNAME`],
       password: env[`ODATA_DB_${tag}_PASSWORD`],
+      writable: env[`ODATA_DB_${tag}_WRITABLE`],
     });
   }
 
@@ -85,6 +89,7 @@ function collectRawConnections(env: Env): Array<Record<string, unknown>> {
       baseUrl: env.ODATA_BASE_URL,
       username: env.ODATA_USERNAME,
       password: env.ODATA_PASSWORD,
+      writable: env.ODATA_WRITABLE,
     });
   }
 

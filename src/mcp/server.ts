@@ -4,6 +4,7 @@ import { registerMetaTools } from "../tools/meta.js";
 import { registerCounterpartyTools } from "../tools/counterparties.js";
 import { registerDocumentTools } from "../tools/documents.js";
 import { registerRegisterTools } from "../tools/registers.js";
+import { registerWriteTools } from "../tools/write.js";
 
 /** Создаёт MCP-сервер и регистрирует все инструменты (read-only). */
 export function createServer(ctx: ServerContext): McpServer {
@@ -16,6 +17,7 @@ export function createServer(ctx: ServerContext): McpServer {
   registerCounterpartyTools(server, ctx);
   registerDocumentTools(server, ctx);
   registerRegisterTools(server, ctx);
+  registerWriteTools(server, ctx);
 
   return server;
 }

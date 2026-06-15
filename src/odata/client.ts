@@ -17,12 +17,23 @@ export class ODataClient {
     this.authHeader = `Basic ${token}`;
   }
 
-  /** Гард: любая запись запрещена при READ_ONLY. */
-  private assertReadOnly(method: string): void {
-    if (this.behavior.readOnly && !READ_METHODS.has(method)) {
+  /**
+   * Гард записи — два явных предохранителя должны быть сняты:
+   *  1) глобально READ_ONLY=false (behavior.readOnly === false);
+   *  2) на конкретной базе ODATA_DB_<ИМЯ>_WRITABLE=true (conn.writable).
+   */
+  private assertWritable(method: string): void {
+    if (READ_METHODS.has(method)) return;
+    if (this.behavior.readOnly) {
       throw new ODataError({
         kind: "bad_request",
-        message: `Операция ${method} запрещена: сервер работает в режиме только-чтение (READ_ONLY=true)`,
+        message: `Операция ${method} запрещена: сервер в режиме только-чтение (снимите READ_ONLY=false в .env)`,
+      });
+    }
+    if (!this.conn.writable) {
+      throw new ODataError({
+        kind: "bad_request",
+        message: `Запись в базу "${this.conn.name}" запрещена: задайте ODATA_DB_${this.conn.name.toUpperCase()}_WRITABLE=true в .env`,
       });
     }
   }
@@ -36,10 +47,11 @@ export class ODataClient {
    * Низкоуровневый запрос с таймаутом и retry.
    * Возвращает распарсенный JSON указанного типа.
    */
-  async request<T>(path: string, method = "GET"): Promise<T> {
-    this.assertReadOnly(method);
+  async request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
+    this.assertWritable(method);
     const url = this.url(path);
-    const maxAttempts = this.behavior.retries + 1;
+    // Тело пишущих запросов повторять небезопасно (не идемпотентно) — без retry.
+    const maxAttempts = body === undefined ? this.behavior.retries + 1 : 1;
 
     let lastErr: ODataError | undefined;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -53,7 +65,9 @@ export class ODataClient {
           headers: {
             Authorization: this.authHeader,
             Accept: "application/json",
+            ...(body === undefined ? {} : { "Content-Type": "application/json" }),
           },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
           signal: controller.signal,
         });
 
@@ -100,9 +114,19 @@ export class ODataClient {
     return this.request<T>(path);
   }
 
+  /** Создаёт объект (POST). Возвращает созданную сущность с Ref_Key. */
+  async create<T extends ODataEntity = ODataEntity>(entitySet: string, payload: object): Promise<T> {
+    return this.request<T>(`${entitySet}?$format=json`, "POST", payload);
+  }
+
+  /** Изменяет объект (PATCH) по полному пути с ключом. */
+  async patch<T extends ODataEntity = ODataEntity>(path: string, payload: object): Promise<T> {
+    return this.request<T>(path, "PATCH", payload);
+  }
+
   /** Сырой текст (для $metadata — это XML, не JSON). */
   async getText(path: string): Promise<string> {
-    this.assertReadOnly("GET");
+    this.assertWritable("GET");
     const url = this.url(path);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.behavior.timeoutMs);
