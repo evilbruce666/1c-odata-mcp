@@ -3,9 +3,14 @@ import { z } from "zod";
 import type { ServerContext } from "../context.js";
 import { ok, fail, guard } from "./_shared.js";
 import { fetchAll } from "../odata/pagination.js";
-import { and, cmp, buildQuery } from "../odata/query.js";
-import { DOC_FIELDS, DOCUMENTS, REGISTERS, resolveEntity } from "../config/mapping.js";
-import type { ODataEntity } from "../types/odata.js";
+import { and, cmp } from "../odata/query.js";
+import { ACCOUNT_PREFIX, CATALOGS, DOC_FIELDS, DOCUMENTS, resolveEntity } from "../config/mapping.js";
+import {
+  balanceByAccounts,
+  resolveAccounts,
+  resolveNames,
+  num,
+} from "../odata/accounting.js";
 
 /** Суммирует числовое поле по строкам документов за период. */
 async function sumDocuments(
@@ -100,64 +105,98 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
   );
 
   server.registerTool(
-    "get_inventory",
-    {
-      title: "Остатки на складах",
-      description:
-        "Текущие остатки товаров по складам из регистра накопления (виртуальная таблица Balance). " +
-        "Возвращает строки с измерениями (Номенклатура/Склад) и количеством. " +
-        "ВНИМАНИЕ: точное имя регистра подтверждается из $metadata при первом запуске.",
-      inputSchema: {
-        limit: z.number().int().positive().max(1000).default(200).describe("Сколько строк вернуть"),
-      },
-    },
-    ({ limit }) =>
-      guard("get_inventory", async () => {
-        const available = await ctx.available();
-        const reg = resolveEntity(REGISTERS.stock, available);
-        if (!reg) {
-          return fail(
-            "Регистр остатков товаров не опубликован в OData. " +
-              "Добавьте AccumulationRegister_ТоварыНаСкладах в «Состав OData».",
-          );
-        }
-        // Виртуальная таблица остатков: <Регистр>/Balance
-        const path = `${reg}/Balance${buildQuery({ top: Math.min(limit, ctx.cfg.ODATA_MAX_ROWS) })}`;
-        const page = await ctx.client.getCollection<ODataEntity>(path);
-        return ok({ register: reg, count: page.value.length, rows: page.value });
-      }),
-  );
-
-  server.registerTool(
     "get_debtors",
     {
       title: "Дебиторская задолженность",
       description:
-        "Остатки дебиторской задолженности (сальдо счёта 62) из регистра бухгалтерии Хозрасчетный, " +
-        "виртуальная таблица Balance. Показывает, кто и сколько должен компании. " +
-        "ЭКСПЕРИМЕНТАЛЬНО: формат виртуальной таблицы регистра бухгалтерии подтверждается " +
-        "из живой базы при первом запуске; при ошибке используйте get_customer_history по контрагенту.",
+        "Кто и сколько должен компании: сальдо счёта 62 (расчёты с покупателями) из регистра " +
+        "бухгалтерии Хозрасчетный, сгруппированное по контрагентам. Дебетовое сальдо = долг клиента, " +
+        "кредитовое = полученные авансы (вычитается). Возвращает только тех, у кого долг > 0.",
       inputSchema: {
-        limit: z.number().int().positive().max(1000).default(200),
+        limit: z.number().int().positive().max(1000).default(100).describe("Сколько контрагентов вернуть"),
       },
     },
     ({ limit }) =>
       guard("get_debtors", async () => {
-        const available = await ctx.available();
-        const reg = resolveEntity(REGISTERS.accounting, available);
-        if (!reg) {
-          return fail(
-            "Регистр бухгалтерии не опубликован в OData. " +
-              "Добавьте AccountingRegister_Хозрасчетный в «Состав OData».",
-          );
+        const accounts = await resolveAccounts(ctx, ACCOUNT_PREFIX.receivables);
+        const rows = await balanceByAccounts(ctx, accounts.map((a) => a.key), ctx.cfg.ODATA_MAX_ROWS);
+
+        // Группировка по контрагенту (ExtDimension1). Долг = Дт − Кт.
+        const byCp = new Map<string, number>();
+        for (const r of rows) {
+          const cp = String(r["ExtDimension1"] ?? "");
+          if (!cp) continue;
+          const net = num(r["СуммаBalanceDr"]) - num(r["СуммаBalanceCr"]);
+          byCp.set(cp, (byCp.get(cp) ?? 0) + net);
         }
-        const path = `${reg}/Balance${buildQuery({ top: Math.min(limit, ctx.cfg.ODATA_MAX_ROWS) })}`;
-        const page = await ctx.client.getCollection<ODataEntity>(path);
+
+        const cpSet = resolveEntity(CATALOGS.counterparties, await ctx.available());
+        const names = cpSet ? await resolveNames(ctx, cpSet, byCp.keys()) : new Map<string, string>();
+
+        const debtors = [...byCp.entries()]
+          .filter(([, amount]) => amount > 0.005)
+          .map(([ref, amount]) => ({ counterparty: names.get(ref) ?? ref, ref, amount: Math.round(amount * 100) / 100 }))
+          .sort((a, b) => b.amount - a.amount)
+          .slice(0, limit);
+
+        const total = debtors.reduce((s, d) => s + d.amount, 0);
         return ok({
-          register: reg,
-          note: "Сырые строки сальдо. Фильтрацию по счёту 62 и группировку по контрагенту откалибруем после сверки с $metadata живой базы.",
-          count: page.value.length,
-          rows: page.value,
+          accounts: accounts.map((a) => `${a.code} ${a.description}`),
+          totalReceivable: Math.round(total * 100) / 100,
+          count: debtors.length,
+          debtors,
+        });
+      }),
+  );
+
+  server.registerTool(
+    "get_inventory",
+    {
+      title: "Остатки товаров",
+      description:
+        "Текущие остатки товаров/материалов на складах: сальдо счетов 41/10/43 регистра Хозрасчетный, " +
+        "сгруппированное по номенклатуре. Возвращает количество и сумму остатка. " +
+        "(В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
+      inputSchema: {
+        limit: z.number().int().positive().max(1000).default(200).describe("Сколько позиций вернуть"),
+      },
+    },
+    ({ limit }) =>
+      guard("get_inventory", async () => {
+        const accounts = await resolveAccounts(ctx, ACCOUNT_PREFIX.inventory);
+        const rows = await balanceByAccounts(ctx, accounts.map((a) => a.key), ctx.cfg.ODATA_MAX_ROWS);
+
+        // Группировка по номенклатуре (ExtDimension1): количество и сумма.
+        const byItem = new Map<string, { qty: number; amount: number }>();
+        for (const r of rows) {
+          const item = String(r["ExtDimension1"] ?? "");
+          if (!item) continue;
+          const cur = byItem.get(item) ?? { qty: 0, amount: 0 };
+          cur.qty += num(r["КоличествоBalanceDr"]) - num(r["КоличествоBalanceCr"]);
+          cur.amount += num(r["СуммаBalanceDr"]) - num(r["СуммаBalanceCr"]);
+          byItem.set(item, cur);
+        }
+
+        const nomSet = resolveEntity(CATALOGS.nomenclature, await ctx.available());
+        const names = nomSet ? await resolveNames(ctx, nomSet, byItem.keys()) : new Map<string, string>();
+
+        const items = [...byItem.entries()]
+          .filter(([, v]) => Math.abs(v.qty) > 0.0001 || Math.abs(v.amount) > 0.005)
+          .map(([ref, v]) => ({
+            item: names.get(ref) ?? ref,
+            ref,
+            quantity: Math.round(v.qty * 1000) / 1000,
+            amount: Math.round(v.amount * 100) / 100,
+          }))
+          .sort((a, b) => b.amount - a.amount)
+          .slice(0, limit);
+
+        const totalAmount = items.reduce((s, i) => s + i.amount, 0);
+        return ok({
+          accounts: accounts.map((a) => `${a.code} ${a.description}`),
+          totalAmount: Math.round(totalAmount * 100) / 100,
+          count: items.length,
+          items,
         });
       }),
   );

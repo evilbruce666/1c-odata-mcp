@@ -63,20 +63,31 @@ export interface QueryOptions {
 }
 
 /**
+ * Кодирует значение параметра для 1С OData.
+ *
+ * ВАЖНО: используем encodeURIComponent, а НЕ URLSearchParams. Последний
+ * кодирует пробел как '+', а 1С внутри $filter НЕ декодирует '+' в пробел
+ * (отвечает 400). encodeURIComponent кодирует пробел как %20 — это работает.
+ * Ключи параметров ($filter и т.п.) оставляем без кодирования.
+ */
+function encodeValue(v: string): string {
+  return encodeURIComponent(v);
+}
+
+/**
  * Собирает query-string из опций. $format=json добавляется всегда.
  * Возвращает строку вида "?$top=100&$filter=...".
  */
 export function buildQuery(opts: QueryOptions): string {
-  const params = new URLSearchParams();
-  params.set("$format", "json");
+  const parts: string[] = ["$format=json"];
 
-  if (opts.select?.length) params.set("$select", opts.select.join(","));
-  if (opts.filter) params.set("$filter", opts.filter);
-  if (opts.orderby) params.set("$orderby", opts.orderby);
-  if (typeof opts.top === "number") params.set("$top", String(opts.top));
-  if (typeof opts.skip === "number") params.set("$skip", String(opts.skip));
-  if (opts.expand?.length) params.set("$expand", opts.expand.join(","));
-  if (opts.count) params.set("$inlinecount", "allpages");
+  if (opts.select?.length) parts.push(`$select=${encodeValue(opts.select.join(","))}`);
+  if (opts.filter) parts.push(`$filter=${encodeValue(opts.filter)}`);
+  if (opts.orderby) parts.push(`$orderby=${encodeValue(opts.orderby)}`);
+  if (typeof opts.top === "number") parts.push(`$top=${opts.top}`);
+  if (typeof opts.skip === "number") parts.push(`$skip=${opts.skip}`);
+  if (opts.expand?.length) parts.push(`$expand=${encodeValue(opts.expand.join(","))}`);
+  if (opts.count) parts.push("$inlinecount=allpages");
 
-  return `?${params.toString()}`;
+  return `?${parts.join("&")}`;
 }
