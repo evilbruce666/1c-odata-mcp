@@ -1,7 +1,10 @@
 name: Publish to npm
 
-# Публикация при пуше тега vX.Y.Z. Требует секрет NPM_TOKEN
-# (granular/automation token с включённым «bypass 2FA»).
+# Публикация при пуше тега vX.Y.Z через npm Trusted Publishing (OIDC):
+# токен не нужен — аутентификация по доверию между GitHub Actions и npm.
+# Один раз настройте доверие: npmjs.com → пакет 1c-odata-mcp → Settings →
+# Trusted Publishing → добавьте GitHub Actions (repo evilbruce666/1c-odata-mcp,
+# workflow publish.yml). Provenance формируется автоматически.
 on:
   push:
     tags: ["v*"]
@@ -11,17 +14,16 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # для npm provenance
+      id-token: write # OIDC для Trusted Publishing + provenance
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           registry-url: "https://registry.npmjs.org"
           cache: npm
+      - run: npm install -g npm@latest # npm >= 11.5.1 для Trusted Publishing
       - run: npm ci
       - run: npm test
-      # prepublishOnly соберёт пакет и уберёт probe-скрипты
-      - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # prepublishOnly соберёт пакет и уберёт probe-скрипты; токен не передаётся
+      - run: npm publish --access public
