@@ -28,6 +28,8 @@ export interface Behavior {
   retries: number;
   pageSize: number;
   maxRows: number;
+  /** Потолок строк для агрегаторов (они только суммируют, строки наружу не отдают). */
+  analyticsMaxRows: number;
   readOnly: boolean;
 }
 
@@ -47,6 +49,7 @@ const BehaviorSchema = z.object({
   ODATA_RETRIES: z.coerce.number().int().min(0).max(10).default(3),
   ODATA_PAGE_SIZE: z.coerce.number().int().positive().max(5_000).default(100),
   ODATA_MAX_ROWS: z.coerce.number().int().positive().max(100_000).default(1_000),
+  ODATA_ANALYTICS_MAX_ROWS: z.coerce.number().int().positive().max(1_000_000).default(200_000),
   LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"),
   READ_ONLY: z.enum(["true", "false"]).default("true"),
 });
@@ -155,6 +158,7 @@ export function parseConfig(env: Env): RuntimeConfig {
       retries: b.ODATA_RETRIES,
       pageSize: b.ODATA_PAGE_SIZE,
       maxRows: b.ODATA_MAX_ROWS,
+      analyticsMaxRows: b.ODATA_ANALYTICS_MAX_ROWS,
       readOnly: b.READ_ONLY === "true",
     },
   };

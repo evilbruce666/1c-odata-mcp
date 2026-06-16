@@ -7,7 +7,7 @@ import { and, cmp, odataGuid } from "../odata/query.js";
 import { CATALOGS, DOC_FIELDS, DOCUMENTS, resolveEntity } from "../config/mapping.js";
 import { resolveOrganization } from "../odata/orgs.js";
 import { resolveNames, num } from "../odata/accounting.js";
-import { counterpartyRefsByKind, type CounterpartyKind } from "../odata/refilters.js";
+import { counterpartyRefsByKind, ANALYTICS_PAGE, type CounterpartyKind } from "../odata/refilters.js";
 
 /**
  * Агрегаторы продаж и закупок. У документов реализации/поступления контрагент
@@ -65,8 +65,8 @@ async function aggregate(
     conn.client,
     set,
     { filter, select, orderby: `${DOC_FIELDS.date} asc` },
-    conn.behavior.pageSize,
-    conn.behavior.maxRows,
+    ANALYTICS_PAGE,
+    conn.behavior.analyticsMaxRows,
   );
 
   const buckets = new Map<string, Bucket>();
@@ -138,7 +138,10 @@ async function aggregate(
     total: round(total),
     groups,
     ...(truncated
-      ? { truncated: true, note: `Усечено лимитом ${conn.behavior.maxRows} строк — сузьте период/фильтр.` }
+      ? {
+          truncated: true,
+          note: `Усечено лимитом ${conn.behavior.analyticsMaxRows} строк — сузьте период/фильтр.`,
+        }
       : {}),
   });
 }

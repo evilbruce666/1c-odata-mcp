@@ -7,7 +7,7 @@ import { and, cmp, contains, odataGuid } from "../odata/query.js";
 import { CATALOGS, DOC_FIELDS, DOCUMENTS, resolveEntity } from "../config/mapping.js";
 import { resolveOrganization } from "../odata/orgs.js";
 import { resolveNames, num } from "../odata/accounting.js";
-import { counterpartyRefsByKind, resolveCashflowItems } from "../odata/refilters.js";
+import { counterpartyRefsByKind, resolveCashflowItems, ANALYTICS_PAGE } from "../odata/refilters.js";
 
 /** Нормализует GUID-строку для сравнения: без скобок, нижний регистр. */
 function normGuid(v: unknown): string {
@@ -191,8 +191,8 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
             conn.client,
             set,
             { filter, select, orderby: `${DOC_FIELDS.date} asc` },
-            conn.behavior.pageSize,
-            conn.behavior.maxRows,
+            ANALYTICS_PAGE,
+            conn.behavior.analyticsMaxRows,
           );
           if (t) truncated = true;
           usedSets.push(set);
@@ -288,7 +288,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           ...(truncated
             ? {
                 truncated: true,
-                note: `Данные усечены лимитом ${conn.behavior.maxRows} строк на вид документа — сузьте период или фильтр.`,
+                note: `Данные усечены лимитом ${conn.behavior.analyticsMaxRows} строк на вид документа — сузьте период или фильтр.`,
               }
             : {}),
         });
@@ -383,8 +383,8 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
             conn.client,
             set,
             { filter, select, orderby: `${DOC_FIELDS.date} asc` },
-            conn.behavior.pageSize,
-            conn.behavior.maxRows,
+            ANALYTICS_PAGE,
+            conn.behavior.analyticsMaxRows,
           );
           if (t) truncated = true;
           const isIn = inSets.has(candidate);
@@ -438,7 +438,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           items,
           ...(events.length > limit ? { note: `Показаны первые ${limit} событий из ${events.length}.` } : {}),
           ...(truncated
-            ? { truncated: true, note: `Данные усечены лимитом ${conn.behavior.maxRows} строк.` }
+            ? { truncated: true, note: `Данные усечены лимитом ${conn.behavior.analyticsMaxRows} строк.` }
             : {}),
         });
       }),
@@ -529,8 +529,8 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
             conn.client,
             set,
             { filter, select, orderby: `${DOC_FIELDS.date} asc` },
-            conn.behavior.pageSize,
-            conn.behavior.maxRows,
+            ANALYTICS_PAGE,
+            conn.behavior.analyticsMaxRows,
           );
 
           for (const r of rows) {

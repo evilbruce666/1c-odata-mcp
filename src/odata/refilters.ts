@@ -11,6 +11,12 @@ import { requireEntity } from "./publication.js";
  * по документам с клиентским фильтром.
  */
 
+/**
+ * Размер страницы для аналитических выборок: крупнее обычного (меньше round-trip'ов
+ * при суммировании тысяч документов). 1С терпит большой $top.
+ */
+export const ANALYTICS_PAGE = 1000;
+
 /** Категории контрагентов: чем фильтровать справочник. */
 export type CounterpartyKind = "ИП" | "ЮрЛицо" | "ФизЛицо" | "Нерезидент" | "Госорган";
 
@@ -49,12 +55,14 @@ export async function counterpartyRefsByKind(conn: Connection, kind: Counterpart
         return and(cmp("ВидГосударственногоОргана", "ne", odataString("")), cmp("IsFolder", "eq", "false"));
     }
   })();
+  // Срез справочника должен быть ПОЛНЫМ (иначе часть контрагентов «не узнается»
+  // при клиентском фильтре) — берём аналитический потолок, а не общий maxRows.
   const { rows } = await fetchAll(
     conn.client,
     set,
     { filter, select: ["Ref_Key"] },
-    conn.behavior.pageSize,
-    conn.behavior.maxRows,
+    ANALYTICS_PAGE,
+    conn.behavior.analyticsMaxRows,
   );
   return new Set(rows.map((r) => String(r["Ref_Key"]).toLowerCase()));
 }
