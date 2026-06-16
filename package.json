@@ -9,6 +9,7 @@
   "files": [
     "dist",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     ".env.example"
   ],
@@ -32,12 +33,24 @@
   "keywords": [
     "mcp",
     "model-context-protocol",
+    "claude",
+    "anthropic",
+    "ai",
+    "llm",
     "1c",
     "1с",
+    "1c-enterprise",
+    "1с-предприятие",
     "odata",
-    "scloud",
+    "коннектор",
+    "connector",
+    "integration",
+    "интеграция",
     "accounting",
-    "erp"
+    "бухгалтерия",
+    "erp",
+    "scloud",
+    "1cfresh"
   ],
   "license": "MIT",
   "engines": {

@@ -107,9 +107,40 @@ https://<сервер>/<имя_базы>/odata/standard.odata/?$format=json
 
 ---
 
-## Уровень 3. Сборка и подключение к Claude
+## Уровень 3. Подключение к Claude
 
-### Сборка
+Есть два способа запуска сервера: **через `npx`** (ничего не клонировать) и **из
+исходников** (для разработки или своих правок).
+
+### Вариант А. Через `npx` (рекомендуется)
+
+Ничего ставить заранее не нужно — `npx` сам скачает и запустит пакет. Настройки
+передаются через переменные окружения в самом конфиге Claude.
+
+`claude_desktop_config.json` (**macOS:** `~/Library/Application Support/Claude/`,
+**Windows:** `%APPDATA%\Claude\`), добавьте в `mcpServers`:
+
+```json
+{
+  "mcpServers": {
+    "1c-odata": {
+      "command": "npx",
+      "args": ["-y", "1c-odata-mcp"],
+      "env": {
+        "ODATA_BASE_URL": "https://<сервер>/<имя_базы>/odata/standard.odata/",
+        "ODATA_USERNAME": "...",
+        "ODATA_PASSWORD": "..."
+      }
+    }
+  }
+}
+```
+
+> Минус варианта А: пароль хранится в самом конфиге. Если это нежелательно — вариант Б
+> с `.env`. Несколько баз / запись — задаются теми же переменными окружения
+> (см. [Несколько баз](#несколько-баз-1с) и [Включение записи](#включение-записи-опционально)).
+
+### Вариант Б. Из исходников (с `.env`, пароль не в конфиге)
 
 ```bash
 git clone https://github.com/evilbruce666/1c-odata-mcp.git
@@ -119,30 +150,7 @@ npm run build
 cp .env.example .env      # заполните ODATA_BASE_URL / USERNAME / PASSWORD
 ```
 
-### Проверка без Claude (рекомендуется)
-
-Сервер использует Node 20+; запуск probe-скриптов берёт переменные из `.env`:
-
-```bash
-# карта объектов + сверка имён
-node --env-file=.env dist/scripts/probe-metadata.js
-# дебиторка / остатки на живых данных
-node --env-file=.env dist/scripts/probe-analytics.js
-# полный end-to-end по протоколу MCP (как делает Claude)
-node --env-file=.env dist/scripts/probe-mcp.js
-```
-
-Если `probe-metadata` печатает версию OData и сотни объектов — всё готово.
-Секреты эти скрипты не печатают.
-
-### Подключение к Claude Desktop
-
-Конфиг:
-- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
-
-Добавьте сервер в `mcpServers` (не удаляя существующие). Пароль в конфиг **не**
-вписываем — он берётся из `.env` через `--env-file`:
+Конфиг Claude — сервер берёт переменные из `.env` через `--env-file`:
 
 ```json
 {
@@ -158,31 +166,45 @@ node --env-file=.env dist/scripts/probe-mcp.js
 }
 ```
 
-Тонкости (именно из-за них «непросто»):
+Тонкости варианта Б (именно из-за них бывает «непросто»):
 
 - **Абсолютный путь к `node`.** GUI-приложение Claude Desktop может не видеть `node`
-  из вашего PATH. Укажите полный путь (`which node` в терминале). На Apple Silicon с
-  Homebrew это обычно `/opt/homebrew/opt/node@22/bin/node`.
-- **Абсолютные пути** к `.env` и к `dist/index.js` (не относительные, не `~`).
-- **`--env-file` требует Node 20.6+.** Проверьте `node -v`.
-- **Полный перезапуск.** После правки конфига закройте Claude Desktop через **Cmd+Q**
-  (не просто окно) и откройте заново — иначе сервер не подхватится.
+  из вашего PATH. Укажите полный путь (`which node`). На Apple Silicon с Homebrew это
+  обычно `/opt/homebrew/opt/node@22/bin/node`.
+- **Абсолютные пути** к `.env` и `dist/index.js` (не относительные, не `~`).
+- **`--env-file` требует Node 20.6+** (`node -v`).
+
+### Проверка без Claude (для варианта Б, рекомендуется)
+
+probe-скрипты берут переменные из `.env` и секретов не печатают:
+
+```bash
+node --env-file=.env dist/scripts/probe-metadata.js   # карта объектов + сверка имён
+node --env-file=.env dist/scripts/probe-analytics.js  # дебиторка / остатки
+node --env-file=.env dist/scripts/probe-mcp.js        # end-to-end по протоколу MCP
+```
+
+Если `probe-metadata` печатает версию OData и сотни объектов — всё готово.
 
 ### Подключение к Claude Code
 
 ```bash
+# через npx
+claude mcp add 1c-odata -s user --env ODATA_BASE_URL=… --env ODATA_USERNAME=… --env ODATA_PASSWORD=… -- npx -y 1c-odata-mcp
+# или из исходников
 claude mcp add 1c-odata -s user -- /opt/homebrew/opt/node@22/bin/node \
   --env-file=/Users/<вы>/Projects/1c-odata-mcp/.env \
   /Users/<вы>/Projects/1c-odata-mcp/dist/index.js
 ```
 
-Проверка: `claude mcp list` → сервер `1c-odata` со статусом подключён.
+Проверка: `claude mcp list`.
 
 ### ✅ Что проверить в Claude
 
-- [ ] После перезапуска в списке инструментов есть `1c-odata` (13 инструментов).
-- [ ] Запрос «проверь соединение с 1С» → инструмент `health_check` возвращает
-      версию OData и число объектов.
+- [ ] **Полностью перезапустите Claude Desktop** (Cmd+Q, не просто окно) — иначе
+      сервер не подхватится. В списке инструментов появится `1c-odata`.
+- [ ] Запрос «проверь соединение с 1С» → `health_check` возвращает версию OData и
+      число объектов.
 - [ ] Запрос «покажи дебиторку» → список должников.
 
 ---
