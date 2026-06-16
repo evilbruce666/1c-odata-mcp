@@ -1124,7 +1124,11 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     }) =>
       guard("create_supplier_invoice", async () => {
         const conn = ctx.db(database);
-        const set = await requireEntity(conn, DOCUMENTS.supplierInvoice, "Документ «Счёт на оплату поставщика»");
+        const set = await requireEntity(
+          conn,
+          DOCUMENTS.supplierInvoice,
+          "Документ «Счёт на оплату поставщика»",
+        );
         const org = await resolveOrg(conn, organization);
         const rows = buildSupplierRows(lines);
         const payload = clean({
@@ -1135,9 +1139,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           ДоговорКонтрагента_Key: contractRef,
           БанковскийСчетКонтрагента_Key: supplierBankAccountRef,
           НомерВходящегоДокумента: incomingNumber,
-          ДатаВходящегоДокумента: incomingDate
-            ? odataDate(new Date(`${incomingDate}T00:00:00`))
-            : undefined,
+          ДатаВходящегоДокумента: incomingDate ? odataDate(new Date(`${incomingDate}T00:00:00`)) : undefined,
           Комментарий: comment,
           СуммаВключаетНДС: sumIncludesVat,
           СуммаДокумента: rowsTotal(rows),
