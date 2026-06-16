@@ -27,7 +27,6 @@ async function main(): Promise<void> {
   const recRows = await balanceByAccounts(
     conn,
     recAccts.map((a) => a.key),
-    conn.behavior.maxRows,
   );
   line(`строк сальдо: ${recRows.length}`);
   const byCp = new Map<string, number>();
@@ -51,7 +50,6 @@ async function main(): Promise<void> {
   const invRows = await balanceByAccounts(
     conn,
     invAccts.map((a) => a.key),
-    conn.behavior.maxRows,
   );
   line(`строк сальдо: ${invRows.length}`);
   const byItem = new Map<string, { qty: number; amount: number }>();

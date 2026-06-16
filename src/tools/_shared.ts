@@ -2,6 +2,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { ODataError } from "../odata/errors.js";
 import { NotPublishedError, publicationHelp } from "../odata/publication.js";
+import { AggregateOverflowError } from "../odata/aggregate.js";
 import { logger } from "../logger.js";
 
 /** Общее поле выбора базы — добавляется во все инструменты. */
@@ -15,6 +16,17 @@ export const organizationField = z
   .string()
   .optional()
   .describe("Название организации (юрлица) для фильтра. Без указания — все организации базы.");
+
+// Формат + диапазон месяца (01-12) и дня (01-31): ловим «2025-13-99» на валидации.
+const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+
+/**
+ * Обязательное поле даты YYYY-MM-DD с валидацией формата (кривая дата → битый
+ * $filter → 400/мусор). Для необязательного — `dateField(label).optional()`.
+ */
+export function dateField(label: string): z.ZodString {
+  return z.string().regex(DATE_RE, "Дата должна быть в формате YYYY-MM-DD").describe(`${label} (YYYY-MM-DD)`);
+}
 
 /**
  * Аннотации инструментов (подсказки клиенту MCP о характере операции).
@@ -55,6 +67,11 @@ export async function guard(toolName: string, fn: () => Promise<CallToolResult>)
     if (e instanceof NotPublishedError) {
       logger.warn({ tool: toolName, missing: e.missing.map((m) => m.label) }, "not published");
       return fail(publicationHelp(e.missing));
+    }
+    if (e instanceof AggregateOverflowError) {
+      // Громкий, но аккуратный отказ — лучше явная ошибка, чем неполная сумма.
+      logger.warn({ tool: toolName, entitySet: e.entitySet, cap: e.cap }, "aggregate overflow");
+      return fail(e.message);
     }
     if (e instanceof ODataError) {
       logger.warn({ tool: toolName, kind: e.kind }, e.message);

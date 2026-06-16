@@ -1,13 +1,13 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
-import { ok, fail, guard, databaseField, organizationField } from "./_shared.js";
-import { fetchAll } from "../odata/pagination.js";
+import { ok, fail, guard, databaseField, organizationField, dateField } from "./_shared.js";
 import { and, cmp, odataGuid } from "../odata/query.js";
 import { CATALOGS, DOC_FIELDS, DOCUMENTS, resolveEntity } from "../config/mapping.js";
 import { resolveOrganization } from "../odata/orgs.js";
 import { resolveNames, num } from "../odata/accounting.js";
-import { counterpartyRefsByKind, ANALYTICS_PAGE, type CounterpartyKind } from "../odata/refilters.js";
+import { counterpartyRefsByKind, type CounterpartyKind } from "../odata/refilters.js";
+import { collectDocuments } from "../odata/aggregate.js";
 
 /**
  * Агрегаторы продаж и закупок. У документов реализации/поступления контрагент
@@ -20,8 +20,12 @@ const CP_KIND = ["ИП", "ЮрЛицо", "ФизЛицо", "Нерезидент
 interface Bucket {
   key: string;
   count: number;
-  sum: number;
+  cents: number;
 }
+
+// Деньги — в целых копейках (float-сложение тысяч сумм даёт дрейф).
+const toCents = (v: unknown): number => Math.round(num(v) * 100);
+const fromCents = (c: number): number => Math.round(c) / 100;
 
 interface Args {
   database?: string | undefined;
@@ -41,6 +45,8 @@ async function aggregate(
   humanName: string,
   args: Args,
 ): Promise<ReturnType<typeof ok>> {
+  const t0 = Date.now();
+  if (args.from > args.to) return fail(`Период задан наоборот: from (${args.from}) позже to (${args.to}).`);
   const available = await conn.available();
   const set = resolveEntity(docCandidates, available);
   if (!set) {
@@ -51,40 +57,41 @@ async function aggregate(
     ? await counterpartyRefsByKind(conn, args.counterpartyKind)
     : undefined;
 
-  const filter = and(
-    cmp(DOC_FIELDS.date, "ge", `datetime'${args.from}T00:00:00'`),
-    cmp(DOC_FIELDS.date, "le", `datetime'${args.to}T23:59:59'`),
-    org ? cmp(DOC_FIELDS.organization, "eq", odataGuid(org.ref)) : undefined,
-    cmp(DOC_FIELDS.posted, "eq", "true"),
-    args.counterpartyRef ? cmp(DOC_FIELDS.counterparty, "eq", odataGuid(args.counterpartyRef)) : undefined,
-    args.contractRef ? cmp("ДоговорКонтрагента_Key", "eq", odataGuid(args.contractRef)) : undefined,
-  );
+  // Контрагент в реализации/поступлении типизированный — фильтр на сервере; дату
+  // добавит collectDocuments (с авто-чанкингом и громким переполнением).
+  const baseFilter =
+    and(
+      org ? cmp(DOC_FIELDS.organization, "eq", odataGuid(org.ref)) : undefined,
+      cmp(DOC_FIELDS.posted, "eq", "true"),
+      args.counterpartyRef ? cmp(DOC_FIELDS.counterparty, "eq", odataGuid(args.counterpartyRef)) : undefined,
+      args.contractRef ? cmp("ДоговорКонтрагента_Key", "eq", odataGuid(args.contractRef)) : undefined,
+    ) || undefined;
 
   const select = [DOC_FIELDS.date, DOC_FIELDS.amount, DOC_FIELDS.counterparty, "ДоговорКонтрагента_Key"];
-  const { rows, truncated } = await fetchAll(
-    conn.client,
-    set,
-    { filter, select, orderby: `${DOC_FIELDS.date} asc` },
-    ANALYTICS_PAGE,
-    conn.behavior.analyticsMaxRows,
-  );
+  const { rows, meta } = await collectDocuments(conn, set, {
+    baseFilter,
+    dateField: DOC_FIELDS.date,
+    from: args.from,
+    to: args.to,
+    select,
+  });
 
   const buckets = new Map<string, Bucket>();
-  const bump = (k: string, amt: number): void => {
-    const b = buckets.get(k) ?? { key: k, count: 0, sum: 0 };
+  const bump = (k: string, cents: number): void => {
+    const b = buckets.get(k) ?? { key: k, count: 0, cents: 0 };
     b.count += 1;
-    b.sum += amt;
+    b.cents += cents;
     buckets.set(k, b);
   };
-  let total = 0,
+  let totalC = 0,
     docCount = 0;
   const cpKeys = new Set<string>();
   const contractKeys = new Set<string>();
   for (const r of rows) {
     const cp = String(r[DOC_FIELDS.counterparty] ?? "").toLowerCase();
     if (kindSet && (!cp || !kindSet.has(cp))) continue;
-    const amount = num(r[DOC_FIELDS.amount]);
-    total += amount;
+    const cents = toCents(r[DOC_FIELDS.amount]);
+    totalC += cents;
     docCount += 1;
     let key: string;
     if (args.groupBy === "counterparty") {
@@ -96,7 +103,7 @@ async function aggregate(
       key = String(r["ДоговорКонтрагента_Key"] ?? "").toLowerCase();
       if (key) contractKeys.add(key);
     } else key = "ИТОГО";
-    bump(key, amount);
+    bump(key, cents);
   }
 
   const names = new Map<string, string>();
@@ -110,14 +117,13 @@ async function aggregate(
       for (const [k, v] of await resolveNames(conn, cSet, contractKeys)) names.set(k.toLowerCase(), v);
   }
 
-  const round = (n: number): number => Math.round(n * 100) / 100;
   const labelOf = (b: Bucket): string => {
     if (args.groupBy === "counterparty") return b.key ? (names.get(b.key) ?? b.key) : "Без контрагента";
     if (args.groupBy === "contract") return b.key ? (names.get(b.key) ?? b.key) : "Без договора";
     return b.key || "—";
   };
   const groups = [...buckets.values()]
-    .map((b) => ({ label: labelOf(b), count: b.count, sum: round(b.sum) }))
+    .map((b) => ({ label: labelOf(b), count: b.count, sum: fromCents(b.cents) }))
     .sort((a, b) => b.sum - a.sum)
     .slice(0, args.limit);
 
@@ -135,14 +141,9 @@ async function aggregate(
     groupBy: args.groupBy,
     entitySet: set,
     documents: docCount,
-    total: round(total),
+    total: fromCents(totalC),
     groups,
-    ...(truncated
-      ? {
-          truncated: true,
-          note: `Усечено лимитом ${conn.behavior.analyticsMaxRows} строк — сузьте период/фильтр.`,
-        }
-      : {}),
+    scan: { documentsScanned: meta.rowsScanned, windows: meta.chunks, elapsedMs: Date.now() - t0 },
   });
 }
 
@@ -150,8 +151,8 @@ export function registerSalesTools(server: McpServer, ctx: ServerContext): void 
   const commonInput = {
     database: databaseField,
     organization: organizationField,
-    from: z.string().describe("Дата начала периода (YYYY-MM-DD)"),
-    to: z.string().describe("Дата конца периода (YYYY-MM-DD)"),
+    from: dateField("Дата начала периода"),
+    to: dateField("Дата конца периода"),
     counterpartyRef: z.string().optional().describe("Ref_Key контрагента (точечный фильтр)"),
     counterpartyKind: z
       .enum(CP_KIND)

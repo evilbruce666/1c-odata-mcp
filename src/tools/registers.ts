@@ -1,48 +1,57 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
-import { ok, fail, guard, databaseField, organizationField } from "./_shared.js";
-import { fetchAll } from "../odata/pagination.js";
+import { ok, fail, guard, databaseField, organizationField, dateField } from "./_shared.js";
 import { and, cmp, odataGuid } from "../odata/query.js";
 import { ACCOUNT_PREFIX, CATALOGS, DOC_FIELDS, DOCUMENTS, resolveEntity } from "../config/mapping.js";
 import { balanceByAccounts, resolveAccounts, resolveNames, num } from "../odata/accounting.js";
 import { resolveOrganization } from "../odata/orgs.js";
+import { collectDocuments, emptyMeta, addMeta, type ScanMeta } from "../odata/aggregate.js";
 
-/** Суммирует поле СуммаДокумента по проведённым документам за период (+орг). */
+// Деньги копим в целых копейках (float-сложение тысяч сумм даёт дрейф).
+const toCents = (v: unknown): number => Math.round(num(v) * 100);
+const fromCents = (c: number): number => Math.round(c) / 100;
+
+/**
+ * Суммирует СуммаДокумента по проведённым документам за период (+орг). Через
+ * collectDocuments: полная выборка с авто-чанкингом и громким переполнением
+ * (раньше стояло под общим maxRows=1000 → годовые итоги занижались).
+ */
 async function sumDocuments(
   conn: Connection,
   docKeys: readonly string[],
-  from: string | undefined,
-  to: string | undefined,
+  from: string,
+  to: string,
   orgKey: string | undefined,
-): Promise<{ total: number; perSet: Record<string, number>; usedSets: string[] }> {
+): Promise<{ totalCents: number; perSet: Record<string, number>; usedSets: string[]; meta: ScanMeta }> {
   const available = await conn.available();
-  const filter = and(
-    from ? cmp(DOC_FIELDS.date, "ge", `datetime'${from}T00:00:00'`) : undefined,
-    to ? cmp(DOC_FIELDS.date, "le", `datetime'${to}T23:59:59'`) : undefined,
-    orgKey ? cmp(DOC_FIELDS.organization, "eq", odataGuid(orgKey)) : undefined,
-    cmp(DOC_FIELDS.posted, "eq", "true"),
-  );
+  const baseFilter =
+    and(
+      orgKey ? cmp(DOC_FIELDS.organization, "eq", odataGuid(orgKey)) : undefined,
+      cmp(DOC_FIELDS.posted, "eq", "true"),
+    ) || undefined;
   const perSet: Record<string, number> = {};
   const usedSets: string[] = [];
-  let total = 0;
+  let totalCents = 0;
+  let meta = emptyMeta();
 
   for (const key of docKeys) {
     const set = resolveEntity([key], available);
     if (!set) continue;
     usedSets.push(set);
-    const { rows } = await fetchAll(
-      conn.client,
-      set,
-      { filter, select: [DOC_FIELDS.date, DOC_FIELDS.amount, DOC_FIELDS.posted] },
-      conn.behavior.pageSize,
-      conn.behavior.maxRows,
-    );
-    const s = rows.reduce((acc, r) => acc + num(r[DOC_FIELDS.amount]), 0);
-    perSet[set] = s;
-    total += s;
+    const { rows, meta: m } = await collectDocuments(conn, set, {
+      baseFilter,
+      dateField: DOC_FIELDS.date,
+      from,
+      to,
+      select: [DOC_FIELDS.date, DOC_FIELDS.amount],
+    });
+    meta = addMeta(meta, m);
+    const c = rows.reduce((acc, r) => acc + toCents(r[DOC_FIELDS.amount]), 0);
+    perSet[set] = fromCents(c);
+    totalCents += c;
   }
-  return { total, perSet, usedSets };
+  return { totalCents, perSet, usedSets, meta };
 }
 
 async function orgKeyOf(conn: Connection, organization?: string): Promise<{ key?: string; name?: string }> {
@@ -62,12 +71,14 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
       inputSchema: {
         database: databaseField,
         organization: organizationField,
-        from: z.string().describe("Дата начала периода (YYYY-MM-DD)"),
-        to: z.string().describe("Дата конца периода (YYYY-MM-DD)"),
+        from: dateField("Дата начала периода"),
+        to: dateField("Дата конца периода"),
       },
     },
     ({ database, organization, from, to }) =>
       guard("get_sales", async () => {
+        const t0 = Date.now();
+        if (from > to) return fail(`Период задан наоборот: from (${from}) позже to (${to}).`);
         const conn = ctx.db(database);
         const org = await orgKeyOf(conn, organization);
         const r = await sumDocuments(conn, [...DOCUMENTS.sales], from, to, org.key);
@@ -78,8 +89,9 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           database: conn.cfg.name,
           organization: org.name,
           period: { from, to },
-          total: r.total,
+          total: fromCents(r.totalCents),
           byDocument: r.perSet,
+          scan: { documentsScanned: r.meta.rowsScanned, windows: r.meta.chunks, elapsedMs: Date.now() - t0 },
         });
       }),
   );
@@ -94,39 +106,34 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
       inputSchema: {
         database: databaseField,
         organization: organizationField,
-        from: z.string().describe("Дата начала периода (YYYY-MM-DD)"),
-        to: z.string().describe("Дата конца периода (YYYY-MM-DD)"),
+        from: dateField("Дата начала периода"),
+        to: dateField("Дата конца периода"),
       },
     },
     ({ database, organization, from, to }) =>
       guard("get_cashflow", async () => {
+        const t0 = Date.now();
+        if (from > to) return fail(`Период задан наоборот: from (${from}) позже to (${to}).`);
         const conn = ctx.db(database);
         const org = await orgKeyOf(conn, organization);
-        const inflow = await sumDocuments(
-          conn,
-          [...DOCUMENTS.bankIn, ...DOCUMENTS.cashIn],
-          from,
-          to,
-          org.key,
-        );
-        const outflow = await sumDocuments(
-          conn,
-          [...DOCUMENTS.bankOut, ...DOCUMENTS.cashOut],
-          from,
-          to,
-          org.key,
-        );
+        const [inflow, outflow] = await Promise.all([
+          sumDocuments(conn, [...DOCUMENTS.bankIn, ...DOCUMENTS.cashIn], from, to, org.key),
+          sumDocuments(conn, [...DOCUMENTS.bankOut, ...DOCUMENTS.cashOut], from, to, org.key),
+        ]);
         if (inflow.usedSets.length === 0 && outflow.usedSets.length === 0) {
           return fail("Банковские/кассовые документы не опубликованы в OData. Добавьте их в «Состав OData».");
         }
+        const scanned = inflow.meta.rowsScanned + outflow.meta.rowsScanned;
+        const windows = inflow.meta.chunks + outflow.meta.chunks;
         return ok({
           database: conn.cfg.name,
           organization: org.name,
           period: { from, to },
-          inflow: inflow.total,
-          outflow: outflow.total,
-          net: inflow.total - outflow.total,
+          inflow: fromCents(inflow.totalCents),
+          outflow: fromCents(outflow.totalCents),
+          net: fromCents(inflow.totalCents - outflow.totalCents),
           byDocument: { ...inflow.perSet, ...outflow.perSet },
+          scan: { documentsScanned: scanned, windows, elapsedMs: Date.now() - t0 },
         });
       }),
   );
@@ -144,55 +151,54 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
       inputSchema: {
         database: databaseField,
         organization: organizationField,
-        asOf: z
-          .string()
-          .optional()
-          .describe("Дата YYYY-MM-DD — сальдо на конец этой даты (без параметра — текущее)"),
+        asOf: dateField("Дата сальдо — на конец этой даты (без параметра — текущее)").optional(),
         limit: z.number().int().positive().max(1000).default(100).describe("Сколько контрагентов вернуть"),
       },
     },
     ({ database, organization, asOf, limit }) =>
       guard("get_debtors", async () => {
+        const t0 = Date.now();
         const conn = ctx.db(database);
         const org = await orgKeyOf(conn, organization);
         const accounts = await resolveAccounts(conn, ACCOUNT_PREFIX.receivables);
         const rows = await balanceByAccounts(
           conn,
           accounts.map((a) => a.key),
-          conn.behavior.maxRows,
           org.key,
           asOf,
         );
 
+        // Сальдо копим в копейках (целые) — без float-дрейфа на тысячах строк.
         const byCp = new Map<string, number>();
         for (const r of rows) {
           const cp = String(r["ExtDimension1"] ?? "");
           if (!cp) continue;
-          byCp.set(cp, (byCp.get(cp) ?? 0) + num(r["СуммаBalanceDr"]) - num(r["СуммаBalanceCr"]));
+          byCp.set(cp, (byCp.get(cp) ?? 0) + toCents(r["СуммаBalanceDr"]) - toCents(r["СуммаBalanceCr"]));
         }
 
         const cpSet = resolveEntity(CATALOGS.counterparties, await conn.available());
         const names = cpSet ? await resolveNames(conn, cpSet, byCp.keys()) : new Map<string, string>();
 
         const debtors = [...byCp.entries()]
-          .filter(([, amount]) => amount > 0.005)
-          .map(([ref, amount]) => ({
+          .filter(([, cents]) => cents > 0)
+          .map(([ref, cents]) => ({
             counterparty: names.get(ref) ?? ref,
             ref,
-            amount: Math.round(amount * 100) / 100,
+            amount: fromCents(cents),
           }))
           .sort((a, b) => b.amount - a.amount)
           .slice(0, limit);
 
-        const total = debtors.reduce((s, d) => s + d.amount, 0);
+        const totalCents = [...byCp.values()].filter((c) => c > 0).reduce((s, c) => s + c, 0);
         return ok({
           database: conn.cfg.name,
           organization: org.name,
           ...(asOf ? { asOf } : {}),
           accounts: accounts.map((a) => `${a.code} ${a.description}`),
-          totalReceivable: Math.round(total * 100) / 100,
+          totalReceivable: fromCents(totalCents),
           count: debtors.length,
           debtors,
+          scan: { rowsScanned: rows.length, elapsedMs: Date.now() - t0 },
         });
       }),
   );
@@ -210,59 +216,60 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
       inputSchema: {
         database: databaseField,
         organization: organizationField,
-        asOf: z
-          .string()
-          .optional()
-          .describe("Дата YYYY-MM-DD — остатки на конец этой даты (без параметра — текущие)"),
+        asOf: dateField("Дата остатков — на конец этой даты (без параметра — текущие)").optional(),
         limit: z.number().int().positive().max(1000).default(200).describe("Сколько позиций вернуть"),
       },
     },
     ({ database, organization, asOf, limit }) =>
       guard("get_inventory", async () => {
+        const t0 = Date.now();
         const conn = ctx.db(database);
         const org = await orgKeyOf(conn, organization);
         const accounts = await resolveAccounts(conn, ACCOUNT_PREFIX.inventory);
         const rows = await balanceByAccounts(
           conn,
           accounts.map((a) => a.key),
-          conn.behavior.maxRows,
           org.key,
           asOf,
         );
 
-        const byItem = new Map<string, { qty: number; amount: number }>();
+        // Сумма — в копейках (целые), количество — float (округляем до 3 знаков).
+        const byItem = new Map<string, { qty: number; cents: number }>();
         for (const r of rows) {
           const item = String(r["ExtDimension1"] ?? "");
           if (!item) continue;
-          const cur = byItem.get(item) ?? { qty: 0, amount: 0 };
+          const cur = byItem.get(item) ?? { qty: 0, cents: 0 };
           cur.qty += num(r["КоличествоBalanceDr"]) - num(r["КоличествоBalanceCr"]);
-          cur.amount += num(r["СуммаBalanceDr"]) - num(r["СуммаBalanceCr"]);
+          cur.cents += toCents(r["СуммаBalanceDr"]) - toCents(r["СуммаBalanceCr"]);
           byItem.set(item, cur);
         }
 
         const nomSet = resolveEntity(CATALOGS.nomenclature, await conn.available());
         const names = nomSet ? await resolveNames(conn, nomSet, byItem.keys()) : new Map<string, string>();
 
-        const items = [...byItem.entries()]
-          .filter(([, v]) => Math.abs(v.qty) > 0.0001 || Math.abs(v.amount) > 0.005)
+        const present = [...byItem.entries()].filter(
+          ([, v]) => Math.abs(v.qty) > 0.0001 || Math.abs(v.cents) > 0,
+        );
+        const items = present
           .map(([ref, v]) => ({
             item: names.get(ref) ?? ref,
             ref,
             quantity: Math.round(v.qty * 1000) / 1000,
-            amount: Math.round(v.amount * 100) / 100,
+            amount: fromCents(v.cents),
           }))
           .sort((a, b) => b.amount - a.amount)
           .slice(0, limit);
 
-        const totalAmount = items.reduce((s, i) => s + i.amount, 0);
+        const totalCents = present.reduce((s, [, v]) => s + v.cents, 0);
         return ok({
           database: conn.cfg.name,
           organization: org.name,
           ...(asOf ? { asOf } : {}),
           accounts: accounts.map((a) => `${a.code} ${a.description}`),
-          totalAmount: Math.round(totalAmount * 100) / 100,
+          totalAmount: fromCents(totalCents),
           count: items.length,
           items,
+          scan: { rowsScanned: rows.length, elapsedMs: Date.now() - t0 },
         });
       }),
   );

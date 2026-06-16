@@ -20,15 +20,6 @@ export function odataGuid(value: string): string {
   return `guid'${v}'`;
 }
 
-/** datetime-литерал OData v3 из Date или ISO-строки. */
-export function odataDateTime(value: string | Date): string {
-  const d = typeof value === "string" ? new Date(value) : value;
-  if (Number.isNaN(d.getTime())) throw new Error(`Некорректная дата: ${String(value)}`);
-  // 1С ожидает datetime'YYYY-MM-DDTHH:mm:ss' (без зоны/мс).
-  const iso = d.toISOString().replace(/\.\d{3}Z$/, "");
-  return `datetime'${iso}'`;
-}
-
 /** Условие «поле содержит подстроку» (OData v3: substringof). */
 export function contains(field: string, substr: string): string {
   return `substringof(${odataString(substr)}, ${field})`;

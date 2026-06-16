@@ -3,6 +3,7 @@ import { fetchAll } from "./pagination.js";
 import { and, cmp, contains, odataString } from "./query.js";
 import { CATALOGS, resolveEntity } from "../config/mapping.js";
 import { requireEntity } from "./publication.js";
+import { fetchAllForAggregation } from "./aggregate.js";
 
 /**
  * Хелперы для аналитики: поднимают «срезы» справочников (контрагенты по типу,
@@ -10,12 +11,6 @@ import { requireEntity } from "./publication.js";
  * ИП в прошлом году» или «приход по статье ДДС "Аренда"» решались одним проходом
  * по документам с клиентским фильтром.
  */
-
-/**
- * Размер страницы для аналитических выборок: крупнее обычного (меньше round-trip'ов
- * при суммировании тысяч документов). 1С терпит большой $top.
- */
-export const ANALYTICS_PAGE = 1000;
 
 /** Категории контрагентов: чем фильтровать справочник. */
 export type CounterpartyKind = "ИП" | "ЮрЛицо" | "ФизЛицо" | "Нерезидент" | "Госорган";
@@ -56,13 +51,12 @@ export async function counterpartyRefsByKind(conn: Connection, kind: Counterpart
     }
   })();
   // Срез справочника должен быть ПОЛНЫМ (иначе часть контрагентов «не узнается»
-  // при клиентском фильтре) — берём аналитический потолок, а не общий maxRows.
-  const { rows } = await fetchAll(
-    conn.client,
+  // при клиентском фильтре) — через безопасную выборку с громким переполнением.
+  const { rows } = await fetchAllForAggregation(
+    conn,
     set,
     { filter, select: ["Ref_Key"] },
-    ANALYTICS_PAGE,
-    conn.behavior.analyticsMaxRows,
+    `справочник ${kind}`,
   );
   return new Set(rows.map((r) => String(r["Ref_Key"]).toLowerCase()));
 }

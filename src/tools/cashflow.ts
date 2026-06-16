@@ -1,18 +1,28 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
-import { ok, fail, guard, databaseField, organizationField } from "./_shared.js";
-import { fetchAll } from "../odata/pagination.js";
+import { ok, fail, guard, databaseField, organizationField, dateField } from "./_shared.js";
 import { and, cmp, contains, odataGuid } from "../odata/query.js";
 import { CATALOGS, DOC_FIELDS, DOCUMENTS, resolveEntity } from "../config/mapping.js";
 import { resolveOrganization } from "../odata/orgs.js";
 import { resolveNames, num } from "../odata/accounting.js";
-import { counterpartyRefsByKind, resolveCashflowItems, ANALYTICS_PAGE } from "../odata/refilters.js";
+import { counterpartyRefsByKind, resolveCashflowItems } from "../odata/refilters.js";
+import {
+  collectDocuments,
+  fetchAllForAggregation,
+  emptyMeta,
+  addMeta,
+  type ScanMeta,
+} from "../odata/aggregate.js";
 
 /** Нормализует GUID-строку для сравнения: без скобок, нижний регистр. */
 function normGuid(v: unknown): string {
   return v ? String(v).replace(/[{}]/g, "").trim().toLowerCase() : "";
 }
+
+// Деньги копим в ЦЕЛЫХ КОПЕЙКАХ (float-сложение тысяч сумм даёт дрейф) и делим в конце.
+const toCents = (v: unknown): number => Math.round(num(v) * 100);
+const fromCents = (c: number): number => Math.round(c) / 100;
 
 /** Множество имён полей сущности из $metadata (для детекта полиморфных полей). */
 async function propsOf(conn: Connection, set: string): Promise<Set<string>> {
@@ -31,15 +41,23 @@ function counterpartyField(props: Set<string>): { field: string; serverFilterabl
   return undefined;
 }
 
+/** OR-цепочка серверного фильтра по статьям ДДС (поле Edm.Guid — фильтруется). */
+function cashflowItemFilter(refs: string[]): string | undefined {
+  if (refs.length === 0) return undefined;
+  if (refs.length === 1) return cmp("СтатьяДвиженияДенежныхСредств_Key", "eq", odataGuid(refs[0]!));
+  return `(${refs.map((r) => `СтатьяДвиженияДенежныхСредств_Key eq ${odataGuid(r)}`).join(" or ")})`;
+}
+
 const GROUP_BY = ["operation", "month", "counterparty", "cashflowItem", "total"] as const;
 const CP_KIND = ["ИП", "ЮрЛицо", "ФизЛицо", "Нерезидент", "Госорган"] as const;
 
+/** Сумма-копилка по ключу разбивки (суммы — в копейках). */
 interface Bucket {
   key: string;
   count: number;
-  sum: number;
-  inSum: number;
-  outSum: number;
+  cents: number;
+  inCents: number;
+  outCents: number;
 }
 
 export function registerCashflowTools(server: McpServer, ctx: ServerContext): void {
@@ -59,8 +77,8 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
       inputSchema: {
         database: databaseField,
         organization: organizationField,
-        from: z.string().describe("Дата начала периода (YYYY-MM-DD)"),
-        to: z.string().describe("Дата конца периода (YYYY-MM-DD)"),
+        from: dateField("Дата начала периода"),
+        to: dateField("Дата конца периода"),
         direction: z
           .enum(["in", "out", "both"])
           .default("both")
@@ -108,18 +126,18 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
       groupBy,
     }) =>
       guard("get_payments_breakdown", async () => {
+        const t0 = Date.now();
+        if (from > to) return fail(`Период задан наоборот: from (${from}) позже to (${to}).`);
         const conn = ctx.db(database);
         const org = organization ? await resolveOrganization(conn, organization) : undefined;
-        const orgKey = org?.ref;
-        const orgName = org?.name;
         const available = await conn.available();
 
-        // Резолв «срезов» справочников — поднимаем ОДИН раз, дальше клиентский фильтр.
         const kindSet = counterpartyKind ? await counterpartyRefsByKind(conn, counterpartyKind) : undefined;
         const itemMatches = cashflowItem ? await resolveCashflowItems(conn, cashflowItem) : [];
         if (cashflowItem && itemMatches.length === 0) {
           return fail(`Статья ДДС «${cashflowItem}» не найдена в справочнике.`);
         }
+        const itemRefs = itemMatches.map((m) => m.ref);
 
         const inKeys: string[] = [...DOCUMENTS.bankIn, ...DOCUMENTS.cashIn];
         const outKeys: string[] = [...DOCUMENTS.bankOut, ...DOCUMENTS.cashOut];
@@ -129,88 +147,89 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
 
         const cpRef = counterpartyRef ? normGuid(counterpartyRef) : undefined;
         const opType = operationType?.trim();
-        const buckets = new Map<string, Bucket>();
-        const bump = (key: string, amount: number, isIn: boolean): void => {
-          const b = buckets.get(key) ?? { key, count: 0, sum: 0, inSum: 0, outSum: 0 };
-          b.count += 1;
-          b.sum += amount;
-          if (isIn) b.inSum += amount;
-          else b.outSum += amount;
-          buckets.set(key, b);
-        };
 
-        let inflow = 0,
-          outflow = 0,
-          docCount = 0,
-          truncated = false;
-        const usedSets: string[] = [];
-        const cpKeys = new Set<string>();
-        const cfiKeys = new Set<string>();
-
+        // План по каждому опубликованному виду документа (без даты — её добавит collectDocuments).
+        interface Plan {
+          set: string;
+          isIn: boolean;
+          cp: ReturnType<typeof counterpartyField>;
+          hasCfi: boolean;
+          baseFilter: string | undefined;
+          select: string[];
+        }
+        const plans: Plan[] = [];
         for (const candidate of wantKeys) {
           const set = resolveEntity([candidate], available);
           if (!set) continue;
           const props = await propsOf(conn, set);
           const hasPurpose = props.has("НазначениеПлатежа");
-          // Если ищем по назначению, а его нет (кассовые ордера) — этот вид пропускаем.
           if (purposeContains && !hasPurpose) continue;
+          const hasCfi = props.has("СтатьяДвиженияДенежныхСредств_Key");
+          if (cashflowItem && !hasCfi) continue;
           const cp = counterpartyField(props);
           const hasOp = props.has("ВидОперации");
-          const hasCfi = props.has("СтатьяДвиженияДенежныхСредств_Key");
-          // Если просили статью ДДС, а её в этом виде документа нет — пропускаем.
-          if (cashflowItem && !hasCfi) continue;
 
-          // Серверный фильтр по статье ДДС (Edm.Guid → можно). Для нескольких
-          // совпадений по подстроке собираем OR-цепочку.
-          const cfiFilter =
-            hasCfi && itemMatches.length
-              ? itemMatches.length === 1
-                ? cmp("СтатьяДвиженияДенежныхСредств_Key", "eq", odataGuid(itemMatches[0]!.ref))
-                : `(${itemMatches
-                    .map((m) => `СтатьяДвиженияДенежныхСредств_Key eq ${odataGuid(m.ref)}`)
-                    .join(" or ")})`
-              : undefined;
-
-          const filter = and(
-            cmp(DOC_FIELDS.date, "ge", `datetime'${from}T00:00:00'`),
-            cmp(DOC_FIELDS.date, "le", `datetime'${to}T23:59:59'`),
-            orgKey ? cmp(DOC_FIELDS.organization, "eq", odataGuid(orgKey)) : undefined,
-            cmp(DOC_FIELDS.posted, "eq", "true"),
-            purposeContains && hasPurpose ? contains("НазначениеПлатежа", purposeContains) : undefined,
-            // Типизированный контрагент можно отфильтровать на сервере.
-            cpRef && cp?.serverFilterable ? cmp(cp.field, "eq", odataGuid(cpRef)) : undefined,
-            cfiFilter,
-          );
+          const baseFilter =
+            and(
+              org ? cmp(DOC_FIELDS.organization, "eq", odataGuid(org.ref)) : undefined,
+              cmp(DOC_FIELDS.posted, "eq", "true"),
+              purposeContains && hasPurpose ? contains("НазначениеПлатежа", purposeContains) : undefined,
+              cpRef && cp?.serverFilterable ? cmp(cp.field, "eq", odataGuid(cpRef)) : undefined,
+              hasCfi ? cashflowItemFilter(itemRefs) : undefined,
+            ) || undefined;
 
           const select: string[] = [DOC_FIELDS.date, DOC_FIELDS.amount];
           if (cp) select.push(cp.field);
           if (hasOp) select.push("ВидОперации");
           if (hasCfi) select.push("СтатьяДвиженияДенежныхСредств_Key");
 
-          const { rows, truncated: t } = await fetchAll(
-            conn.client,
-            set,
-            { filter, select, orderby: `${DOC_FIELDS.date} asc` },
-            ANALYTICS_PAGE,
-            conn.behavior.analyticsMaxRows,
-          );
-          if (t) truncated = true;
-          usedSets.push(set);
-          const isIn = inSets.has(candidate);
+          plans.push({ set, isIn: inSets.has(candidate), cp, hasCfi, baseFilter, select });
+        }
+        if (plans.length === 0) {
+          return fail("Банковские/кассовые документы не опубликованы в OData. Добавьте их в «Состав OData».");
+        }
 
+        // Параллельная выборка по видам документов (авто-чанкинг + громкое переполнение внутри).
+        const results = await Promise.all(
+          plans.map((p) =>
+            collectDocuments(conn, p.set, {
+              baseFilter: p.baseFilter,
+              dateField: DOC_FIELDS.date,
+              from,
+              to,
+              select: p.select,
+            }).then((r) => ({ plan: p, rows: r.rows, meta: r.meta })),
+          ),
+        );
+
+        const buckets = new Map<string, Bucket>();
+        const bump = (key: string, cents: number, isIn: boolean): void => {
+          const b = buckets.get(key) ?? { key, count: 0, cents: 0, inCents: 0, outCents: 0 };
+          b.count += 1;
+          b.cents += cents;
+          if (isIn) b.inCents += cents;
+          else b.outCents += cents;
+          buckets.set(key, b);
+        };
+        let inflowC = 0,
+          outflowC = 0,
+          docCount = 0;
+        let meta: ScanMeta = emptyMeta();
+        const cpKeys = new Set<string>();
+        const cfiKeys = new Set<string>();
+
+        for (const { plan, rows, meta: m } of results) {
+          meta = addMeta(meta, m);
           for (const r of rows) {
-            const cpVal = cp ? r[cp.field] : undefined;
-            const cpNorm = normGuid(cpVal);
-            // Клиентская фильтрация по контрагенту для полиморфного поля.
-            if (cpRef && !(cp?.serverFilterable ?? false) && cpNorm !== cpRef) continue;
-            // Клиентский фильтр по категории контрагента (ИП и т.п.).
+            const cpNorm = plan.cp ? normGuid(r[plan.cp.field]) : "";
+            if (cpRef && !(plan.cp?.serverFilterable ?? false) && cpNorm !== cpRef) continue;
             if (kindSet && (!cpNorm || !kindSet.has(cpNorm))) continue;
             if (opType && String(r["ВидОперации"] ?? "") !== opType) continue;
 
-            const amount = num(r[DOC_FIELDS.amount]);
+            const cents = toCents(r[DOC_FIELDS.amount]);
             docCount += 1;
-            if (isIn) inflow += amount;
-            else outflow += amount;
+            if (plan.isIn) inflowC += cents;
+            else outflowC += cents;
 
             let key: string;
             if (groupBy === "operation") key = String(r["ВидОперации"] ?? "—");
@@ -222,32 +241,21 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
               key = String(r["СтатьяДвиженияДенежныхСредств_Key"] ?? "").toLowerCase();
               if (key) cfiKeys.add(key);
             } else key = "ИТОГО";
-            bump(key, amount, isIn);
+            bump(key, cents, plan.isIn);
           }
         }
 
-        if (usedSets.length === 0) {
-          return fail("Банковские/кассовые документы не опубликованы в OData. Добавьте их в «Состав OData».");
-        }
-
-        // Имена для меток разбивки.
         const names = new Map<string, string>();
         if (groupBy === "counterparty" && cpKeys.size) {
           const cpSet = resolveEntity(CATALOGS.counterparties, available);
-          if (cpSet) {
-            const resolved = await resolveNames(conn, cpSet, cpKeys);
-            for (const [k, v] of resolved) names.set(normGuid(k), v);
-          }
+          if (cpSet) for (const [k, v] of await resolveNames(conn, cpSet, cpKeys)) names.set(normGuid(k), v);
         }
         if (groupBy === "cashflowItem" && cfiKeys.size) {
           const itemSet = resolveEntity(CATALOGS.cashflowItems, available);
-          if (itemSet) {
-            const resolved = await resolveNames(conn, itemSet, cfiKeys);
-            for (const [k, v] of resolved) names.set(normGuid(k), v);
-          }
+          if (itemSet)
+            for (const [k, v] of await resolveNames(conn, itemSet, cfiKeys)) names.set(normGuid(k), v);
         }
 
-        const round = (n: number): number => Math.round(n * 100) / 100;
         const labelOf = (b: Bucket): string => {
           if (groupBy === "counterparty") return b.key ? (names.get(b.key) ?? b.key) : "Без контрагента";
           if (groupBy === "cashflowItem") return b.key ? (names.get(b.key) ?? b.key) : "Без статьи ДДС";
@@ -257,14 +265,14 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           .map((b) => ({
             label: labelOf(b),
             count: b.count,
-            sum: round(b.sum),
-            ...(direction === "both" ? { inflow: round(b.inSum), outflow: round(b.outSum) } : {}),
+            sum: fromCents(b.cents),
+            ...(direction === "both" ? { inflow: fromCents(b.inCents), outflow: fromCents(b.outCents) } : {}),
           }))
           .sort((a, b) => b.sum - a.sum);
 
         return ok({
           database: conn.cfg.name,
-          organization: orgName,
+          organization: org?.name,
           period: { from, to },
           direction,
           filters: {
@@ -281,16 +289,11 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           },
           groupBy,
           documents: docCount,
-          inflow: round(inflow),
-          outflow: round(outflow),
-          net: round(inflow - outflow),
+          inflow: fromCents(inflowC),
+          outflow: fromCents(outflowC),
+          net: fromCents(inflowC - outflowC),
           groups,
-          ...(truncated
-            ? {
-                truncated: true,
-                note: `Данные усечены лимитом ${conn.behavior.analyticsMaxRows} строк на вид документа — сузьте период или фильтр.`,
-              }
-            : {}),
+          scan: { documentsScanned: meta.rowsScanned, windows: meta.chunks, elapsedMs: Date.now() - t0 },
         });
       }),
   );
@@ -320,15 +323,17 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           .string()
           .optional()
           .describe("Ref_Key договора (для документов с ДоговорКонтрагента_Key)"),
-        from: z.string().optional().describe("Дата начала (YYYY-MM-DD), опционально"),
-        to: z.string().optional().describe("Дата конца (YYYY-MM-DD), опционально"),
+        from: dateField("Дата начала").optional(),
+        to: dateField("Дата конца").optional(),
         limit: z.number().int().positive().max(1000).default(200).describe("Сколько событий вернуть"),
       },
     },
     ({ database, organization, dealKey, contractRef, from, to, limit }) =>
       guard("get_deal_history", async () => {
+        const t0 = Date.now();
         if (!dealKey && !contractRef) return fail("Укажите dealKey или contractRef.");
         if (dealKey && contractRef) return fail("dealKey и contractRef взаимоисключающие — оставьте один.");
+        if (from && to && from > to) return fail(`Период задан наоборот: from (${from}) позже to (${to}).`);
         const conn = ctx.db(database);
         const org = organization ? await resolveOrganization(conn, organization) : undefined;
         const available = await conn.available();
@@ -341,11 +346,56 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
         ];
         const inSets = new Set<string>([...DOCUMENTS.bankIn, ...DOCUMENTS.cashIn]);
 
+        interface Plan {
+          set: string;
+          isIn: boolean;
+          cp: ReturnType<typeof counterpartyField>;
+          filter: string | undefined;
+          select: string[];
+        }
+        const plans: Plan[] = [];
+        for (const candidate of allKeys) {
+          const set = resolveEntity([candidate], available);
+          if (!set) continue;
+          const props = await propsOf(conn, set);
+          const hasPurpose = props.has("НазначениеПлатежа");
+          const hasContract = props.has("ДоговорКонтрагента_Key");
+          if (dealKey && !hasPurpose) continue;
+          if (contractRef && !hasContract) continue;
+          const cp = counterpartyField(props);
+          const filter =
+            and(
+              cmp(DOC_FIELDS.posted, "eq", "true"),
+              from ? cmp(DOC_FIELDS.date, "ge", `datetime'${from}T00:00:00'`) : undefined,
+              to ? cmp(DOC_FIELDS.date, "le", `datetime'${to}T23:59:59'`) : undefined,
+              org ? cmp(DOC_FIELDS.organization, "eq", odataGuid(org.ref)) : undefined,
+              dealKey ? contains("НазначениеПлатежа", dealKey) : undefined,
+              contractRef ? cmp("ДоговорКонтрагента_Key", "eq", odataGuid(contractRef)) : undefined,
+            ) || undefined;
+          const select: string[] = [DOC_FIELDS.date, DOC_FIELDS.number, DOC_FIELDS.amount];
+          if (props.has("ВидОперации")) select.push("ВидОперации");
+          if (hasPurpose) select.push("НазначениеПлатежа");
+          if (cp) select.push(cp.field);
+          plans.push({ set, isIn: inSets.has(candidate), cp, filter, select });
+        }
+
+        // Сделка/договор узкие по своей природе — одиночная выборка с громким переполнением.
+        const results = await Promise.all(
+          plans.map((p) =>
+            fetchAllForAggregation(
+              conn,
+              p.set,
+              { filter: p.filter, select: p.select, orderby: `${DOC_FIELDS.date} asc` },
+              p.set,
+            ).then((r) => ({ plan: p, rows: r.rows, meta: r.meta })),
+          ),
+        );
+
         interface Event {
           date: string;
           entitySet: string;
           number: string;
-          amount: number;
+          cents: number;
           direction: "in" | "out";
           operation?: string;
           counterpartyRef?: string;
@@ -353,50 +403,18 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
         }
         const events: Event[] = [];
         const cpKeys = new Set<string>();
-        let truncated = false;
-
-        for (const candidate of allKeys) {
-          const set = resolveEntity([candidate], available);
-          if (!set) continue;
-          const props = await propsOf(conn, set);
-          const hasPurpose = props.has("НазначениеПлатежа");
-          const hasContract = props.has("ДоговорКонтрагента_Key");
-          // dealKey требует НазначениеПлатежа, contractRef — ДоговорКонтрагента_Key.
-          if (dealKey && !hasPurpose) continue;
-          if (contractRef && !hasContract) continue;
-
-          const cp = counterpartyField(props);
-          const filter = and(
-            cmp(DOC_FIELDS.posted, "eq", "true"),
-            from ? cmp(DOC_FIELDS.date, "ge", `datetime'${from}T00:00:00'`) : undefined,
-            to ? cmp(DOC_FIELDS.date, "le", `datetime'${to}T23:59:59'`) : undefined,
-            org ? cmp(DOC_FIELDS.organization, "eq", odataGuid(org.ref)) : undefined,
-            dealKey ? contains("НазначениеПлатежа", dealKey) : undefined,
-            contractRef ? cmp("ДоговорКонтрагента_Key", "eq", odataGuid(contractRef)) : undefined,
-          );
-          const select: string[] = [DOC_FIELDS.date, DOC_FIELDS.number, DOC_FIELDS.amount];
-          if (props.has("ВидОперации")) select.push("ВидОперации");
-          if (hasPurpose) select.push("НазначениеПлатежа");
-          if (cp) select.push(cp.field);
-
-          const { rows, truncated: t } = await fetchAll(
-            conn.client,
-            set,
-            { filter, select, orderby: `${DOC_FIELDS.date} asc` },
-            ANALYTICS_PAGE,
-            conn.behavior.analyticsMaxRows,
-          );
-          if (t) truncated = true;
-          const isIn = inSets.has(candidate);
+        let meta: ScanMeta = emptyMeta();
+        for (const { plan, rows, meta: m } of results) {
+          meta = addMeta(meta, m);
           for (const r of rows) {
-            const cpVal = cp ? normGuid(r[cp.field]) : "";
+            const cpVal = plan.cp ? normGuid(r[plan.cp.field]) : "";
             if (cpVal) cpKeys.add(cpVal);
             events.push({
               date: String(r[DOC_FIELDS.date] ?? ""),
-              entitySet: set,
+              entitySet: plan.set,
               number: String(r[DOC_FIELDS.number] ?? ""),
-              amount: num(r[DOC_FIELDS.amount]),
-              direction: isIn ? "in" : "out",
+              cents: toCents(r[DOC_FIELDS.amount]),
+              direction: plan.isIn ? "in" : "out",
               operation: r["ВидОперации"] ? String(r["ВидОперации"]) : undefined,
               counterpartyRef: cpVal || undefined,
               purpose: r["НазначениеПлатежа"] ? String(r["НазначениеПлатежа"]) : undefined,
@@ -404,7 +422,6 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           }
         }
 
-        // Имена контрагентов.
         const cpNames = new Map<string, string>();
         if (cpKeys.size) {
           const cpSet = resolveEntity(CATALOGS.counterparties, available);
@@ -413,15 +430,14 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
         }
 
         events.sort((a, b) => a.date.localeCompare(b.date));
-        const round = (n: number): number => Math.round(n * 100) / 100;
-        const inflow = round(events.filter((e) => e.direction === "in").reduce((s, e) => s + e.amount, 0));
-        const outflow = round(events.filter((e) => e.direction === "out").reduce((s, e) => s + e.amount, 0));
+        const inflowC = events.filter((e) => e.direction === "in").reduce((s, e) => s + e.cents, 0);
+        const outflowC = events.filter((e) => e.direction === "out").reduce((s, e) => s + e.cents, 0);
         const items = events.slice(0, limit).map((e) => ({
           date: e.date.slice(0, 10),
           entitySet: e.entitySet,
           number: e.number,
           direction: e.direction,
-          amount: round(e.amount),
+          amount: fromCents(e.cents),
           operation: e.operation,
           counterparty: e.counterpartyRef ? (cpNames.get(e.counterpartyRef) ?? e.counterpartyRef) : undefined,
           purpose: e.purpose,
@@ -432,14 +448,12 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           ...(from || to ? { period: { from, to } } : {}),
           filters: { ...(dealKey ? { dealKey } : {}), ...(contractRef ? { contractRef } : {}) },
           events: events.length,
-          inflow,
-          outflow,
-          net: round(inflow - outflow),
+          inflow: fromCents(inflowC),
+          outflow: fromCents(outflowC),
+          net: fromCents(inflowC - outflowC),
           items,
           ...(events.length > limit ? { note: `Показаны первые ${limit} событий из ${events.length}.` } : {}),
-          ...(truncated
-            ? { truncated: true, note: `Данные усечены лимитом ${conn.behavior.analyticsMaxRows} строк.` }
-            : {}),
+          scan: { documentsScanned: meta.rowsScanned, windows: meta.chunks, elapsedMs: Date.now() - t0 },
         });
       }),
   );
@@ -460,8 +474,8 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
       inputSchema: {
         database: databaseField,
         organization: organizationField,
-        from: z.string().describe("Дата начала периода (YYYY-MM-DD)"),
-        to: z.string().describe("Дата конца периода (YYYY-MM-DD)"),
+        from: dateField("Дата начала периода"),
+        to: dateField("Дата конца периода"),
         cashflowItem: z
           .string()
           .optional()
@@ -474,26 +488,23 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
     },
     ({ database, organization, from, to, cashflowItem, groupBy }) =>
       guard("get_taxes_paid", async () => {
+        const t0 = Date.now();
+        if (from > to) return fail(`Период задан наоборот: from (${from}) позже to (${to}).`);
         const conn = ctx.db(database);
         const org = organization ? await resolveOrganization(conn, organization) : undefined;
         const available = await conn.available();
         const itemMatches = cashflowItem ? await resolveCashflowItems(conn, cashflowItem) : [];
-        if (cashflowItem && itemMatches.length === 0) {
-          return fail(`Статья ДДС «${cashflowItem}» не найдена.`);
+        if (cashflowItem && itemMatches.length === 0) return fail(`Статья ДДС «${cashflowItem}» не найдена.`);
+        const itemRefs = itemMatches.map((m) => m.ref);
+
+        interface Plan {
+          set: string;
+          cp: ReturnType<typeof counterpartyField>;
+          hasCfi: boolean;
+          baseFilter: string | undefined;
+          select: string[];
         }
-
-        const buckets = new Map<string, Bucket>();
-        const bump = (key: string, amount: number): void => {
-          const b = buckets.get(key) ?? { key, count: 0, sum: 0, inSum: 0, outSum: 0 };
-          b.count += 1;
-          b.sum += amount;
-          buckets.set(key, b);
-        };
-        let total = 0,
-          docCount = 0;
-        const cfiKeys = new Set<string>();
-        const cpKeys = new Set<string>();
-
+        const plans: Plan[] = [];
         for (const candidate of [...DOCUMENTS.bankOut, "Document_ПлатежноеПоручение"]) {
           const set = resolveEntity([candidate], available);
           if (!set) continue;
@@ -502,43 +513,51 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           const hasCfi = props.has("СтатьяДвиженияДенежныхСредств_Key");
           if (cashflowItem && !hasCfi) continue;
           const cp = counterpartyField(props);
-
-          const cfiFilter =
-            hasCfi && itemMatches.length
-              ? itemMatches.length === 1
-                ? cmp("СтатьяДвиженияДенежныхСредств_Key", "eq", odataGuid(itemMatches[0]!.ref))
-                : `(${itemMatches
-                    .map((m) => `СтатьяДвиженияДенежныхСредств_Key eq ${odataGuid(m.ref)}`)
-                    .join(" or ")})`
-              : undefined;
-
-          const filter = and(
-            cmp(DOC_FIELDS.date, "ge", `datetime'${from}T00:00:00'`),
-            cmp(DOC_FIELDS.date, "le", `datetime'${to}T23:59:59'`),
-            cmp(DOC_FIELDS.posted, "eq", "true"),
-            org ? cmp(DOC_FIELDS.organization, "eq", odataGuid(org.ref)) : undefined,
-            // КЛЮЧЕВОЙ маркер уплаты налога в БП 3.0.
-            cmp("ВидОперации", "eq", "'ПеречислениеНалога'"),
-            cfiFilter,
-          );
+          const baseFilter =
+            and(
+              cmp(DOC_FIELDS.posted, "eq", "true"),
+              org ? cmp(DOC_FIELDS.organization, "eq", odataGuid(org.ref)) : undefined,
+              cmp("ВидОперации", "eq", "'ПеречислениеНалога'"), // КЛЮЧЕВОЙ маркер уплаты налога
+              hasCfi ? cashflowItemFilter(itemRefs) : undefined,
+            ) || undefined;
           const select: string[] = [DOC_FIELDS.date, DOC_FIELDS.amount];
           if (hasCfi) select.push("СтатьяДвиженияДенежныхСредств_Key");
           if (cp) select.push(cp.field);
+          plans.push({ set, cp, hasCfi, baseFilter, select });
+        }
 
-          const { rows } = await fetchAll(
-            conn.client,
-            set,
-            { filter, select, orderby: `${DOC_FIELDS.date} asc` },
-            ANALYTICS_PAGE,
-            conn.behavior.analyticsMaxRows,
-          );
+        const results = await Promise.all(
+          plans.map((p) =>
+            collectDocuments(conn, p.set, {
+              baseFilter: p.baseFilter,
+              dateField: DOC_FIELDS.date,
+              from,
+              to,
+              select: p.select,
+            }).then((r) => ({ plan: p, rows: r.rows, meta: r.meta })),
+          ),
+        );
 
+        const buckets = new Map<string, Bucket>();
+        const bump = (key: string, cents: number): void => {
+          const b = buckets.get(key) ?? { key, count: 0, cents: 0, inCents: 0, outCents: 0 };
+          b.count += 1;
+          b.cents += cents;
+          buckets.set(key, b);
+        };
+        let totalC = 0,
+          docCount = 0;
+        let meta: ScanMeta = emptyMeta();
+        const cfiKeys = new Set<string>();
+        const cpKeys = new Set<string>();
+        for (const { plan, rows, meta: m } of results) {
+          meta = addMeta(meta, m);
           for (const r of rows) {
-            const amount = num(r[DOC_FIELDS.amount]);
-            total += amount;
+            const cents = toCents(r[DOC_FIELDS.amount]);
+            totalC += cents;
             docCount += 1;
-            const cfi = hasCfi ? String(r["СтатьяДвиженияДенежныхСредств_Key"] ?? "").toLowerCase() : "";
-            const cpVal = cp ? normGuid(r[cp.field]) : "";
+            const cfi = plan.hasCfi ? String(r["СтатьяДвиженияДенежныхСредств_Key"] ?? "").toLowerCase() : "";
+            const cpVal = plan.cp ? normGuid(r[plan.cp.field]) : "";
             if (cfi) cfiKeys.add(cfi);
             if (cpVal) cpKeys.add(cpVal);
             let key: string;
@@ -546,7 +565,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
             else if (groupBy === "month") key = String(r[DOC_FIELDS.date] ?? "").slice(0, 7);
             else if (groupBy === "counterparty") key = cpVal;
             else key = "ИТОГО";
-            bump(key, amount);
+            bump(key, cents);
           }
         }
 
@@ -562,14 +581,13 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
             for (const [k, v] of await resolveNames(conn, cpSet, cpKeys)) names.set(k.toLowerCase(), v);
         }
 
-        const round = (n: number): number => Math.round(n * 100) / 100;
         const labelOf = (b: Bucket): string => {
           if (groupBy === "cashflowItem") return b.key ? (names.get(b.key) ?? b.key) : "Без статьи ДДС";
           if (groupBy === "counterparty") return b.key ? (names.get(b.key) ?? b.key) : "Без контрагента";
           return b.key || "—";
         };
         const groups = [...buckets.values()]
-          .map((b) => ({ label: labelOf(b), count: b.count, sum: round(b.sum) }))
+          .map((b) => ({ label: labelOf(b), count: b.count, sum: fromCents(b.cents) }))
           .sort((a, b) => b.sum - a.sum);
 
         return ok({
@@ -586,8 +604,9 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           },
           groupBy,
           documents: docCount,
-          total: round(total),
+          total: fromCents(totalC),
           groups,
+          scan: { documentsScanned: meta.rowsScanned, windows: meta.chunks, elapsedMs: Date.now() - t0 },
         });
       }),
   );
