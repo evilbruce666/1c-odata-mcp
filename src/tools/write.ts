@@ -83,9 +83,14 @@ const CONTRACT_KINDS = ["СПокупателем", "СПоставщиком", 
 /** Ставки НДС (Enum_СтавкиНДС), подмножество ходовых. */
 const VAT_RATES = ["БезНДС", "НДС0", "НДС5", "НДС7", "НДС10", "НДС20", "НДС22"] as const;
 
-/** Дата → формат 1С Edm.DateTime ('YYYY-MM-DDTHH:mm:ss', без зоны). */
-function odataDate(d: Date): string {
-  return d.toISOString().replace(/\.\d{3}Z$/, "");
+/**
+ * Дата → формат 1С Edm.DateTime ('YYYY-MM-DDTHH:mm:ss', без зоны).
+ * Берём ЛОКАЛЬНЫЕ компоненты (не toISOString/UTC): 1С хранит «настенную» дату без
+ * зоны, а UTC-сдвиг в плюсовых поясах уводит полночь на предыдущий день.
+ */
+export function odataDate(d: Date): string {
+  const p = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
 /** Резолвит организацию: по названию, либо авто, если в базе ровно одна. */
