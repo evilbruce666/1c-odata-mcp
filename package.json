@@ -1,7 +1,7 @@
 {
   "name": "1c-odata-mcp",
   "version": "0.1.0",
-  "description": "Read-only MCP server for 1C (1С:Предприятие) via the standard OData interface. High-level tools for executives and accountants.",
+  "description": "MCP server for 1C (1С:Предприятие) via the standard OData interface. High-level read tools (and gated write) for executives and accountants.",
   "type": "module",
   "bin": {
     "1c-odata-mcp": "dist/index.js"
@@ -9,14 +9,25 @@
   "files": [
     "dist",
     "README.md",
+    "LICENSE",
     ".env.example"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/evilbruce666/1c-odata-mcp.git"
+  },
+  "homepage": "https://github.com/evilbruce666/1c-odata-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/evilbruce666/1c-odata-mcp/issues"
+  },
+  "author": "evilbruce666",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsc --watch",
     "probe": "node dist/scripts/probe-metadata.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build && node --eval \"require('fs').rmSync('dist/scripts',{recursive:true,force:true})\""
   },
   "keywords": [
     "mcp",
