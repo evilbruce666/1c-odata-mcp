@@ -3,7 +3,7 @@ import { logger } from "../logger.js";
 import { ODataError, fromHttpStatus } from "./errors.js";
 import type { ODataCollection, ODataEntity } from "../types/odata.js";
 
-/** Разрешённые HTTP-методы. На 1-м этапе — только чтение. */
+/** HTTP-методы только для чтения; остальные (POST/PATCH) считаются записью и гейтуются. */
 const READ_METHODS = new Set(["GET", "HEAD"]);
 
 export class ODataClient {
