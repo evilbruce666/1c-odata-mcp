@@ -13,7 +13,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write # создание GitHub Release
       id-token: write # OIDC для Trusted Publishing + provenance
     steps:
       - uses: actions/checkout@v6
@@ -27,3 +27,19 @@ jobs:
       - run: npm test
       # prepublishOnly соберёт пакет и уберёт probe-скрипты; токен не передаётся
       - run: npm publish --access public
+
+      # GitHub Release с заметками из секции CHANGELOG для этой версии.
+      # Чтобы заметки попали в релиз, финализируйте CHANGELOG (перенесите
+      # «Не выпущено» в «## [X.Y.Z] — дата») ДО `npm version` и тега.
+      - name: Создать GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          notes=$(awk -v v="## [$version]" '
+            index($0, v) == 1 { f = 1; next }
+            f && /^## \[/ { exit }
+            f { print }
+          ' CHANGELOG.md)
+          [ -z "$notes" ] && notes="Релиз $GITHUB_REF_NAME. См. CHANGELOG.md и npm."
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "$notes"
