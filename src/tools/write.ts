@@ -631,7 +631,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       title: "Создать договор",
       description:
         "Заводит договор контрагента (подчинённый справочник): владелец — контрагент, " +
-        "плюс организация и вид договора. По умолчанию предпросмотр (dry-run); создание — при confirm=true. " +
+        "плюс организация, вид договора, валюта/тип цен и (опц.) руководитель/подписант контрагента. " +
+        "По умолчанию предпросмотр (dry-run); создание — при confirm=true. " +
         "Ref контрагента берётся из find_counterparty, организация — по названию (list_organizations).",
       inputSchema: {
         database: databaseField,
@@ -647,10 +648,29 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .string()
           .optional()
           .describe("Тип цен — название или код (из справочника Типы цен номенклатуры)"),
+        headName: z
+          .string()
+          .optional()
+          .describe("ФИО руководителя/подписанта контрагента (реквизит договора)"),
+        headPosition: z
+          .string()
+          .optional()
+          .describe("Должность руководителя контрагента (напр. «Генеральный директор»)"),
         confirm: confirmField,
       },
     },
-    ({ database, organization, counterpartyRef, name, kind, currency, priceType, confirm }) =>
+    ({
+      database,
+      organization,
+      counterpartyRef,
+      name,
+      kind,
+      currency,
+      priceType,
+      headName,
+      headPosition,
+      confirm,
+    }) =>
       guard("create_contract", async () => {
         const conn = ctx.db(database);
         const set = await resolveSet(conn, CATALOGS.contracts, "Договоры контрагентов");
@@ -676,6 +696,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           Организация_Key: org.key,
           ВалютаВзаиморасчетов_Key: cur?.ref,
           ТипЦен_Key: pt?.ref,
+          РуководительКонтрагента: headName,
+          ДолжностьРуководителяКонтрагента: headPosition,
           ...(foreign !== undefined ? { Валютный: foreign } : {}),
         });
         return createOrPreview(conn, set, payload, confirm);
