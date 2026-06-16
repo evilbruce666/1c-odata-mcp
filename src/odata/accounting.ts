@@ -159,6 +159,7 @@ export async function balanceByAccounts(
   accountKeys: string[],
   maxRows: number,
   orgKey?: string,
+  asOf?: string,
 ): Promise<ODataEntity[]> {
   if (accountKeys.length === 0) return [];
   const reg = await requireEntity(conn, REGISTERS.accounting, "Регистр бухгалтерии «Хозрасчётный»");
@@ -166,7 +167,11 @@ export async function balanceByAccounts(
     or(...accountKeys.map((k) => cmp("Account_Key", "eq", odataGuid(k)))),
     orgKey ? cmp("Организация_Key", "eq", odataGuid(orgKey)) : undefined,
   );
-  const { rows } = await fetchAll(conn.client, `${reg}/Balance`, { filter }, conn.behavior.pageSize, maxRows);
+  // Параметр Period — НЕ через $filter, а path-параметром у виртуальной таблицы:
+  // .../AccountingRegister_Хозрасчетный/Balance(Period=datetime'YYYY-MM-DDT23:59:59').
+  // Без него виртуальная таблица возвращает текущее сальдо.
+  const balancePath = asOf ? `${reg}/Balance(Period=datetime'${asOf}T23:59:59')` : `${reg}/Balance`;
+  const { rows } = await fetchAll(conn.client, balancePath, { filter }, conn.behavior.pageSize, maxRows);
   return rows;
 }
 

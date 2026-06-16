@@ -138,14 +138,20 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
       description:
         "Кто и сколько должен компании: сальдо счёта 62 (расчёты с покупателями) из регистра " +
         "бухгалтерии Хозрасчетный, сгруппированное по контрагентам. Дебетовое сальдо = долг клиента, " +
-        "кредитовое = полученные авансы (вычитается). Можно ограничить организацией. Возвращает только долг > 0.",
+        "кредитовое = полученные авансы (вычитается). Можно ограничить организацией. По умолчанию " +
+        "берётся текущее сальдо; параметром asOf=YYYY-MM-DD можно получить дебиторку на конец " +
+        "указанной даты (для аудита/исторических отчётов). Возвращает только долг > 0.",
       inputSchema: {
         database: databaseField,
         organization: organizationField,
+        asOf: z
+          .string()
+          .optional()
+          .describe("Дата YYYY-MM-DD — сальдо на конец этой даты (без параметра — текущее)"),
         limit: z.number().int().positive().max(1000).default(100).describe("Сколько контрагентов вернуть"),
       },
     },
-    ({ database, organization, limit }) =>
+    ({ database, organization, asOf, limit }) =>
       guard("get_debtors", async () => {
         const conn = ctx.db(database);
         const org = await orgKeyOf(conn, organization);
@@ -155,6 +161,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           accounts.map((a) => a.key),
           conn.behavior.maxRows,
           org.key,
+          asOf,
         );
 
         const byCp = new Map<string, number>();
@@ -181,6 +188,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         return ok({
           database: conn.cfg.name,
           organization: org.name,
+          ...(asOf ? { asOf } : {}),
           accounts: accounts.map((a) => `${a.code} ${a.description}`),
           totalReceivable: Math.round(total * 100) / 100,
           count: debtors.length,
@@ -194,16 +202,22 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
     {
       title: "Остатки товаров",
       description:
-        "Текущие остатки товаров/материалов на складах: сальдо счетов 41/10/43 регистра Хозрасчетный, " +
-        "сгруппированное по номенклатуре. Возвращает количество и сумму остатка. Можно ограничить организацией. " +
+        "Остатки товаров/материалов на складах: сальдо счетов 41/10/43 регистра Хозрасчетный, " +
+        "сгруппированное по номенклатуре. Возвращает количество и сумму остатка. Можно ограничить " +
+        "организацией. По умолчанию — текущие остатки; параметром asOf=YYYY-MM-DD можно получить " +
+        "остатки на конец указанной даты (для инвентаризации/аудита). " +
         "(В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
       inputSchema: {
         database: databaseField,
         organization: organizationField,
+        asOf: z
+          .string()
+          .optional()
+          .describe("Дата YYYY-MM-DD — остатки на конец этой даты (без параметра — текущие)"),
         limit: z.number().int().positive().max(1000).default(200).describe("Сколько позиций вернуть"),
       },
     },
-    ({ database, organization, limit }) =>
+    ({ database, organization, asOf, limit }) =>
       guard("get_inventory", async () => {
         const conn = ctx.db(database);
         const org = await orgKeyOf(conn, organization);
@@ -213,6 +227,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           accounts.map((a) => a.key),
           conn.behavior.maxRows,
           org.key,
+          asOf,
         );
 
         const byItem = new Map<string, { qty: number; amount: number }>();
@@ -243,6 +258,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         return ok({
           database: conn.cfg.name,
           organization: org.name,
+          ...(asOf ? { asOf } : {}),
           accounts: accounts.map((a) => `${a.code} ${a.description}`),
           totalAmount: Math.round(totalAmount * 100) / 100,
           count: items.length,

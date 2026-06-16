@@ -16,6 +16,7 @@ export const CATALOGS = {
   bankAccounts: ["Catalog_БанковскиеСчета"],
   currencies: ["Catalog_Валюты"],
   priceTypes: ["Catalog_ТипыЦенНоменклатуры", "Catalog_ТипыЦен"],
+  cashflowItems: ["Catalog_СтатьиДвиженияДенежныхСредств"],
 } as const;
 
 export const DOCUMENTS = {
