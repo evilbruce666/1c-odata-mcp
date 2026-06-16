@@ -50,24 +50,58 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
         const orgKey = organization ? (await resolveOrganization(conn, organization)).ref : undefined;
+
+        // Контрагент бывает типизированным (Контрагент_Key — фильтруем на сервере)
+        // или полиморфным (Контрагент: Edm.String — в 1С серверный eq/substringof по
+        // нему не работает, поэтому фильтруем на стороне коннектора).
+        let cpServer: string | undefined;
+        let cpClientRef: string | undefined;
+        let cpNote: string | undefined;
+        if (counterpartyRef) {
+          const meta = await conn.getMetadata();
+          const props = new Set((meta.entities.get(entitySet)?.properties ?? []).map((p) => p.name));
+          if (props.has(DOC_FIELDS.counterparty)) {
+            cpServer = cmp(DOC_FIELDS.counterparty, "eq", odataGuid(counterpartyRef));
+          } else if (props.has("Контрагент")) {
+            cpClientRef = counterpartyRef.replace(/[{}]/g, "").trim().toLowerCase();
+            cpNote =
+              "Контрагент в этом документе хранится полиморфно — фильтр применён на стороне коннектора.";
+          } else {
+            cpNote = "В этом типе документа нет поля контрагента — фильтр по контрагенту проигнорирован.";
+          }
+        }
+
         const filter = and(
           from ? cmp(DOC_FIELDS.date, "ge", `datetime'${from}T00:00:00'`) : undefined,
           to ? cmp(DOC_FIELDS.date, "le", `datetime'${to}T23:59:59'`) : undefined,
           orgKey ? cmp(DOC_FIELDS.organization, "eq", odataGuid(orgKey)) : undefined,
-          counterpartyRef ? cmp(DOC_FIELDS.counterparty, "eq", odataGuid(counterpartyRef)) : undefined,
+          cpServer,
           postedOnly ? cmp(DOC_FIELDS.posted, "eq", "true") : undefined,
           typeof minAmount === "number" ? cmp(DOC_FIELDS.amount, "ge", String(minAmount)) : undefined,
         );
 
+        // При клиентской фильтрации тянем больше строк (до maxRows), затем режем до limit.
+        const fetchMax = cpClientRef ? conn.behavior.maxRows : limit;
         const { rows, truncated } = await fetchAll(
           conn.client,
           entitySet,
           { filter: filter || undefined, orderby: `${DOC_FIELDS.date} desc` },
           conn.behavior.pageSize,
-          limit,
+          fetchMax,
         );
-        const items = rows.map((r) => toSummary(r, entitySet));
-        return ok(withTruncationNote(items, truncated, limit));
+        const matched = cpClientRef
+          ? rows.filter(
+              (r) =>
+                String(r["Контрагент"] ?? "")
+                  .replace(/[{}]/g, "")
+                  .trim()
+                  .toLowerCase() === cpClientRef,
+            )
+          : rows;
+        const items = matched.slice(0, limit).map((r) => toSummary(r, entitySet));
+        const wasTruncated = truncated || matched.length > limit;
+        const result = withTruncationNote(items, wasTruncated, limit);
+        return ok(cpNote ? { ...result, counterpartyFilter: cpNote } : result);
       }),
   );
 

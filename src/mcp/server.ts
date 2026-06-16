@@ -5,6 +5,7 @@ import { registerMetaTools } from "../tools/meta.js";
 import { registerCounterpartyTools } from "../tools/counterparties.js";
 import { registerDocumentTools } from "../tools/documents.js";
 import { registerRegisterTools } from "../tools/registers.js";
+import { registerCashflowTools } from "../tools/cashflow.js";
 import { registerWriteTools } from "../tools/write.js";
 import { READ_HINTS, WRITE_HINTS, DESTRUCTIVE_HINTS } from "../tools/_shared.js";
 
@@ -51,6 +52,7 @@ export function createServer(ctx: ServerContext): McpServer {
   registerCounterpartyTools(server, ctx);
   registerDocumentTools(server, ctx);
   registerRegisterTools(server, ctx);
+  registerCashflowTools(server, ctx);
   registerWriteTools(server, ctx);
 
   return server;
