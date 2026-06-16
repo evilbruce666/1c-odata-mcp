@@ -1,0 +1,16 @@
+name: 💡 Идея / запрос функции
+description: Предложить улучшение или новый инструмент
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: Что предлагаете
+      description: Какой сценарий хотите закрыть и почему это полезно.
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Детали 1С (если применимо)
+      placeholder: "Какие объекты/документы/регистры задействованы, конфигурация"

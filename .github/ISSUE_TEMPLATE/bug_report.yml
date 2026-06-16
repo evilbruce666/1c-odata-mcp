@@ -1,0 +1,36 @@
+name: 🐞 Баг
+description: Сообщить об ошибке
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: Что произошло
+      description: Опишите проблему и что ожидали увидеть.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Шаги воспроизведения
+      placeholder: |
+        1. Какой инструмент вызвали и с какими параметрами
+        2. Что вернулось
+    validations:
+      required: true
+  - type: input
+    id: config
+    attributes:
+      label: Конфигурация 1С
+      placeholder: "напр. Бухгалтерия предприятия 3.0, площадка Scloud"
+  - type: input
+    id: versions
+    attributes:
+      label: Версии
+      placeholder: "1c-odata-mcp x.y.z, Node 20.x, ОС"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Логи / сообщение об ошибке
+      description: Вывод из stderr (БЕЗ паролей и персональных данных).
+      render: shell

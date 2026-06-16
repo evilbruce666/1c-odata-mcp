@@ -16,6 +16,19 @@ export const organizationField = z
   .optional()
   .describe("Название организации (юрлица) для фильтра. Без указания — все организации базы.");
 
+/**
+ * Аннотации инструментов (подсказки клиенту MCP о характере операции).
+ * openWorldHint — обращение к внешней системе (1С). readOnlyHint — только чтение.
+ * destructiveHint — операция меняет/портит данные (удаление, проведение).
+ */
+export const READ_HINTS = { readOnlyHint: true, openWorldHint: true } as const;
+export const WRITE_HINTS = { readOnlyHint: false, destructiveHint: false, openWorldHint: true } as const;
+export const DESTRUCTIVE_HINTS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  openWorldHint: true,
+} as const;
+
 /** Успешный результат инструмента: JSON-данные в текстовом блоке. */
 export function ok(data: unknown): CallToolResult {
   return {
