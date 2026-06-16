@@ -5,7 +5,21 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    groups:
+      # Группируем, чтобы не плодить десятки PR.
+      dev-dependencies:
+        dependency-type: "development"
+      prod-minor-patch:
+        dependency-type: "production"
+        update-types: ["minor", "patch"]
+    ignore:
+      # zod 4 — мажор с ломающим API; миграция — отдельной задачей, не авто-PR.
+      - dependency-name: "zod"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      github-actions:
+        patterns: ["*"]
