@@ -6,12 +6,60 @@ import { CATALOGS, DOCUMENTS, resolveEntity } from "../config/mapping.js";
 import { listOrganizations, resolveOrganization } from "../odata/orgs.js";
 import { ensurePublished, requireEntity } from "../odata/publication.js";
 import { accountsByCode, nomenclatureAccounts, type NomAccounts } from "../odata/accounting.js";
+import {
+  contactKindsForCounterparties,
+  resolveBankByBik,
+  resolveAdditionalProperty,
+  type ContactKinds,
+} from "../odata/refdata.js";
 import { fetchAll } from "../odata/pagination.js";
 import { and, buildQuery, cmp, contains, odataGuid, odataString } from "../odata/query.js";
 import type { ODataEntity } from "../types/odata.js";
 
 /** Тип ссылки на номенклатуру в табличной части (полиморфная ссылка 1С). */
 const NOMENCLATURE_TYPE = "StandardODATA.Catalog_Номенклатура";
+const COUNTERPARTY_TYPE = "StandardODATA.Catalog_Контрагенты";
+
+/** Строит строки табличной части «КонтактнаяИнформация» из телефона/email/адреса. */
+function buildContactRows(
+  kinds: ContactKinds,
+  data: { phone?: string | undefined; email?: string | undefined; address?: string | undefined },
+): Array<Record<string, unknown>> {
+  const rows: Array<Record<string, unknown>> = [];
+  if (data.phone && kinds.phone)
+    rows.push({ Тип: kinds.phone.тип, Вид_Key: kinds.phone.key, Представление: data.phone, НомерТелефона: data.phone });
+  if (data.email && kinds.email)
+    rows.push({ Тип: kinds.email.тип, Вид_Key: kinds.email.key, Представление: data.email, АдресЭП: data.email });
+  if (data.address && kinds.address)
+    rows.push({ Тип: kinds.address.тип, Вид_Key: kinds.address.key, Представление: data.address });
+  return rows.map((r, i) => ({ LineNumber: i + 1, ...r }));
+}
+
+/** Дополнительные поля карточки контрагента: контактная информация + ОГРН (доп.реквизит). */
+async function counterpartyExtras(
+  conn: Connection,
+  data: { phone?: string | undefined; email?: string | undefined; address?: string | undefined; ogrn?: string | undefined },
+): Promise<{ fields: Record<string, unknown>; notes: string[] }> {
+  const fields: Record<string, unknown> = {};
+  const notes: string[] = [];
+  if (data.phone || data.email || data.address) {
+    const kinds = await contactKindsForCounterparties(conn);
+    const rows = buildContactRows(kinds, data);
+    if (rows.length) fields["КонтактнаяИнформация"] = rows;
+    if (data.phone && !kinds.phone) notes.push("Вид «Телефон» не найден — телефон не записан.");
+    if (data.email && !kinds.email) notes.push("Вид «Email» не найден — email не записан.");
+    if (data.address && !kinds.address) notes.push("Вид «Адрес» не найден — адрес не записан.");
+  }
+  if (data.ogrn) {
+    const prop = await resolveAdditionalProperty(conn, "ОГРН");
+    if (prop) fields["ДополнительныеРеквизиты"] = [{ LineNumber: 1, Свойство_Key: prop, Значение: data.ogrn }];
+    else
+      notes.push(
+        "ОГРН не записан: в этой базе нет дополнительного реквизита «ОГРН» для контрагентов. Заведите его в 1С (Администрирование → Дополнительные реквизиты), либо вносите ОГРН вручную.",
+      );
+  }
+  return { fields, notes };
+}
 
 /** Виды договоров (Enum_ВидыДоговоровКонтрагентов). */
 const CONTRACT_KINDS = [
@@ -356,7 +404,9 @@ async function createOrPreview(
   entitySet: string,
   payload: Record<string, unknown>,
   confirm: boolean,
+  notes?: string[],
 ) {
+  const extra = notes?.length ? { notes } : {};
   if (!confirm) {
     return ok({
       dryRun: true,
@@ -364,6 +414,7 @@ async function createOrPreview(
       writableBase: conn.cfg.writable,
       willCreate: entitySet,
       payload,
+      ...extra,
       note: conn.cfg.writable
         ? "Предпросмотр. Чтобы создать запись, повторите вызов с confirm=true."
         : `Предпросмотр. ВНИМАНИЕ: запись в базу "${conn.cfg.name}" сейчас запрещена — включите ODATA_DB_${conn.cfg.name.toUpperCase()}_WRITABLE=true (и READ_ONLY=false).`,
@@ -377,6 +428,7 @@ async function createOrPreview(
     ref: created["Ref_Key"],
     code: created["Code"],
     description: created["Description"],
+    ...extra,
   });
 }
 
@@ -387,14 +439,17 @@ async function patchOrPreview(
   ref: string,
   fields: Record<string, unknown>,
   confirm: boolean,
+  notes?: string[],
 ) {
   const guid = ref.replace(/[{}']/g, "");
+  const extra = notes?.length ? { notes } : {};
   if (!confirm) {
     return ok({
       dryRun: true,
       database: conn.cfg.name,
       willPatch: `${entitySet}(${guid})`,
       fields,
+      ...extra,
       note: conn.cfg.writable
         ? "Предпросмотр изменения. Чтобы применить, повторите с confirm=true."
         : `Предпросмотр. ВНИМАНИЕ: запись в базу "${conn.cfg.name}" запрещена — включите ODATA_DB_${conn.cfg.name.toUpperCase()}_WRITABLE=true (и READ_ONLY=false).`,
@@ -407,6 +462,35 @@ async function patchOrPreview(
     entitySet,
     ref: updated["Ref_Key"] ?? guid,
     description: updated["Description"],
+    ...extra,
+  });
+}
+
+/**
+ * Создаёт подчинённый объект (банковский счёт / контактное лицо) и, при makeMain,
+ * проставляет его основным у владельца. dry-run при confirm=false.
+ */
+async function createSubordinate(
+  conn: Connection,
+  set: string,
+  payload: Record<string, unknown>,
+  confirm: boolean,
+  main?: { ownerSet: string; ownerRef: string; field: string },
+) {
+  if (!confirm) return createOrPreview(conn, set, payload, false);
+  const created = await conn.client.create<ODataEntity>(set, payload);
+  const ref = String(created["Ref_Key"] ?? "");
+  if (main && ref) {
+    const g = main.ownerRef.replace(/[{}']/g, "");
+    await conn.client.patch(`${main.ownerSet}(guid'${g}')?$format=json`, { [main.field]: ref });
+  }
+  return ok({
+    created: true,
+    database: conn.cfg.name,
+    entitySet: set,
+    ref,
+    description: created["Description"],
+    ...(main ? { setAsMain: true } : {}),
   });
 }
 
@@ -429,21 +513,27 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .enum(["ЮридическоеЛицо", "ФизическоеЛицо"])
           .optional()
           .describe("Юридическое или физическое лицо"),
+        phone: z.string().optional().describe("Телефон (в контактную информацию)"),
+        email: z.string().optional().describe("Email (в контактную информацию)"),
+        address: z.string().optional().describe("Адрес текстом (в контактную информацию, юр. адрес)"),
+        ogrn: z.string().optional().describe("ОГРН (пишется, если в базе настроен доп.реквизит «ОГРН»)"),
         confirm: confirmField,
       },
     },
-    ({ database, name, inn, kpp, fullName, legalType, confirm }) =>
+    ({ database, name, inn, kpp, fullName, legalType, phone, email, address, ogrn, confirm }) =>
       guard("create_counterparty", async () => {
         const conn = ctx.db(database);
         const set = await resolveSet(conn, CATALOGS.counterparties, "Контрагенты");
+        const { fields, notes } = await counterpartyExtras(conn, { phone, email, address, ogrn });
         const payload = clean({
           Description: name,
           ИНН: inn,
           КПП: kpp,
           НаименованиеПолное: fullName,
           ЮридическоеФизическоеЛицо: legalType,
+          ...fields,
         });
-        return createOrPreview(conn, set, payload, confirm);
+        return createOrPreview(conn, set, payload, confirm, notes);
       }),
   );
 
@@ -686,21 +776,49 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         inn: z.string().optional().describe("ИНН"),
         kpp: z.string().optional().describe("КПП"),
         fullName: z.string().optional().describe("Полное наименование"),
+        phone: z.string().optional().describe("Телефон (контактная информация)"),
+        email: z.string().optional().describe("Email (контактная информация)"),
+        address: z.string().optional().describe("Адрес текстом (юр. адрес)"),
+        ogrn: z.string().optional().describe("ОГРН (если в базе настроен доп.реквизит)"),
         confirm: confirmField,
       },
     },
-    ({ database, ref, name, inn, kpp, fullName, confirm }) =>
+    ({ database, ref, name, inn, kpp, fullName, phone, email, address, ogrn, confirm }) =>
       guard("update_counterparty", async () => {
         const conn = ctx.db(database);
         const set = await resolveSet(conn, CATALOGS.counterparties, "Справочник «Контрагенты»");
-        const fields = clean({
+        const fields: Record<string, unknown> = clean({
           Description: name,
           ИНН: inn,
           КПП: kpp,
           НаименованиеПолное: fullName,
         });
+        const notes: string[] = [];
+        // Контакты — со слиянием: заменяем только заданные виды, прочие сохраняем.
+        if (phone || email || address) {
+          const kinds = await contactKindsForCounterparties(conn);
+          const guid = ref.replace(/[{}']/g, "");
+          const existing =
+            ((await conn.client.getEntity(`${set}(guid'${guid}')${buildQuery({})}`))["КонтактнаяИнформация"] as Array<
+              Record<string, unknown>
+            >) ?? [];
+          const replacedTypes = new Set(
+            [phone && kinds.phone?.тип, email && kinds.email?.тип, address && kinds.address?.тип].filter(Boolean),
+          );
+          const kept = existing.filter((r) => !replacedTypes.has(String(r["Тип"])));
+          const merged = [...kept, ...buildContactRows(kinds, { phone, email, address })].map((r, i) => ({
+            ...r,
+            LineNumber: i + 1,
+          }));
+          fields["КонтактнаяИнформация"] = merged;
+        }
+        if (ogrn) {
+          const prop = await resolveAdditionalProperty(conn, "ОГРН");
+          if (prop) fields["ДополнительныеРеквизиты"] = [{ LineNumber: 1, Свойство_Key: prop, Значение: ogrn }];
+          else notes.push("ОГРН не записан: в базе нет доп.реквизита «ОГРН» для контрагентов.");
+        }
         if (Object.keys(fields).length === 0) return fail("Не задано ни одного поля для изменения.");
-        return patchOrPreview(conn, set, ref, fields, confirm);
+        return patchOrPreview(conn, set, ref, fields, confirm, notes);
       }),
   );
 
@@ -1000,6 +1118,79 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           ],
         });
         return createOrPreview(conn, set, payload, confirm);
+      }),
+  );
+
+  server.registerTool(
+    "create_bank_account",
+    {
+      title: "Создать банковский счёт контрагента",
+      description:
+        "Заводит расчётный счёт контрагента (подчинённый справочник): банк по БИК + номер счёта. " +
+        "Можно сделать счёт основным. По умолчанию dry-run; создание — при confirm=true. " +
+        "Ref контрагента — из find_counterparty.",
+      inputSchema: {
+        database: databaseField,
+        ownerRef: z.string().describe("Ref_Key контрагента-владельца счёта"),
+        accountNumber: z.string().min(1).describe("Номер расчётного счёта"),
+        bik: z.string().min(1).describe("БИК банка (ищется в справочнике «Банки»)"),
+        currency: z.string().optional().describe("Валюта (код/название; по умолчанию рубль)"),
+        label: z.string().optional().describe("Наименование счёта (по умолчанию — номер счёта)"),
+        makeMain: z.boolean().default(false).describe("Сделать основным банковским счётом контрагента"),
+        confirm: confirmField,
+      },
+    },
+    ({ database, ownerRef, accountNumber, bik, currency, label, makeMain, confirm }) =>
+      guard("create_bank_account", async () => {
+        const conn = ctx.db(database);
+        const set = await requireEntity(conn, CATALOGS.bankAccounts, "Справочник «Банковские счета»");
+        const bank = await resolveBankByBik(conn, bik);
+        const cur = currency
+          ? await resolveCatalogItem(conn, CATALOGS.currencies, "Справочник «Валюты»", currency)
+          : await resolveCatalogItem(conn, CATALOGS.currencies, "Справочник «Валюты»", "643");
+        const payload = clean({
+          Description: label ?? accountNumber,
+          Owner: ownerRef,
+          Owner_Type: COUNTERPARTY_TYPE,
+          НомерСчета: accountNumber,
+          Банк_Key: bank.ref,
+          ВалютаДенежныхСредств_Key: cur.ref,
+        });
+        return createSubordinate(conn, set, payload, confirm, makeMain ? { ownerSet: await resolveSet(conn, CATALOGS.counterparties, "Контрагенты"), ownerRef, field: "ОсновнойБанковскийСчет_Key" } : undefined);
+      }),
+  );
+
+  server.registerTool(
+    "create_contact_person",
+    {
+      title: "Создать контактное лицо (директор и т.п.)",
+      description:
+        "Заводит контактное лицо контрагента (директор, бухгалтер, менеджер): ФИО + должность. " +
+        "Можно сделать основным контактным лицом. По умолчанию dry-run; создание — при confirm=true.",
+      inputSchema: {
+        database: databaseField,
+        ownerRef: z.string().describe("Ref_Key контрагента"),
+        name: z.string().min(1).describe("ФИО (наименование контактного лица)"),
+        lastName: z.string().optional().describe("Фамилия"),
+        firstName: z.string().optional().describe("Имя"),
+        position: z.string().optional().describe("Должность (напр. «Директор»)"),
+        makeMain: z.boolean().default(false).describe("Сделать основным контактным лицом контрагента"),
+        confirm: confirmField,
+      },
+    },
+    ({ database, ownerRef, name, lastName, firstName, position, makeMain, confirm }) =>
+      guard("create_contact_person", async () => {
+        const conn = ctx.db(database);
+        const set = await requireEntity(conn, ["Catalog_КонтактныеЛица"], "Справочник «Контактные лица»");
+        const payload = clean({
+          Description: name,
+          Фамилия: lastName,
+          Имя: firstName,
+          Должность: position,
+          ОбъектВладелец: ownerRef,
+          ОбъектВладелец_Type: COUNTERPARTY_TYPE,
+        });
+        return createSubordinate(conn, set, payload, confirm, makeMain ? { ownerSet: await resolveSet(conn, CATALOGS.counterparties, "Контрагенты"), ownerRef, field: "ОсновноеКонтактноеЛицо_Key" } : undefined);
       }),
   );
 }
