@@ -1,6 +1,7 @@
 # 1c-odata-mcp — подключение 1С:Предприятие к ИИ (Claude) через OData
 
 [![npm](https://img.shields.io/npm/v/1c-odata-mcp)](https://www.npmjs.com/package/1c-odata-mcp)
+[![CI](https://github.com/evilbruce666/1c-odata-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/evilbruce666/1c-odata-mcp/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/1c-odata-mcp)](LICENSE)
 [![node](https://img.shields.io/node/v/1c-odata-mcp)](https://nodejs.org)
 

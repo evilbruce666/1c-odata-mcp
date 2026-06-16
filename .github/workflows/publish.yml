@@ -1,0 +1,27 @@
+name: Publish to npm
+
+# Публикация при пуше тега vX.Y.Z. Требует секрет NPM_TOKEN
+# (granular/automation token с включённым «bypass 2FA»).
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # для npm provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      # prepublishOnly соберёт пакет и уберёт probe-скрипты
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
