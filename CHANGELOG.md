@@ -5,11 +5,23 @@
 
 ## [Не выпущено]
 
+## [0.1.3] — 2026-06-16
+
+### Добавлено
+- Юнит-тесты (Vitest, без живой базы) на ключевую логику: билдер запросов и
+  регресс кодирования `+`/`%20`, разбор конфигурации (мультибаза), классификация
+  метаданных, ошибки, фоллбэк публикации.
+- CI на GitHub Actions: проверки на push/PR и публикация в npm по тегу через
+  **Trusted Publishing** (OIDC, без токена; provenance автоматически).
+- Аннотации инструментов MCP (`readOnlyHint` / `destructiveHint` / `openWorldHint`)
+  и `instructions` сервера.
+- ESLint + Prettier; `CONTRIBUTING.md`, `SECURITY.md`, шаблоны issue, Dependabot;
+  `CHANGELOG.md`.
+
 ### Изменено
-- Переработана документация: `README.md` — про проект, возможности, примеры,
-  ограничения; `docs/CONNECTING.md` — только установка/настройка/диагностика
-  (убрано дублирование). В `README` добавлены badges и SEO-формулировки.
-- В `docs/CONNECTING.md` добавлен вариант подключения через `npx`.
+- Документация разведена: `README.md` — про проект (возможности, примеры,
+  ограничения), `docs/CONNECTING.md` — установка/настройка/диагностика. Добавлены
+  badges и SEO-формулировки, вариант подключения через `npx`.
 
 ### Прочее
 - SEO: расширены `keywords` в `package.json` и добавлены topics репозитория.
@@ -48,7 +60,8 @@
   коды плана счетов); вежливый фоллбэк при отсутствии объекта в «Составе OData».
 - npm-пакет с запуском через `npx 1c-odata-mcp`.
 
-[Не выпущено]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.1.2...HEAD
+[Не выпущено]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/evilbruce666/1c-odata-mcp/releases/tag/v0.1.0
