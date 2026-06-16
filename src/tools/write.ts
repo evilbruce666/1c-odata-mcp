@@ -249,6 +249,26 @@ function buildInvoiceRows(lines: GoodsLine[]): Array<Record<string, unknown>> {
   );
 }
 
+/** Строка счёта поставщика: товар/услуга + опц. содержание (для услуг типа доставки). */
+interface SupplierLine extends GoodsLine {
+  content?: string | undefined;
+}
+
+/** Строки ТЧ «Товары» счёта на оплату поставщика (Номенклатура_Key + Содержание, без счетов). */
+function buildSupplierRows(lines: SupplierLine[]): Array<Record<string, unknown>> {
+  return lines.map((l, i) =>
+    clean({
+      LineNumber: i + 1,
+      Номенклатура_Key: l.nomenclatureRef,
+      Содержание: l.content,
+      Количество: l.quantity,
+      Цена: l.price,
+      Сумма: lineSum(l),
+      СтавкаНДС: l.vatRate,
+    }),
+  );
+}
+
 /** Строит и создаёт/предпросматривает товарный документ (поступление/реализация). */
 async function createGoodsDoc(
   conn: Connection,
@@ -647,19 +667,33 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       description:
         "Создаёт новую позицию номенклатуры (товар/услуга). ПО УМОЛЧАНИЮ предпросмотр (dry-run): " +
         "покажите пользователю payload и только после согласия повторите с confirm=true. " +
+        "Можно указать артикул, папку (folder — имя группы или Ref_Key) и пометить услугой (isService). " +
         "Запись идёт в боевую базу.",
       inputSchema: {
         database: databaseField,
         name: z.string().min(1).describe("Наименование номенклатуры (Description)"),
         fullName: z.string().optional().describe("Полное наименование"),
+        article: z.string().optional().describe("Артикул"),
+        folder: z.string().optional().describe("Папка/группа — имя или Ref_Key (для размещения в группе)"),
+        isService: z
+          .boolean()
+          .default(false)
+          .describe("true — услуга (Услуга=true, вид «Услуга»), false — товар"),
         confirm: confirmField,
       },
     },
-    ({ database, name, fullName, confirm }) =>
+    ({ database, name, fullName, article, folder, isService, confirm }) =>
       guard("create_nomenclature", async () => {
         const conn = ctx.db(database);
         const set = await resolveSet(conn, CATALOGS.nomenclature, "Номенклатура");
-        const payload = clean({ Description: name, НаименованиеПолное: fullName });
+        const parentRef = await folderRefOf(conn, set, folder);
+        const payload = clean({
+          Description: name,
+          НаименованиеПолное: fullName,
+          Артикул: article,
+          Parent_Key: parentRef,
+          ...(isService ? { Услуга: true } : {}),
+        });
         return createOrPreview(conn, set, payload, confirm);
       }),
   );
@@ -1024,6 +1058,87 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           },
           confirm,
         );
+      }),
+  );
+
+  server.registerTool(
+    "create_supplier_invoice",
+    {
+      title: "Зарегистрировать счёт от поставщика",
+      description:
+        "Создаёт документ «Счёт на оплату поставщика» — регистрирует входящий счёт-основание для оплаты " +
+        "(подходит для предоплаты, когда товар ещё не пришёл). Проводок НЕ делает (счёт не проводится), " +
+        "счета учёта не нужны. Табличная часть «Товары» вмещает и товары, и услуги (напр. доставку — задайте " +
+        "content/Содержание). Реквизиты входящего счёта: incomingNumber/incomingDate. " +
+        "По умолчанию dry-run; создание — при confirm=true. Контрагент — поставщик, договор — вида «СПоставщиком».",
+      inputSchema: {
+        database: databaseField,
+        organization: organizationField,
+        counterpartyRef: z.string().describe("Ref_Key контрагента-поставщика"),
+        contractRef: z.string().optional().describe("Ref_Key договора (вид «СПоставщиком»)"),
+        supplierBankAccountRef: z
+          .string()
+          .optional()
+          .describe("Ref_Key банковского счёта поставщика (БанковскийСчетКонтрагента)"),
+        incomingNumber: z.string().optional().describe("Номер входящего счёта поставщика"),
+        incomingDate: z.string().optional().describe("Дата входящего счёта YYYY-MM-DD"),
+        date: z.string().optional().describe("Дата документа YYYY-MM-DD (по умолчанию сегодня)"),
+        comment: z.string().optional().describe("Комментарий к документу"),
+        sumIncludesVat: z.boolean().default(true).describe("Сумма включает НДС"),
+        lines: z
+          .array(
+            z.object({
+              nomenclatureRef: z.string().describe("Ref_Key номенклатуры"),
+              quantity: z.number().positive().describe("Количество"),
+              price: z.number().nonnegative().describe("Цена за единицу"),
+              vatRate: z.enum(VAT_RATES).default("БезНДС").describe("Ставка НДС"),
+              content: z
+                .string()
+                .optional()
+                .describe("Содержание строки (напр. «Доставка СДЭК») — удобно для услуг"),
+            }),
+          )
+          .min(1)
+          .describe("Позиции счёта (товары и услуги в одной таблице)"),
+        confirm: confirmField,
+      },
+    },
+    ({
+      database,
+      organization,
+      counterpartyRef,
+      contractRef,
+      supplierBankAccountRef,
+      incomingNumber,
+      incomingDate,
+      date,
+      comment,
+      sumIncludesVat,
+      lines,
+      confirm,
+    }) =>
+      guard("create_supplier_invoice", async () => {
+        const conn = ctx.db(database);
+        const set = await requireEntity(conn, DOCUMENTS.supplierInvoice, "Документ «Счёт на оплату поставщика»");
+        const org = await resolveOrg(conn, organization);
+        const rows = buildSupplierRows(lines);
+        const payload = clean({
+          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Posted: false,
+          Организация_Key: org.key,
+          Контрагент_Key: counterpartyRef,
+          ДоговорКонтрагента_Key: contractRef,
+          БанковскийСчетКонтрагента_Key: supplierBankAccountRef,
+          НомерВходящегоДокумента: incomingNumber,
+          ДатаВходящегоДокумента: incomingDate
+            ? odataDate(new Date(`${incomingDate}T00:00:00`))
+            : undefined,
+          Комментарий: comment,
+          СуммаВключаетНДС: sumIncludesVat,
+          СуммаДокумента: rowsTotal(rows),
+          Товары: rows,
+        });
+        return createOrPreview(conn, set, payload, confirm);
       }),
   );
 

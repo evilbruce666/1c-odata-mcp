@@ -22,6 +22,7 @@ export const DOCUMENTS = {
   sales: ["Document_РеализацияТоваровУслуг", "Document_РеализацияТоваровИУслуг"],
   customerInvoice: ["Document_СчетНаОплатуПокупателю", "Document_СчетПокупателю"],
   purchases: ["Document_ПоступлениеТоваровУслуг", "Document_ПоступлениеТоваровИУслуг"],
+  supplierInvoice: ["Document_СчетНаОплатуПоставщика"],
   bankIn: ["Document_ПоступлениеНаРасчетныйСчет"],
   bankOut: ["Document_СписаниеСРасчетногоСчета"],
   paymentOrder: ["Document_ПлатежноеПоручение"],
