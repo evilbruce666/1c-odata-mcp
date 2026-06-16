@@ -631,15 +631,20 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       title: "Создать договор",
       description:
         "Заводит договор контрагента (подчинённый справочник): владелец — контрагент, " +
-        "плюс организация, вид договора, валюта/тип цен и (опц.) руководитель/подписант контрагента. " +
-        "По умолчанию предпросмотр (dry-run); создание — при confirm=true. " +
-        "Ref контрагента берётся из find_counterparty, организация — по названию (list_organizations).",
+        "организация, ВИД договора, номер/дата, валюта/тип цен и (опц.) руководитель/подписант. " +
+        "ВАЖНО: вид договора (kind) обязателен и его НЕЛЬЗЯ выбирать самостоятельно — " +
+        "уточните у пользователя, т.к. один контрагент может быть и покупателем, и поставщиком. " +
+        "Номер по умолчанию «б/н», дата — сегодня. По умолчанию предпросмотр (dry-run); создание — при confirm=true.",
       inputSchema: {
         database: databaseField,
         organization: organizationField,
         counterpartyRef: z.string().describe("Ref_Key контрагента (владелец договора)"),
-        name: z.string().min(1).describe("Наименование/номер договора (Description)"),
-        kind: z.enum(CONTRACT_KINDS).default("СПокупателем").describe("Вид договора"),
+        kind: z
+          .enum(CONTRACT_KINDS)
+          .describe("Вид договора — ОБЯЗАТЕЛЬНО спросить у пользователя, не выбирать самому"),
+        number: z.string().optional().describe("Номер договора (по умолчанию «б/н»)"),
+        date: z.string().optional().describe("Дата договора YYYY-MM-DD (по умолчанию сегодня)"),
+        name: z.string().optional().describe("Наименование договора (по умолчанию «Договор <номер>»)"),
         currency: z
           .string()
           .optional()
@@ -663,8 +668,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       database,
       organization,
       counterpartyRef,
-      name,
       kind,
+      number,
+      date,
+      name,
       currency,
       priceType,
       headName,
@@ -688,9 +695,12 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
             )
           : undefined;
         const foreign = cur ? cur.code !== "643" : undefined; // 643 = рубль
+        const num = number ?? "б/н";
 
         const payload = clean({
-          Description: name,
+          Description: name ?? `Договор ${num}`,
+          Номер: num,
+          Дата: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
           Owner_Key: counterpartyRef,
           ВидДоговора: kind,
           Организация_Key: org.key,
