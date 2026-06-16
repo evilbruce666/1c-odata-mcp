@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ServerContext } from "../context.js";
 import { registerMetaTools } from "../tools/meta.js";
@@ -6,6 +7,17 @@ import { registerDocumentTools } from "../tools/documents.js";
 import { registerRegisterTools } from "../tools/registers.js";
 import { registerWriteTools } from "../tools/write.js";
 import { READ_HINTS, WRITE_HINTS, DESTRUCTIVE_HINTS } from "../tools/_shared.js";
+
+/** Версия берётся из package.json (в собранном пакете он на два уровня выше dist/mcp/). */
+function readVersion(): string {
+  try {
+    const url = new URL("../../package.json", import.meta.url);
+    const pkg = JSON.parse(readFileSync(url, "utf8")) as { version?: string };
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
 
 const INSTRUCTIONS =
   "Доступ к данным 1С:Предприятие через OData. По умолчанию только чтение " +
@@ -24,7 +36,10 @@ function annotationsFor(name: string) {
 
 /** Создаёт MCP-сервер и регистрирует все инструменты (чтение + гейтованная запись). */
 export function createServer(ctx: ServerContext): McpServer {
-  const server = new McpServer({ name: "1c-odata-mcp", version: "0.1.0" }, { instructions: INSTRUCTIONS });
+  const server = new McpServer(
+    { name: "1c-odata-mcp", version: readVersion() },
+    { instructions: INSTRUCTIONS },
+  );
 
   // Оборачиваем registerTool, чтобы каждому инструменту проставить аннотации по имени.
   const original = server.registerTool.bind(server);
