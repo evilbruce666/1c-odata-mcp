@@ -165,6 +165,45 @@ async function resolveCatalogItem(
   };
 }
 
+const GUID_RE = /^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$/;
+
+/** Находит папку (группу, IsFolder=true) в иерархическом справочнике по части имени. */
+async function resolveFolder(
+  conn: Connection,
+  entitySet: string,
+  query: string,
+): Promise<{ ref: string; name: string }> {
+  const { rows } = await fetchAll(
+    conn.client,
+    entitySet,
+    {
+      filter: and(contains("Description", query), cmp("IsFolder", "eq", "true")),
+      select: ["Ref_Key", "Description"],
+    },
+    10,
+    10,
+  );
+  if (rows.length === 0) throw new Error(`Папка «${query}» не найдена в ${entitySet}.`);
+  if (rows.length > 1) {
+    const names = rows.map((r) => String(r["Description"])).join(", ");
+    throw new Error(`Под «${query}» несколько папок: ${names}. Уточните название.`);
+  }
+  const r = rows[0] as ODataEntity;
+  return { ref: String(r["Ref_Key"]), name: String(r["Description"] ?? "") };
+}
+
+/** Папка по ref (GUID) или по имени (резолв). undefined → без родителя. */
+async function folderRefOf(
+  conn: Connection,
+  entitySet: string,
+  folder: string | undefined,
+): Promise<string | undefined> {
+  if (!folder) return undefined;
+  return GUID_RE.test(folder.trim())
+    ? folder.replace(/[{}]/g, "")
+    : (await resolveFolder(conn, entitySet, folder)).ref;
+}
+
 interface GoodsLine {
   nomenclatureRef: string;
   quantity: number;
@@ -1358,6 +1397,62 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
               }
             : undefined,
         );
+      }),
+  );
+
+  server.registerTool(
+    "create_folder",
+    {
+      title: "Создать папку (группу) справочника",
+      description:
+        "Создаёт папку/группу в иерархическом справочнике 1С (по умолчанию — Контрагенты). " +
+        "Опционально вкладывает в родительскую папку (parent — имя папки или Ref_Key). " +
+        "В 1С «папки» = группы справочника; отдельных тегов в типовой Бухгалтерии нет. dry-run/confirm.",
+      inputSchema: {
+        database: databaseField,
+        entitySet: z
+          .string()
+          .default("Catalog_Контрагенты")
+          .describe("Иерархический справочник (по умолчанию Catalog_Контрагенты)"),
+        name: z.string().min(1).describe("Название папки"),
+        parent: z.string().optional().describe("Родительская папка — имя или Ref_Key (для вложенности)"),
+        confirm: confirmField,
+      },
+    },
+    ({ database, entitySet, name, parent, confirm }) =>
+      guard("create_folder", async () => {
+        const conn = ctx.db(database);
+        ensurePublished(await conn.available(), entitySet);
+        const parentRef = await folderRefOf(conn, entitySet, parent);
+        const payload = clean({ Description: name, IsFolder: true, Parent_Key: parentRef });
+        return createOrPreview(conn, entitySet, payload, confirm);
+      }),
+  );
+
+  server.registerTool(
+    "move_to_folder",
+    {
+      title: "Переместить объект в папку",
+      description:
+        "Перемещает элемент справочника (напр. контрагента) в папку/группу — задаёт родителя (Parent_Key). " +
+        "folder — имя папки или Ref_Key. По умолчанию справочник Контрагенты. dry-run/confirm.",
+      inputSchema: {
+        database: databaseField,
+        entitySet: z
+          .string()
+          .default("Catalog_Контрагенты")
+          .describe("Справочник (по умолчанию Catalog_Контрагенты)"),
+        ref: z.string().describe("Ref_Key перемещаемого элемента"),
+        folder: z.string().describe("Папка назначения — имя или Ref_Key"),
+        confirm: confirmField,
+      },
+    },
+    ({ database, entitySet, ref, folder, confirm }) =>
+      guard("move_to_folder", async () => {
+        const conn = ctx.db(database);
+        ensurePublished(await conn.available(), entitySet);
+        const parentRef = await folderRefOf(conn, entitySet, folder);
+        return patchOrPreview(conn, entitySet, ref, { Parent_Key: parentRef }, confirm);
       }),
   );
 }
