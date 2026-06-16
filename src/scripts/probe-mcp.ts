@@ -13,7 +13,7 @@ function line(s = ""): void {
 type ToolText = { content: Array<{ type: string; text?: string }> };
 
 function textOf(res: ToolText): string {
-  return res.content.map((c) => (c.type === "text" ? c.text ?? "" : "")).join("\n");
+  return res.content.map((c) => (c.type === "text" ? (c.text ?? "") : "")).join("\n");
 }
 
 async function main(): Promise<void> {
@@ -47,7 +47,9 @@ async function main(): Promise<void> {
   line(textOf((await client.callTool({ name: "list_organizations", arguments: dbArg })) as ToolText));
 
   line("\n— get_debtors (top 3) —");
-  line(textOf((await client.callTool({ name: "get_debtors", arguments: { ...dbArg, limit: 3 } })) as ToolText));
+  line(
+    textOf((await client.callTool({ name: "get_debtors", arguments: { ...dbArg, limit: 3 } })) as ToolText),
+  );
 
   await client.close();
   line("\n✓ end-to-end ok");

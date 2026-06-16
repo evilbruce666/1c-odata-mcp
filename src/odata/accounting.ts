@@ -22,10 +22,7 @@ export interface Account {
 }
 
 /** Возвращает счета, код которых начинается с одного из префиксов (напр. "62", "41"). */
-export async function resolveAccounts(
-  conn: Connection,
-  prefixes: readonly string[],
-): Promise<Account[]> {
+export async function resolveAccounts(conn: Connection, prefixes: readonly string[]): Promise<Account[]> {
   const chart = await requireEntity(conn, CHART_CANDIDATES, "План счетов «Хозрасчётный»");
   const filter = or(...prefixes.map((p) => `startswith(Code, ${odataString(p)})`));
   const { rows } = await fetchAll(

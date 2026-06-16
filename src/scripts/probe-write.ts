@@ -10,7 +10,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 type ToolText = { content: Array<{ type: string; text?: string }>; isError?: boolean };
 const line = (s = ""): void => void process.stdout.write(`${s}\n`);
 const textOf = (r: ToolText): string =>
-  `${r.isError ? "[isError] " : ""}${r.content.map((c) => (c.type === "text" ? c.text ?? "" : "")).join("\n")}`;
+  `${r.isError ? "[isError] " : ""}${r.content.map((c) => (c.type === "text" ? (c.text ?? "") : "")).join("\n")}`;
 
 async function main(): Promise<void> {
   const env: Record<string, string> = {};
@@ -25,13 +25,31 @@ async function main(): Promise<void> {
   const writeTools = tools.filter((t) => t.name.startsWith("create_")).map((t) => t.name);
   line(`  инструменты записи: ${writeTools.join(", ")}`);
 
-  const args = (extra: object) => ({ name: "ТЕСТ MCP — проверка (можно удалить)", inn: "7700000000", ...extra });
+  const args = (extra: object) => ({
+    name: "ТЕСТ MCP — проверка (можно удалить)",
+    inn: "7700000000",
+    ...extra,
+  });
 
   line("\n— create_counterparty (confirm=false, DRY-RUN, записи быть НЕ должно) —");
-  line(textOf((await client.callTool({ name: "create_counterparty", arguments: args({ confirm: false }) })) as ToolText));
+  line(
+    textOf(
+      (await client.callTool({
+        name: "create_counterparty",
+        arguments: args({ confirm: false }),
+      })) as ToolText,
+    ),
+  );
 
   line("\n— create_counterparty (confirm=true на НЕзаписываемой базе → ожидаем блок предохранителя) —");
-  line(textOf((await client.callTool({ name: "create_counterparty", arguments: args({ confirm: true }) })) as ToolText));
+  line(
+    textOf(
+      (await client.callTool({
+        name: "create_counterparty",
+        arguments: args({ confirm: true }),
+      })) as ToolText,
+    ),
+  );
 
   await client.close();
   line("\n✓ проверка завершена (фактических записей не выполнялось)");

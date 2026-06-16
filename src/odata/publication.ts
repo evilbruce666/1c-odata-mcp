@@ -30,11 +30,7 @@ export async function requireEntity(
 }
 
 /** Проверяет, что конкретный EntitySet опубликован (для имён, заданных пользователем). */
-export function ensurePublished(
-  available: ReadonlySet<string>,
-  entitySet: string,
-  label?: string,
-): void {
+export function ensurePublished(available: ReadonlySet<string>, entitySet: string, label?: string): void {
   if (!available.has(entitySet)) {
     throw new NotPublishedError([{ label: label ?? entitySet, candidates: [entitySet] }]);
   }
@@ -42,9 +38,7 @@ export function ensurePublished(
 
 /** Собирает текст вежливого фоллбэка по списку недостающих объектов. */
 export function publicationHelp(missing: NotPublishedError["missing"]): string {
-  const lines = missing
-    .map((m) => `  • ${m.label} (${m.candidates.join(" или ")})`)
-    .join("\n");
+  const lines = missing.map((m) => `  • ${m.label} (${m.candidates.join(" или ")})`).join("\n");
   return (
     "Эти объекты 1С не опубликованы в OData, поэтому операция недоступна. " +
     "Добавьте их в 1С: «Все функции → Обработки → Настройка стандартного интерфейса OData → вкладка Состав», затем сохраните:\n" +

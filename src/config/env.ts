@@ -100,8 +100,12 @@ let cached: RuntimeConfig | undefined;
 
 export function loadConfig(): RuntimeConfig {
   if (cached) return cached;
+  cached = parseConfig(process.env as Env);
+  return cached;
+}
 
-  const env = process.env as Env;
+/** Чистый разбор конфигурации из объекта env (без кеша) — удобно для тестов. */
+export function parseConfig(env: Env): RuntimeConfig {
   const issues: string[] = [];
 
   const behaviorParsed = BehaviorSchema.safeParse(env);
@@ -140,10 +144,9 @@ export function loadConfig(): RuntimeConfig {
   const b = behaviorParsed.success ? behaviorParsed.data : BehaviorSchema.parse({});
   const wantDefault = env.ODATA_DEFAULT_DB?.toLowerCase();
   const sortedNames = connections.map((c) => c.name).sort();
-  const defaultName =
-    wantDefault && seen.has(wantDefault) ? wantDefault : (sortedNames[0] as string);
+  const defaultName = wantDefault && seen.has(wantDefault) ? wantDefault : (sortedNames[0] as string);
 
-  cached = {
+  return {
     connections,
     defaultName,
     logLevel: b.LOG_LEVEL,
@@ -155,5 +158,4 @@ export function loadConfig(): RuntimeConfig {
       readOnly: b.READ_ONLY === "true",
     },
   };
-  return cached;
 }

@@ -12,13 +12,7 @@ export const logger = pino(
     base: undefined,
     redact: {
       // Пароли и заголовки авторизации никогда не попадают в логи.
-      paths: [
-        "password",
-        "headers.authorization",
-        "headers.Authorization",
-        "*.password",
-        "*.authorization",
-      ],
+      paths: ["password", "headers.authorization", "headers.Authorization", "*.password", "*.authorization"],
       censor: "[redacted]",
     },
   },

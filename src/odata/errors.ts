@@ -51,11 +51,7 @@ const RETRYABLE_DEFAULT: Record<ODataErrorKind, boolean> = {
 };
 
 /** Строит ODataError из HTTP-статуса и (опционально) тела ответа. */
-export function fromHttpStatus(
-  status: number,
-  url: string,
-  body?: string,
-): ODataError {
+export function fromHttpStatus(status: number, url: string, body?: string): ODataError {
   const detail = extract1cMessage(body);
   const base = (msg: string, kind: ODataErrorKind) =>
     new ODataError({

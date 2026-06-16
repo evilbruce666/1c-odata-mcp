@@ -1,13 +1,7 @@
 import { XMLParser } from "fast-xml-parser";
 import type { ODataClient } from "./client.js";
 import { logger } from "../logger.js";
-import type {
-  EntityClass,
-  EntityMeta,
-  MetadataMap,
-  MetaNavigation,
-  MetaProperty,
-} from "../types/odata.js";
+import type { EntityClass, EntityMeta, MetadataMap, MetaNavigation, MetaProperty } from "../types/odata.js";
 
 /** Сопоставление префикса EntitySet → класс объекта 1С. */
 const PREFIX_TO_CLASS: Array<[string, EntityClass]> = [
@@ -57,8 +51,7 @@ interface RawEntitySet {
   "@_EntityType": string;
 }
 
-const asArray = <T>(v: T | T[] | undefined): T[] =>
-  v === undefined ? [] : Array.isArray(v) ? v : [v];
+const asArray = <T>(v: T | T[] | undefined): T[] => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
 
 /**
  * Загружает $metadata (EDMX/XML) и строит карту сущностей.
@@ -127,10 +120,12 @@ function stripNamespace(name: string): string {
   return idx >= 0 ? name.slice(idx + 1) : name;
 }
 
-function findSchema(doc: Record<string, unknown>): {
-  EntityType?: RawEntityType | RawEntityType[];
-  EntityContainer?: { EntitySet?: RawEntitySet | RawEntitySet[] };
-} | undefined {
+function findSchema(doc: Record<string, unknown>):
+  | {
+      EntityType?: RawEntityType | RawEntityType[];
+      EntityContainer?: { EntitySet?: RawEntitySet | RawEntitySet[] };
+    }
+  | undefined {
   const edmx = (doc.Edmx ?? doc["edmx:Edmx"]) as Record<string, unknown> | undefined;
   const services = edmx?.DataServices ?? edmx?.["edmx:DataServices"];
   const schema = (services as Record<string, unknown> | undefined)?.Schema;
@@ -141,8 +136,6 @@ function detectVersion(doc: Record<string, unknown>): string {
   // Реальная версия OData — в DataServices/@m:DataServiceVersion (напр. "3.0").
   // Атрибут Version у Edmx — это версия EDMX-обёртки ("1.0"), не путать.
   const edmx = (doc.Edmx ?? doc["edmx:Edmx"]) as Record<string, unknown> | undefined;
-  const services = (edmx?.DataServices ?? edmx?.["edmx:DataServices"]) as
-    | Record<string, string>
-    | undefined;
+  const services = (edmx?.DataServices ?? edmx?.["edmx:DataServices"]) as Record<string, string> | undefined;
   return services?.["@_DataServiceVersion"] ?? services?.["@_m:DataServiceVersion"] ?? "3.0";
 }

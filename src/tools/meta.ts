@@ -34,8 +34,7 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
         "Вызывайте, если нужно понять, какие базы доступны или сравнить данные нескольких баз.",
       inputSchema: {},
     },
-    () =>
-      guard("list_databases", async () => ok({ default: ctx.defaultName, databases: ctx.databases() })),
+    () => guard("list_databases", async () => ok({ default: ctx.defaultName, databases: ctx.databases() })),
   );
 
   server.registerTool(

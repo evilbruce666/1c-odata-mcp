@@ -105,9 +105,7 @@ export class ODataClient {
   }
 
   /** Запрос коллекции (массив в поле value). */
-  async getCollection<T extends ODataEntity = ODataEntity>(
-    path: string,
-  ): Promise<ODataCollection<T>> {
+  async getCollection<T extends ODataEntity = ODataEntity>(path: string): Promise<ODataCollection<T>> {
     return this.request<ODataCollection<T>>(path);
   }
 

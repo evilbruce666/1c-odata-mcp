@@ -35,10 +35,7 @@ export function fail(message: string): CallToolResult {
  * Оборачивает тело инструмента: ловит ODataError/прочие и превращает
  * в аккуратный isError-результат. Сервер не должен падать из-за одного вызова.
  */
-export async function guard(
-  toolName: string,
-  fn: () => Promise<CallToolResult>,
-): Promise<CallToolResult> {
+export async function guard(toolName: string, fn: () => Promise<CallToolResult>): Promise<CallToolResult> {
   try {
     return await fn();
   } catch (e) {
@@ -66,8 +63,6 @@ export function withTruncationNote<T>(
     rows,
     count: rows.length,
     truncated,
-    ...(truncated
-      ? { note: `Результат усечён до ${maxRows} строк. Уточните фильтр или период.` }
-      : {}),
+    ...(truncated ? { note: `Результат усечён до ${maxRows} строк. Уточните фильтр или период.` } : {}),
   };
 }

@@ -74,7 +74,13 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         if (r.usedSets.length === 0) {
           return fail("Документы реализации не опубликованы в OData. Добавьте их в «Состав OData».");
         }
-        return ok({ database: conn.cfg.name, organization: org.name, period: { from, to }, total: r.total, byDocument: r.perSet });
+        return ok({
+          database: conn.cfg.name,
+          organization: org.name,
+          period: { from, to },
+          total: r.total,
+          byDocument: r.perSet,
+        });
       }),
   );
 
@@ -96,8 +102,20 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
       guard("get_cashflow", async () => {
         const conn = ctx.db(database);
         const org = await orgKeyOf(conn, organization);
-        const inflow = await sumDocuments(conn, [...DOCUMENTS.bankIn, ...DOCUMENTS.cashIn], from, to, org.key);
-        const outflow = await sumDocuments(conn, [...DOCUMENTS.bankOut, ...DOCUMENTS.cashOut], from, to, org.key);
+        const inflow = await sumDocuments(
+          conn,
+          [...DOCUMENTS.bankIn, ...DOCUMENTS.cashIn],
+          from,
+          to,
+          org.key,
+        );
+        const outflow = await sumDocuments(
+          conn,
+          [...DOCUMENTS.bankOut, ...DOCUMENTS.cashOut],
+          from,
+          to,
+          org.key,
+        );
         if (inflow.usedSets.length === 0 && outflow.usedSets.length === 0) {
           return fail("Банковские/кассовые документы не опубликованы в OData. Добавьте их в «Состав OData».");
         }
@@ -132,7 +150,12 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         const conn = ctx.db(database);
         const org = await orgKeyOf(conn, organization);
         const accounts = await resolveAccounts(conn, ACCOUNT_PREFIX.receivables);
-        const rows = await balanceByAccounts(conn, accounts.map((a) => a.key), conn.behavior.maxRows, org.key);
+        const rows = await balanceByAccounts(
+          conn,
+          accounts.map((a) => a.key),
+          conn.behavior.maxRows,
+          org.key,
+        );
 
         const byCp = new Map<string, number>();
         for (const r of rows) {
@@ -146,7 +169,11 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
 
         const debtors = [...byCp.entries()]
           .filter(([, amount]) => amount > 0.005)
-          .map(([ref, amount]) => ({ counterparty: names.get(ref) ?? ref, ref, amount: Math.round(amount * 100) / 100 }))
+          .map(([ref, amount]) => ({
+            counterparty: names.get(ref) ?? ref,
+            ref,
+            amount: Math.round(amount * 100) / 100,
+          }))
           .sort((a, b) => b.amount - a.amount)
           .slice(0, limit);
 
@@ -181,7 +208,12 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         const conn = ctx.db(database);
         const org = await orgKeyOf(conn, organization);
         const accounts = await resolveAccounts(conn, ACCOUNT_PREFIX.inventory);
-        const rows = await balanceByAccounts(conn, accounts.map((a) => a.key), conn.behavior.maxRows, org.key);
+        const rows = await balanceByAccounts(
+          conn,
+          accounts.map((a) => a.key),
+          conn.behavior.maxRows,
+          org.key,
+        );
 
         const byItem = new Map<string, { qty: number; amount: number }>();
         for (const r of rows) {

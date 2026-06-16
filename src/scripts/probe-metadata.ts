@@ -9,13 +9,7 @@
 import { loadConfig } from "../config/env.js";
 import { ServerContext } from "../context.js";
 import { buildQuery } from "../odata/query.js";
-import {
-  CATALOGS,
-  DOCUMENTS,
-  REGISTERS,
-  COUNTERPARTY_FIELDS,
-  resolveEntity,
-} from "../config/mapping.js";
+import { CATALOGS, DOCUMENTS, REGISTERS, COUNTERPARTY_FIELDS, resolveEntity } from "../config/mapping.js";
 import type { EntityClass } from "../types/odata.js";
 
 function line(s = ""): void {

@@ -51,9 +51,7 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
         const conn = ctx.db(database);
         const set = await counterpartySet(conn);
         const isInn = /^\d{10,12}$/.test(query.trim());
-        const filter = isInn
-          ? cmp(CF.inn, "eq", odataString(query.trim()))
-          : contains(CF.name, query);
+        const filter = isInn ? cmp(CF.inn, "eq", odataString(query.trim())) : contains(CF.name, query);
 
         const { rows, truncated } = await fetchAll(
           conn.client,
@@ -165,11 +163,23 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
       guard("get_customer_history", async () => {
         const conn = ctx.db(database);
         const orgKey = await orgKeyOf(conn, organization);
-        const r = await history(conn, [...DOCUMENTS.sales, ...DOCUMENTS.customerInvoice], ref, orgKey, from, to, limit);
+        const r = await history(
+          conn,
+          [...DOCUMENTS.sales, ...DOCUMENTS.customerInvoice],
+          ref,
+          orgKey,
+          from,
+          to,
+          limit,
+        );
         if (r.usedSets.length === 0) {
           return fail("Документы продаж не опубликованы в OData. Добавьте их в «Состав OData».");
         }
-        return ok({ counterparty: ref, period: { from, to }, ...withTruncationNote(r.docs, r.truncated, limit) });
+        return ok({
+          counterparty: ref,
+          period: { from, to },
+          ...withTruncationNote(r.docs, r.truncated, limit),
+        });
       }),
   );
 
@@ -190,7 +200,11 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
         if (r.usedSets.length === 0) {
           return fail("Документы поступлений не опубликованы в OData. Добавьте их в «Состав OData».");
         }
-        return ok({ counterparty: ref, period: { from, to }, ...withTruncationNote(r.docs, r.truncated, limit) });
+        return ok({
+          counterparty: ref,
+          period: { from, to },
+          ...withTruncationNote(r.docs, r.truncated, limit),
+        });
       }),
   );
 }

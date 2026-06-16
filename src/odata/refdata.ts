@@ -30,7 +30,10 @@ export async function contactKindsForCounterparties(conn: Connection): Promise<C
   const { rows: folders } = await fetchAll(
     conn.client,
     set,
-    { filter: and(contains("Description", "Контрагенты"), cmp("IsFolder", "eq", "true")), select: ["Ref_Key"] },
+    {
+      filter: and(contains("Description", "Контрагенты"), cmp("IsFolder", "eq", "true")),
+      select: ["Ref_Key"],
+    },
     1,
     1,
   );
@@ -40,7 +43,10 @@ export async function contactKindsForCounterparties(conn: Connection): Promise<C
     conn.client,
     set,
     {
-      filter: and(cmp("Parent_Key", "eq", odataGuid(String(folder["Ref_Key"]))), cmp("IsFolder", "eq", "false")),
+      filter: and(
+        cmp("Parent_Key", "eq", odataGuid(String(folder["Ref_Key"]))),
+        cmp("IsFolder", "eq", "false"),
+      ),
       select: ["Ref_Key", "Description", "Тип"],
     },
     50,
@@ -63,12 +69,18 @@ export async function contactKindsForCounterparties(conn: Connection): Promise<C
 }
 
 /** Банк по БИК (Code в справочнике Банки; берём не-папку). */
-export async function resolveBankByBik(conn: Connection, bik: string): Promise<{ ref: string; name: string }> {
+export async function resolveBankByBik(
+  conn: Connection,
+  bik: string,
+): Promise<{ ref: string; name: string }> {
   const set = await requireEntity(conn, BANKS, "Справочник «Банки»");
   const { rows } = await fetchAll(
     conn.client,
     set,
-    { filter: and(cmp("Code", "eq", odataString(bik)), cmp("IsFolder", "eq", "false")), select: ["Ref_Key", "Description"] },
+    {
+      filter: and(cmp("Code", "eq", odataString(bik)), cmp("IsFolder", "eq", "false")),
+      select: ["Ref_Key", "Description"],
+    },
     3,
     3,
   );

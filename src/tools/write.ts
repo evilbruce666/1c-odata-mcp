@@ -27,9 +27,19 @@ function buildContactRows(
 ): Array<Record<string, unknown>> {
   const rows: Array<Record<string, unknown>> = [];
   if (data.phone && kinds.phone)
-    rows.push({ Тип: kinds.phone.тип, Вид_Key: kinds.phone.key, Представление: data.phone, НомерТелефона: data.phone });
+    rows.push({
+      Тип: kinds.phone.тип,
+      Вид_Key: kinds.phone.key,
+      Представление: data.phone,
+      НомерТелефона: data.phone,
+    });
   if (data.email && kinds.email)
-    rows.push({ Тип: kinds.email.тип, Вид_Key: kinds.email.key, Представление: data.email, АдресЭП: data.email });
+    rows.push({
+      Тип: kinds.email.тип,
+      Вид_Key: kinds.email.key,
+      Представление: data.email,
+      АдресЭП: data.email,
+    });
   if (data.address && kinds.address)
     rows.push({ Тип: kinds.address.тип, Вид_Key: kinds.address.key, Представление: data.address });
   return rows.map((r, i) => ({ LineNumber: i + 1, ...r }));
@@ -38,7 +48,12 @@ function buildContactRows(
 /** Дополнительные поля карточки контрагента: контактная информация + ОГРН (доп.реквизит). */
 async function counterpartyExtras(
   conn: Connection,
-  data: { phone?: string | undefined; email?: string | undefined; address?: string | undefined; ogrn?: string | undefined },
+  data: {
+    phone?: string | undefined;
+    email?: string | undefined;
+    address?: string | undefined;
+    ogrn?: string | undefined;
+  },
 ): Promise<{ fields: Record<string, unknown>; notes: string[] }> {
   const fields: Record<string, unknown> = {};
   const notes: string[] = [];
@@ -52,7 +67,8 @@ async function counterpartyExtras(
   }
   if (data.ogrn) {
     const prop = await resolveAdditionalProperty(conn, "ОГРН");
-    if (prop) fields["ДополнительныеРеквизиты"] = [{ LineNumber: 1, Свойство_Key: prop, Значение: data.ogrn }];
+    if (prop)
+      fields["ДополнительныеРеквизиты"] = [{ LineNumber: 1, Свойство_Key: prop, Значение: data.ogrn }];
     else
       notes.push(
         "ОГРН не записан: в этой базе нет дополнительного реквизита «ОГРН» для контрагентов. Заведите его в 1С (Администрирование → Дополнительные реквизиты), либо вносите ОГРН вручную.",
@@ -62,13 +78,7 @@ async function counterpartyExtras(
 }
 
 /** Виды договоров (Enum_ВидыДоговоровКонтрагентов). */
-const CONTRACT_KINDS = [
-  "СПокупателем",
-  "СПоставщиком",
-  "Прочее",
-  "СКомиссионером",
-  "СКомитентом",
-] as const;
+const CONTRACT_KINDS = ["СПокупателем", "СПоставщиком", "Прочее", "СКомиссионером", "СКомитентом"] as const;
 
 /** Ставки НДС (Enum_СтавкиНДС), подмножество ходовых. */
 const VAT_RATES = ["БезНДС", "НДС0", "НДС5", "НДС7", "НДС10", "НДС20", "НДС22"] as const;
@@ -168,7 +178,10 @@ const rowsTotal = (rows: Array<Record<string, unknown>>): number =>
   Math.round(rows.reduce((s, r) => s + (r["Сумма"] as number), 0) * 100) / 100;
 
 /** Строки табличной части «Товары» для поступления/реализации (Номенклатура_Key + счета). */
-function buildGoodsRows(lines: GoodsLine[], lineAccountsFor: LineAccountsFor): Array<Record<string, unknown>> {
+function buildGoodsRows(
+  lines: GoodsLine[],
+  lineAccountsFor: LineAccountsFor,
+): Array<Record<string, unknown>> {
   return lines.map((l, i) =>
     clean({
       LineNumber: i + 1,
@@ -294,7 +307,17 @@ async function goodsAccounts(
     };
   }
   // shipment (товары) и service (услуги) — продажа: Дт 62 Кт 90, у товаров ещё Дт 90 Кт 41.
-  const codes = await accountsByCode(conn, ["41.01", "41", "62.01", "62", "90.01.1", "90.01", "90.02.1", "90.02", "90.03"]);
+  const codes = await accountsByCode(conn, [
+    "41.01",
+    "41",
+    "62.01",
+    "62",
+    "90.01.1",
+    "90.01",
+    "90.02.1",
+    "90.02",
+    "90.03",
+  ]);
   const defaults: NomAccounts = {
     goods: pickAccount(codes, "41.01", "41"),
     income: pickAccount(codes, "90.01.1", "90.01"),
@@ -615,12 +638,15 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         organization: organizationField,
         counterpartyRef: z.string().describe("Ref_Key контрагента (владелец договора)"),
         name: z.string().min(1).describe("Наименование/номер договора (Description)"),
-        kind: z
-          .enum(CONTRACT_KINDS)
-          .default("СПокупателем")
-          .describe("Вид договора"),
-        currency: z.string().optional().describe("Валюта взаиморасчётов — код (напр. 643/840) или название (RUB/USD)"),
-        priceType: z.string().optional().describe("Тип цен — название или код (из справочника Типы цен номенклатуры)"),
+        kind: z.enum(CONTRACT_KINDS).default("СПокупателем").describe("Вид договора"),
+        currency: z
+          .string()
+          .optional()
+          .describe("Валюта взаиморасчётов — код (напр. 643/840) или название (RUB/USD)"),
+        priceType: z
+          .string()
+          .optional()
+          .describe("Тип цен — название или код (из справочника Типы цен номенклатуры)"),
         confirm: confirmField,
       },
     },
@@ -631,9 +657,15 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const org = await resolveOrg(conn, organization);
 
         let cur: { ref: string; code?: string } | undefined;
-        if (currency) cur = await resolveCatalogItem(conn, CATALOGS.currencies, "Справочник «Валюты»", currency);
+        if (currency)
+          cur = await resolveCatalogItem(conn, CATALOGS.currencies, "Справочник «Валюты»", currency);
         const pt = priceType
-          ? await resolveCatalogItem(conn, CATALOGS.priceTypes, "Справочник «Типы цен номенклатуры»", priceType)
+          ? await resolveCatalogItem(
+              conn,
+              CATALOGS.priceTypes,
+              "Справочник «Типы цен номенклатуры»",
+              priceType,
+            )
           : undefined;
         const foreign = cur ? cur.code !== "643" : undefined; // 643 = рубль
 
@@ -683,7 +715,11 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, organization, counterpartyRef, contractRef, date, sumIncludesVat, lines, confirm }) =>
       guard("create_invoice", async () => {
         const conn = ctx.db(database);
-        const set = await requireEntity(conn, DOCUMENTS.customerInvoice, "Документ «Счёт на оплату покупателю»");
+        const set = await requireEntity(
+          conn,
+          DOCUMENTS.customerInvoice,
+          "Документ «Счёт на оплату покупателю»",
+        );
         const org = await resolveOrg(conn, organization);
         const rows = buildInvoiceRows(lines);
         const payload = clean({
@@ -741,7 +777,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       title: "Изменить объект (общий)",
       description:
         "Изменяет произвольные поля объекта 1С через PATCH по Ref_Key. Имена полей — технические " +
-        "(узнать через describe_entity), напр. {\"ИНН\":\"7701234567\"}. По умолчанию предпросмотр (dry-run); " +
+        '(узнать через describe_entity), напр. {"ИНН":"7701234567"}. По умолчанию предпросмотр (dry-run); ' +
         "применение — при confirm=true. Мощный инструмент: меняйте только те поля, что указали.",
       inputSchema: {
         database: databaseField,
@@ -799,11 +835,13 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           const kinds = await contactKindsForCounterparties(conn);
           const guid = ref.replace(/[{}']/g, "");
           const existing =
-            ((await conn.client.getEntity(`${set}(guid'${guid}')${buildQuery({})}`))["КонтактнаяИнформация"] as Array<
-              Record<string, unknown>
-            >) ?? [];
+            ((await conn.client.getEntity(`${set}(guid'${guid}')${buildQuery({})}`))[
+              "КонтактнаяИнформация"
+            ] as Array<Record<string, unknown>>) ?? [];
           const replacedTypes = new Set(
-            [phone && kinds.phone?.тип, email && kinds.email?.тип, address && kinds.address?.тип].filter(Boolean),
+            [phone && kinds.phone?.тип, email && kinds.email?.тип, address && kinds.address?.тип].filter(
+              Boolean,
+            ),
           );
           const kept = existing.filter((r) => !replacedTypes.has(String(r["Тип"])));
           const merged = [...kept, ...buildContactRows(kinds, { phone, email, address })].map((r, i) => ({
@@ -814,7 +852,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         }
         if (ogrn) {
           const prop = await resolveAdditionalProperty(conn, "ОГРН");
-          if (prop) fields["ДополнительныеРеквизиты"] = [{ LineNumber: 1, Свойство_Key: prop, Значение: ogrn }];
+          if (prop)
+            fields["ДополнительныеРеквизиты"] = [{ LineNumber: 1, Свойство_Key: prop, Значение: ogrn }];
           else notes.push("ОГРН не записан: в базе нет доп.реквизита «ОГРН» для контрагентов.");
         }
         if (Object.keys(fields).length === 0) return fail("Не задано ни одного поля для изменения.");
@@ -881,7 +920,17 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "По умолчанию dry-run; создание — при confirm=true. Контрагент — поставщик, договор — вида «СПоставщиком».",
       inputSchema: goodsDocInput,
     },
-    ({ database, organization, counterpartyRef, contractRef, warehouse, date, sumIncludesVat, lines, confirm }) =>
+    ({
+      database,
+      organization,
+      counterpartyRef,
+      contractRef,
+      warehouse,
+      date,
+      sumIncludesVat,
+      lines,
+      confirm,
+    }) =>
       guard("create_purchase", async () => {
         const conn = ctx.db(database);
         const set = await requireEntity(conn, DOCUMENTS.purchases, "Документ «Поступление товаров и услуг»");
@@ -891,7 +940,17 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         return createGoodsDoc(
           conn,
           set,
-          { orgKey: org.key, counterpartyRef, contractRef, warehouseKey, date, sumIncludesVat, lines, settlement, lineAccountsFor },
+          {
+            orgKey: org.key,
+            counterpartyRef,
+            contractRef,
+            warehouseKey,
+            date,
+            sumIncludesVat,
+            lines,
+            settlement,
+            lineAccountsFor,
+          },
           confirm,
         );
       }),
@@ -907,7 +966,17 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "По умолчанию dry-run; создание — при confirm=true. Контрагент — покупатель, договор — вида «СПокупателем».",
       inputSchema: goodsDocInput,
     },
-    ({ database, organization, counterpartyRef, contractRef, warehouse, date, sumIncludesVat, lines, confirm }) =>
+    ({
+      database,
+      organization,
+      counterpartyRef,
+      contractRef,
+      warehouse,
+      date,
+      sumIncludesVat,
+      lines,
+      confirm,
+    }) =>
       guard("create_shipment", async () => {
         const conn = ctx.db(database);
         const set = await requireEntity(conn, DOCUMENTS.sales, "Документ «Реализация товаров и услуг»");
@@ -917,7 +986,17 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         return createGoodsDoc(
           conn,
           set,
-          { orgKey: org.key, counterpartyRef, contractRef, warehouseKey, date, sumIncludesVat, lines, settlement, lineAccountsFor },
+          {
+            orgKey: org.key,
+            counterpartyRef,
+            contractRef,
+            warehouseKey,
+            date,
+            sumIncludesVat,
+            lines,
+            settlement,
+            lineAccountsFor,
+          },
           confirm,
         );
       }),
@@ -955,13 +1034,23 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         ensurePublished(await conn.available(), entitySet);
         const info = await getDocInfo(conn, entitySet, ref.replace(/[{}']/g, ""));
         if (info.posted) {
-          return fail("Документ проведён. Сначала отмените проведение (post_document с post=false), затем меняйте строки.");
+          return fail(
+            "Документ проведён. Сначала отмените проведение (post_document с post=false), затем меняйте строки.",
+          );
         }
         const built = await buildSectionRows(conn, entitySet, info.orgKey, lines);
         if (!built) {
-          return fail("Поддерживаются: счёт покупателю, поступление товаров и услуг, реализация товаров и услуг.");
+          return fail(
+            "Поддерживаются: счёт покупателю, поступление товаров и услуг, реализация товаров и услуг.",
+          );
         }
-        return patchOrPreview(conn, entitySet, ref, { Товары: built.rows, СуммаДокумента: built.total }, confirm);
+        return patchOrPreview(
+          conn,
+          entitySet,
+          ref,
+          { Товары: built.rows, СуммаДокумента: built.total },
+          confirm,
+        );
       }),
   );
 
@@ -979,7 +1068,13 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       description:
         "Добавляет одну позицию в табличную часть «Товары» существующего НЕПРОВЕДЁННОГО документа " +
         "(счёт/поступление/реализация), сохраняя прежние строки. dry-run/confirm.",
-      inputSchema: { database: databaseField, entitySet: z.string(), ref: z.string(), line: lineObject, confirm: confirmField },
+      inputSchema: {
+        database: databaseField,
+        entitySet: z.string(),
+        ref: z.string(),
+        line: lineObject,
+        confirm: confirmField,
+      },
     },
     ({ database, entitySet, ref, line, confirm }) =>
       guard("add_document_line", async () => {
@@ -989,7 +1084,13 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         if (info.posted) return fail("Документ проведён. Сначала отмените проведение, затем меняйте строки.");
         const built = await buildSectionRows(conn, entitySet, info.orgKey, [...info.lines, line]);
         if (!built) return fail("Поддерживаются: счёт, поступление, реализация.");
-        return patchOrPreview(conn, entitySet, ref, { Товары: built.rows, СуммаДокумента: built.total }, confirm);
+        return patchOrPreview(
+          conn,
+          entitySet,
+          ref,
+          { Товары: built.rows, СуммаДокумента: built.total },
+          confirm,
+        );
       }),
   );
 
@@ -1016,10 +1117,17 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         if (info.posted) return fail("Документ проведён. Сначала отмените проведение, затем меняйте строки.");
         if (lineNumber > info.lines.length) return fail(`В документе всего ${info.lines.length} строк(и).`);
         const kept = info.lines.filter((_, i) => i + 1 !== lineNumber);
-        if (kept.length === 0) return fail("Нельзя удалить последнюю строку — в документе должна остаться хотя бы одна позиция.");
+        if (kept.length === 0)
+          return fail("Нельзя удалить последнюю строку — в документе должна остаться хотя бы одна позиция.");
         const built = await buildSectionRows(conn, entitySet, info.orgKey, kept);
         if (!built) return fail("Поддерживаются: счёт, поступление, реализация.");
-        return patchOrPreview(conn, entitySet, ref, { Товары: built.rows, СуммаДокумента: built.total }, confirm);
+        return patchOrPreview(
+          conn,
+          entitySet,
+          ref,
+          { Товары: built.rows, СуммаДокумента: built.total },
+          confirm,
+        );
       }),
   );
 
@@ -1079,7 +1187,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         counterpartyRef: z.string().describe("Ref_Key покупателя"),
         contractRef: z.string().describe("Ref_Key договора"),
         amount: z.number().positive().describe("Сумма оплаты"),
-        bankAccount: z.string().optional().describe("Название банковского счёта организации (если несколько)"),
+        bankAccount: z
+          .string()
+          .optional()
+          .describe("Название банковского счёта организации (если несколько)"),
         date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
         confirm: confirmField,
       },
@@ -1156,7 +1267,19 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           Банк_Key: bank.ref,
           ВалютаДенежныхСредств_Key: cur.ref,
         });
-        return createSubordinate(conn, set, payload, confirm, makeMain ? { ownerSet: await resolveSet(conn, CATALOGS.counterparties, "Контрагенты"), ownerRef, field: "ОсновнойБанковскийСчет_Key" } : undefined);
+        return createSubordinate(
+          conn,
+          set,
+          payload,
+          confirm,
+          makeMain
+            ? {
+                ownerSet: await resolveSet(conn, CATALOGS.counterparties, "Контрагенты"),
+                ownerRef,
+                field: "ОсновнойБанковскийСчет_Key",
+              }
+            : undefined,
+        );
       }),
   );
 
@@ -1190,7 +1313,19 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           ОбъектВладелец: ownerRef,
           ОбъектВладелец_Type: COUNTERPARTY_TYPE,
         });
-        return createSubordinate(conn, set, payload, confirm, makeMain ? { ownerSet: await resolveSet(conn, CATALOGS.counterparties, "Контрагенты"), ownerRef, field: "ОсновноеКонтактноеЛицо_Key" } : undefined);
+        return createSubordinate(
+          conn,
+          set,
+          payload,
+          confirm,
+          makeMain
+            ? {
+                ownerSet: await resolveSet(conn, CATALOGS.counterparties, "Контрагенты"),
+                ownerRef,
+                field: "ОсновноеКонтактноеЛицо_Key",
+              }
+            : undefined,
+        );
       }),
   );
 }

@@ -28,6 +28,11 @@
     "dev": "tsc --watch",
     "probe": "node dist/scripts/probe-metadata.js",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
     "prepublishOnly": "npm run build && node --eval \"require('fs').rmSync('dist/scripts',{recursive:true,force:true})\""
   },
   "keywords": [
@@ -63,7 +68,13 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.10.0",
-    "typescript": "^5.7.0"
+    "eslint": "^10.5.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.8.4",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.61.1",
+    "vitest": "^4.1.9"
   }
 }
