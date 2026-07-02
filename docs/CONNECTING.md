@@ -160,7 +160,7 @@ cp .env.example .env      # заполните ODATA_BASE_URL / USERNAME / PASSW
 {
   "mcpServers": {
     "1c-odata": {
-      "command": "/opt/homebrew/opt/node@22/bin/node",
+      "command": "/opt/homebrew/bin/node",
       "args": [
         "--env-file=/Users/<вы>/Projects/1c-odata-mcp/.env",
         "/Users/<вы>/Projects/1c-odata-mcp/dist/index.js"
@@ -173,8 +173,14 @@ cp .env.example .env      # заполните ODATA_BASE_URL / USERNAME / PASSW
 Тонкости варианта Б (именно из-за них бывает «непросто»):
 
 - **Абсолютный путь к `node`.** GUI-приложение Claude Desktop может не видеть `node`
-  из вашего PATH. Укажите полный путь (`which node`). На Apple Silicon с Homebrew это
-  обычно `/opt/homebrew/opt/node@22/bin/node`.
+  из вашего PATH. Укажите полный путь (`which node`).
+  - ⚠️ **Не указывайте версионный путь** вроде `/opt/homebrew/opt/node@22/bin/node` —
+    после `brew upgrade` (напр. node@22 → node@24) этот путь перестаёт существовать,
+    и Claude Desktop падает с «Failed to spawn process: No such file or directory»
+    без объяснений в интерфейсе.
+  - На Apple Silicon с Homebrew используйте **generic-симлинк**
+    `/opt/homebrew/bin/node` — brew сам переключает его на актуальную версию при
+    каждом апгрейде, конфиг не ломается. (На Intel-Mac — `/usr/local/bin/node`.)
 - **Абсолютные пути** к `.env` и `dist/index.js` (не относительные, не `~`).
 - **`--env-file` требует Node 20.6+** (`node -v`).
 
@@ -196,7 +202,7 @@ node --env-file=.env dist/scripts/probe-mcp.js        # end-to-end по прот
 # через npx
 claude mcp add 1c-odata -s user --env ODATA_BASE_URL=… --env ODATA_USERNAME=… --env ODATA_PASSWORD=… -- npx -y 1c-odata-mcp
 # или из исходников
-claude mcp add 1c-odata -s user -- /opt/homebrew/opt/node@22/bin/node \
+claude mcp add 1c-odata -s user -- /opt/homebrew/bin/node \
   --env-file=/Users/<вы>/Projects/1c-odata-mcp/.env \
   /Users/<вы>/Projects/1c-odata-mcp/dist/index.js
 ```
@@ -228,6 +234,7 @@ claude mcp add 1c-odata -s user -- /opt/homebrew/opt/node@22/bin/node \
 | **Зависает / таймаут даже на `health_check` и `list_databases`** | Claude Desktop | Залип/задвоился MCP-процесс (мелкие вызовы не могут «думать» минутами) | Полный перезапуск приложения (Cmd+Q и заново); здоровый `health_check` отвечает за секунду |
 | **«База недоступна» / отвечает только одна база** | вызов с `database` | Указано «человеческое» название (label) вместо имени базы | `database` = поле `name` из `list_databases` (напр. `ooo`), **не** label («ООО Ромашка») |
 | **Медленно (десятки секунд)** | годовые выборки | Латентность вашей 1С / хостинга, не Claude | Сузить период (квартал/месяц); большие итоги считаются дольше |
+| **«Failed to spawn process: No such file or directory»** | Claude Desktop, сразу при старте | В конфиге версионный путь к `node` (напр. `node@22`), а Homebrew обновил версию (`brew upgrade`) и старый путь исчез | Заменить `command` на generic-путь `/opt/homebrew/bin/node` (Apple Silicon) или `/usr/local/bin/node` (Intel) — он не привязан к версии; проверить `ls -la $(which node)`; Cmd+Q и заново |
 
 ---
 

@@ -5,6 +5,15 @@
 
 ## [Не выпущено]
 
+### Добавлено
+- `docs/CONNECTING.md`: предупреждение и строка диагностики про версионные пути
+  к `node` в конфиге Claude Desktop (`node@22`, `node@24` и т.п.) — после
+  `brew upgrade` такой путь перестаёт существовать, и Claude Desktop падает с
+  «Failed to spawn process: No such file or directory» без объяснений в
+  интерфейсе. Примеры конфига переведены на generic-путь `/opt/homebrew/bin/node`
+  (Apple Silicon) / `/usr/local/bin/node` (Intel), который Homebrew сам
+  переключает на актуальную версию.
+
 ## [0.1.9] — 2026-06-23
 
 ### Исправлено
