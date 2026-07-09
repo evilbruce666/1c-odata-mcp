@@ -7,6 +7,7 @@ import { registerDocumentTools } from "../tools/documents.js";
 import { registerRegisterTools } from "../tools/registers.js";
 import { registerCashflowTools } from "../tools/cashflow.js";
 import { registerSalesTools } from "../tools/sales.js";
+import { registerOrganizationTools } from "../tools/organization.js";
 import { registerWriteTools } from "../tools/write.js";
 import { READ_HINTS, WRITE_HINTS, DESTRUCTIVE_HINTS } from "../tools/_shared.js";
 
@@ -55,6 +56,7 @@ export function createServer(ctx: ServerContext): McpServer {
   registerRegisterTools(server, ctx);
   registerCashflowTools(server, ctx);
   registerSalesTools(server, ctx);
+  registerOrganizationTools(server, ctx);
   registerWriteTools(server, ctx);
 
   return server;

@@ -9,7 +9,7 @@ import { requireEntity } from "./publication.js";
  * виды контактной информации, банк по БИК, доп.реквизиты.
  */
 
-const KI_KINDS = ["Catalog_ВидыКонтактнойИнформации"] as const;
+export const KI_KINDS = ["Catalog_ВидыКонтактнойИнформации"] as const;
 const BANKS = ["Catalog_Банки"] as const;
 const ADD_PROPS = ["ChartOfCharacteristicTypes_ДополнительныеРеквизитыИСведения"] as const;
 

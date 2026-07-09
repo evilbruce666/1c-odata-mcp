@@ -17,6 +17,7 @@ export const CATALOGS = {
   currencies: ["Catalog_Валюты"],
   priceTypes: ["Catalog_ТипыЦенНоменклатуры", "Catalog_ТипыЦен"],
   cashflowItems: ["Catalog_СтатьиДвиженияДенежныхСредств"],
+  physicalPersons: ["Catalog_ФизическиеЛица"],
 } as const;
 
 export const DOCUMENTS = {
@@ -36,6 +37,11 @@ export const REGISTERS = {
   accounting: ["AccountingRegister_Хозрасчетный"],
   /** Остатки товаров по складам. */
   stock: ["AccumulationRegister_ТоварыНаСкладах", "AccumulationRegister_ТоварыОрганизаций"],
+  /** Периодический регистр: директор/гл.бухгалтер/кассир организации (может быть не опубликован). */
+  responsiblePersons: [
+    "InformationRegister_ОтветственныеЛицаОрганизаций",
+    "InformationRegister_ОтветственныеЛицаОрганизации",
+  ],
 } as const;
 
 /**

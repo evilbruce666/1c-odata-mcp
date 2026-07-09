@@ -57,3 +57,19 @@ export async function resolveOrganization(conn: Connection, query: string): Prom
     inn: r["ИНН"] ? String(r["ИНН"]) : undefined,
   };
 }
+
+/**
+ * Резолвит организацию по названию; без названия — авто-выбор, если в базе
+ * ровно одна. Общий хелпер для всех инструментов с необязательным `organization`.
+ */
+export async function resolveOrgOrDefault(
+  conn: Connection,
+  organization: string | undefined,
+): Promise<Organization> {
+  if (organization) return resolveOrganization(conn, organization);
+  const orgs = await listOrganizations(conn);
+  if (orgs.length === 1) return orgs[0]!;
+  throw new Error(
+    `В базе несколько организаций — укажите organization. Доступные: ${orgs.map((o) => o.name).join(", ")}`,
+  );
+}

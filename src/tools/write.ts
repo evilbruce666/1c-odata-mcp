@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
 import { ok, fail, guard, databaseField, organizationField } from "./_shared.js";
 import { CATALOGS, DOCUMENTS, resolveEntity } from "../config/mapping.js";
-import { listOrganizations, resolveOrganization } from "../odata/orgs.js";
+import { resolveOrgOrDefault } from "../odata/orgs.js";
 import { ensurePublished, requireEntity } from "../odata/publication.js";
 import { accountsByCode, nomenclatureAccounts, type NomAccounts } from "../odata/accounting.js";
 import {
@@ -98,18 +98,8 @@ async function resolveOrg(
   conn: Connection,
   organization: string | undefined,
 ): Promise<{ key: string; name: string }> {
-  if (organization) {
-    const o = await resolveOrganization(conn, organization);
-    return { key: o.ref, name: o.name };
-  }
-  const orgs = await listOrganizations(conn);
-  if (orgs.length === 1) {
-    const only = orgs[0] as { ref: string; name: string };
-    return { key: only.ref, name: only.name };
-  }
-  throw new Error(
-    `В базе несколько организаций — укажите organization. Доступные: ${orgs.map((o) => o.name).join(", ")}`,
-  );
+  const o = await resolveOrgOrDefault(conn, organization);
+  return { key: o.ref, name: o.name };
 }
 
 /** Резолвит склад по названию; если не задан и склад один — берёт его; иначе undefined. */
