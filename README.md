@@ -124,18 +124,23 @@ Claude: Готово: контрагент 00-000123, счёт № … (черн
 
 ## Инструменты
 
-У всех инструментов есть необязательный параметр **`database`** (какая база 1С — см. `list_databases`); у аналитических — ещё и **`organization`** (фильтр по юрлицу — см. `list_organizations`).
+42 инструмента (21 чтение/аналитика + 21 запись). У всех есть необязательный параметр **`database`** (какая база 1С — см. `list_databases`); у аналитических — ещё и **`organization`** (фильтр по юрлицу — см. `list_organizations`).
 
 **Чтение и аналитика:**
 
 | Инструмент | Что делает |
 |---|---|
 | `list_databases` / `list_organizations` | Список баз / организаций (для параметров `database` / `organization`) |
+| `get_organization_card` | Карточка организации: ИНН/КПП/ОГРН, ОКВЭД, налоговый орган, адреса, банковский счёт, директор и главный бухгалтер |
 | `list_entities` / `describe_entity` | Карта объектов базы и поля конкретного объекта (из `$metadata`) |
 | `find_counterparty` / `get_counterparty` | Поиск контрагента (по названию/ИНН) и его карточка |
 | `search_documents` / `get_document` | Поиск документов и документ с табличной частью |
-| `get_debtors` / `get_inventory` | Дебиторка (сч. 62) / остатки товаров (сч. 41/10/43) |
+| `get_debtors` / `get_inventory` | Дебиторка (сч. 62) / остатки товаров (сч. 41/10/43), можно на дату в прошлом (`asOf`) |
 | `get_sales` / `get_cashflow` | Продажи за период / движение денег (банк + касса) |
+| `get_sales_breakdown` / `get_purchases_breakdown` | Продажи/закупки с разбивкой по контрагенту, месяцу, договору, категории (ИП/ЮрЛицо/…) |
+| `get_payments_breakdown` | Приход/расход по виду операции, месяцу, контрагенту, статье ДДС — «сколько заплатили ИП за год», «проценты по депозиту» |
+| `get_taxes_paid` | Уплаченные налоги и взносы за период, с разбивкой по виду налога |
+| `get_deal_history` | Хронология движений по сделке (код в назначении платежа) или договору |
 | `get_customer_history` / `get_supplier_history` | История взаиморасчётов с покупателем / поставщиком |
 | `health_check` | Проверка соединения и авторизации |
 
@@ -145,12 +150,13 @@ Claude: Готово: контрагент 00-000123, счёт № … (черн
 |---|---|
 | `create_counterparty` | Контрагент (+ телефон/email/адрес/ОГРН) |
 | `create_bank_account` / `create_contact_person` | Расчётный счёт (банк по БИК) / контактное лицо (директор) |
-| `create_nomenclature` | Номенклатура |
-| `create_contract` | Договор (вид, валюта, тип цен) |
-| `create_invoice` | Счёт покупателю (непроведённым) |
+| `create_nomenclature` | Номенклатура (папка, артикул, признак услуги) |
+| `create_contract` | Договор (вид, номер, валюта, тип цен, руководитель контрагента) |
+| `create_invoice` / `create_supplier_invoice` | Счёт покупателю / счёт на оплату поставщика (непроведёнными) |
 | `create_purchase` / `create_shipment` | Поступление от поставщика / реализация покупателю |
 | `create_act` | Реализация услуг (акт) |
 | `create_payment` | Оплата от покупателя (поступление на расчётный счёт) |
+| `create_folder` / `move_to_folder` | Папка (группа) справочника / перемещение в папку |
 | `update_counterparty` / `update_nomenclature` / `update_entity` | Изменение реквизитов (PATCH) |
 | `update_document_lines` / `add_document_line` / `remove_document_line` | Редактирование строк документа |
 | `post_document` | Провести / отменить проведение (1С формирует проводки) |
@@ -216,7 +222,8 @@ src/
   mcp/server.ts       инициализация MCP SDK, регистрация инструментов, stdio
   odata/              клиент, билдер запросов, пагинация, разбор $metadata, аналитика,
                       справочные резолверы, обработка ошибок, проверка публикации
-  tools/              инструменты: meta, counterparties, documents, registers, write
+  tools/              инструменты: meta, counterparties, documents, registers, cashflow,
+                      sales, organization, write
   config/             конфигурация (.env, мультибаза) и маппинг имён/счетов
   types/              типы OData и доменные типы
 ```
