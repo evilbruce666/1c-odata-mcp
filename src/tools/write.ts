@@ -1909,6 +1909,202 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       }),
   );
 
+  // === Фаза 2: денежные документы (списание с р/с, ПКО, РКО) ===
+
+  /**
+   * Строка «Расшифровка платежа» для взаиморасчётов с контрагентом. Заполняется
+   * только для операций оплаты поставщику/от покупателя при заданном договоре —
+   * иначе платёж без взаиморасчётов (налог/ЗП/взнос), ТЧ не нужна.
+   */
+  async function buildSettlementRow(
+    conn: Connection,
+    operationKind: string,
+    contractRef: string | undefined,
+    amount: number,
+  ): Promise<{ settle?: string; row: Record<string, unknown> } | undefined> {
+    const supplier = /Поставщик/i.test(operationKind);
+    const customer = /Покупател/i.test(operationKind);
+    if (!contractRef || (!supplier && !customer)) return undefined;
+    const codes = await accountsByCode(conn, supplier ? ["60.01", "60", "60.02"] : ["62.01", "62", "62.02"]);
+    const settle = pickAccount(codes, supplier ? "60.01" : "62.01", supplier ? "60" : "62");
+    const advance = pickAccount(codes, supplier ? "60.02" : "62.02");
+    return {
+      settle,
+      row: clean({
+        LineNumber: 1,
+        ДоговорКонтрагента_Key: contractRef,
+        СпособПогашенияЗадолженности: "Автоматически",
+        СуммаПлатежа: amount,
+        СтавкаНДС: "БезНДС",
+        СчетУчетаРасчетовСКонтрагентом_Key: settle,
+        СчетУчетаРасчетовПоАвансам_Key: advance,
+      }),
+    };
+  }
+
+  const cpTypeOf = async (conn: Connection): Promise<Record<string, string>> => {
+    const cpSet = resolveEntity(CATALOGS.counterparties, await conn.available());
+    return cpSet ? { Контрагент_Type: `StandardODATA.${cpSet}` } : {};
+  };
+
+  server.registerTool(
+    "create_bank_writeoff",
+    {
+      title: "Создать списание с расчётного счёта",
+      description:
+        "Создаёт документ «Списание с расчётного счёта» (исходящий платёж с банка). НЕПРОВЕДЁННЫЙ; " +
+        "провести — post_document. Вид операции ОБЯЗАТЕЛЕН и не угадывается (напр. «ОплатаПоставщику», " +
+        "«ПеречислениеНалога», «ПеречислениеЗаработнойПлаты», «ПереводНаДругойСчет», «ПрочееСписание»). " +
+        "Для оплаты поставщику с договором заполняется расшифровка (сч. 60). dry-run/confirm.",
+      inputSchema: {
+        database: databaseField,
+        organization: organizationField,
+        operationKind: z
+          .string()
+          .describe(
+            "Вид операции (ОБЯЗАТЕЛЬНО, не угадывать): ОплатаПоставщику / ПеречислениеНалога / ПеречислениеЗаработнойПлаты / ПереводНаДругойСчет / ПрочееСписание …",
+          ),
+        amount: z.number().positive().describe("Сумма списания"),
+        counterpartyRef: z.string().optional().describe("Ref_Key контрагента (для расчётов)"),
+        contractRef: z.string().optional().describe("Ref_Key договора (для расшифровки взаиморасчётов)"),
+        purposeText: z.string().optional().describe("Назначение платежа (текст)"),
+        cashflowItemRef: z.string().optional().describe("Ref_Key статьи ДДС"),
+        bankAccount: z
+          .string()
+          .optional()
+          .describe("Название банковского счёта организации (если несколько)"),
+        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
+        comment: z.string().optional().describe("Комментарий"),
+        confirm: confirmField,
+      },
+    },
+    ({
+      database,
+      organization,
+      operationKind,
+      amount,
+      counterpartyRef,
+      contractRef,
+      purposeText,
+      cashflowItemRef,
+      bankAccount,
+      date,
+      comment,
+      confirm,
+    }) =>
+      guard("create_bank_writeoff", async () => {
+        const conn = ctx.db(database);
+        const set = await requireEntity(conn, DOCUMENTS.bankOut, "Документ «Списание с расчётного счёта»");
+        const org = await resolveOrg(conn, organization);
+        const bank = await resolveOrgBankAccount(conn, org.key, bankAccount);
+        const bd = await buildSettlementRow(conn, operationKind, contractRef, amount);
+        const payload = clean({
+          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Posted: false,
+          ВидОперации: operationKind,
+          Организация_Key: org.key,
+          СчетОрганизации_Key: bank,
+          ...(counterpartyRef ? { Контрагент: counterpartyRef, ...(await cpTypeOf(conn)) } : {}),
+          ДоговорКонтрагента_Key: contractRef,
+          СуммаДокумента: amount,
+          НазначениеПлатежа: purposeText,
+          СтатьяДвиженияДенежныхСредств_Key: cashflowItemRef,
+          Комментарий: comment,
+          СчетУчетаРасчетовСКонтрагентом_Key: bd?.settle,
+          ...(bd ? { РасшифровкаПлатежа: [bd.row] } : {}),
+        });
+        return createOrPreview(conn, set, payload, confirm);
+      }),
+  );
+
+  const cashDocInput = {
+    database: databaseField,
+    organization: organizationField,
+    operationKind: z.string().describe("Вид операции (ОБЯЗАТЕЛЬНО, не угадывать)"),
+    amount: z.number().positive().describe("Сумма"),
+    cashRef: z.string().optional().describe("Ref_Key кассы организации (СчетКасса)"),
+    counterpartyRef: z.string().optional().describe("Ref_Key контрагента (для расчётов)"),
+    contractRef: z.string().optional().describe("Ref_Key договора"),
+    basis: z.string().optional().describe("Основание (текст)"),
+    cashflowItemRef: z.string().optional().describe("Ref_Key статьи ДДС"),
+    date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
+    comment: z.string().optional().describe("Комментарий"),
+    confirm: confirmField,
+  };
+
+  const buildCashPayload = async (
+    conn: Connection,
+    org: { key: string },
+    a: {
+      operationKind: string;
+      amount: number;
+      cashRef?: string;
+      counterpartyRef?: string;
+      contractRef?: string;
+      basis?: string;
+      cashflowItemRef?: string;
+      date?: string;
+      comment?: string;
+    },
+  ): Promise<Record<string, unknown>> => {
+    const bd = await buildSettlementRow(conn, a.operationKind, a.contractRef, a.amount);
+    return clean({
+      Date: odataDate(a.date ? new Date(`${a.date}T00:00:00`) : new Date()),
+      Posted: false,
+      ВидОперации: a.operationKind,
+      Организация_Key: org.key,
+      СчетКасса_Key: a.cashRef,
+      ...(a.counterpartyRef ? { Контрагент: a.counterpartyRef, ...(await cpTypeOf(conn)) } : {}),
+      ДоговорКонтрагента_Key: a.contractRef,
+      СуммаДокумента: a.amount,
+      Основание: a.basis,
+      СтатьяДвиженияДенежныхСредств_Key: a.cashflowItemRef,
+      Комментарий: a.comment,
+      СчетУчетаРасчетовСКонтрагентом_Key: bd?.settle,
+      ...(bd ? { РасшифровкаПлатежа: [bd.row] } : {}),
+    });
+  };
+
+  server.registerTool(
+    "create_cash_receipt",
+    {
+      title: "Создать приходный кассовый ордер (ПКО)",
+      description:
+        "Создаёт «Приходный кассовый ордер» (приём наличных в кассу). НЕПРОВЕДЁННЫЙ; провести — post_document. " +
+        "Вид операции ОБЯЗАТЕЛЕН (напр. «ПоступлениеОплатыОтПокупателя», «ПрочийПриход», «ПолучениеНаличныхВБанке»). " +
+        "dry-run/confirm.",
+      inputSchema: cashDocInput,
+    },
+    (a) =>
+      guard("create_cash_receipt", async () => {
+        const conn = ctx.db(a.database);
+        const set = await requireEntity(conn, DOCUMENTS.cashIn, "Документ «Приходный кассовый ордер»");
+        const org = await resolveOrg(conn, a.organization);
+        const payload = await buildCashPayload(conn, org, a);
+        return createOrPreview(conn, set, payload, a.confirm);
+      }),
+  );
+
+  server.registerTool(
+    "create_cash_payment",
+    {
+      title: "Создать расходный кассовый ордер (РКО)",
+      description:
+        "Создаёт «Расходный кассовый ордер» (выдача наличных из кассы). НЕПРОВЕДЁННЫЙ; провести — post_document. " +
+        "Вид операции ОБЯЗАТЕЛЕН (напр. «ОплатаПоставщику», «ВыдачаПодотчетномуЛицу», «ВзносНаличнымиВБанк», " +
+        "«ВыплатаЗаработнойПлатыПоВедомостям»). dry-run/confirm.",
+      inputSchema: cashDocInput,
+    },
+    (a) =>
+      guard("create_cash_payment", async () => {
+        const conn = ctx.db(a.database);
+        const set = await requireEntity(conn, DOCUMENTS.cashOut, "Документ «Расходный кассовый ордер»");
+        const org = await resolveOrg(conn, a.organization);
+        const payload = await buildCashPayload(conn, org, a);
+        return createOrPreview(conn, set, payload, a.confirm);
+      }),
+  );
+
   server.registerTool(
     "create_bank_account",
     {
