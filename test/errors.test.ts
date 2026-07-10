@@ -27,4 +27,13 @@ describe("fromHttpStatus — классификация HTTP-ошибок OData"
     const body = JSON.stringify({ error: { message: { value: "Плохой фильтр" } } });
     expect(fromHttpStatus(400, "url", body).message).toContain("Плохой фильтр");
   });
+  it("вытаскивает сообщение из ключа odata.error (OData v3, реальный формат 1С)", () => {
+    const body = JSON.stringify({
+      "odata.error": {
+        code: "-1",
+        message: { lang: "ru", value: "Не удалось записать: Счет-фактура выданный!" },
+      },
+    });
+    expect(fromHttpStatus(500, "url", body).message).toContain("Не удалось записать");
+  });
 });

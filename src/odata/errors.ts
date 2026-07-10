@@ -83,10 +83,9 @@ export function fromHttpStatus(status: number, url: string, body?: string): ODat
 function extract1cMessage(body?: string): string | undefined {
   if (!body) return undefined;
   try {
-    const json = JSON.parse(body) as {
-      error?: { message?: { value?: string } | string };
-    };
-    const m = json.error?.message;
+    // OData v3 (1С) кладёт ошибку в ключ "odata.error", v2/v4 — в "error".
+    const json = JSON.parse(body) as Record<string, { message?: { value?: string } | string }>;
+    const m = (json["odata.error"] ?? json["error"])?.message;
     if (typeof m === "string") return m;
     if (m?.value) return m.value;
   } catch {
