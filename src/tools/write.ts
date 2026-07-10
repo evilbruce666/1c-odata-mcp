@@ -433,6 +433,25 @@ async function getDocInfo(
   return { orgKey: String(doc["Организация_Key"] ?? ""), posted: doc["Posted"] === true, lines };
 }
 
+/** Читает документ-основание счёта-фактуры: организация, контрагент, договор, суммы, НДС. */
+async function invoiceBasis(
+  conn: Connection,
+  entitySet: string,
+  ref: string,
+): Promise<{ org: string; counterparty: string; contract?: string; total: number; vat: number }> {
+  const guid = ref.replace(/[{}']/g, "");
+  const doc = await conn.client.getEntity(`${entitySet}(guid'${guid}')${buildQuery({})}`);
+  const rows = (doc["Товары"] as Array<Record<string, unknown>>) ?? [];
+  const vat = Math.round(rows.reduce((s, r) => s + Number(r["СуммаНДС"] ?? 0), 0) * 100) / 100;
+  return {
+    org: String(doc["Организация_Key"] ?? ""),
+    counterparty: String(doc["Контрагент_Key"] ?? doc["Контрагент"] ?? ""),
+    contract: (doc["ДоговорКонтрагента_Key"] as string) || undefined,
+    total: Number(doc["СуммаДокумента"] ?? 0),
+    vat,
+  };
+}
+
 /** Собирает строки табличной части под тип документа (счёт/поступление/реализация). */
 async function buildSectionRows(
   conn: Connection,
@@ -2102,6 +2121,125 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const org = await resolveOrg(conn, a.organization);
         const payload = await buildCashPayload(conn, org, a);
         return createOrPreview(conn, set, payload, a.confirm);
+      }),
+  );
+
+  server.registerTool(
+    "create_issued_invoice",
+    {
+      title: "Создать счёт-фактуру выданный",
+      description:
+        "Создаёт «Счёт-фактура выданный» НА ОСНОВАНИИ реализации (или иного документа отгрузки). " +
+        "Реквизиты (организация, контрагент, договор, суммы, НДС) наследуются от документа-основания. " +
+        "НЕПРОВЕДЁННЫЙ; провести — post_document. dry-run/confirm.",
+      inputSchema: {
+        database: databaseField,
+        baseDocumentRef: z.string().describe("Ref_Key документа-основания (реализация товаров и услуг)"),
+        baseDocumentEntity: z
+          .string()
+          .optional()
+          .describe(
+            "Имя набора документа-основания, если это не «Реализация…» (напр. Document_ОтчетКомитентуОПродажах)",
+          ),
+        operationCode: z.string().optional().describe("Код вида операции (по умолчанию 01)"),
+        date: z.string().optional().describe("Дата и дата выставления YYYY-MM-DD (по умолчанию сегодня)"),
+        confirm: confirmField,
+      },
+    },
+    ({ database, baseDocumentRef, baseDocumentEntity, operationCode, date, confirm }) =>
+      guard("create_issued_invoice", async () => {
+        const conn = ctx.db(database);
+        const set = await requireEntity(conn, DOCUMENTS.issuedInvoice, "Документ «Счёт-фактура выданный»");
+        const baseSet =
+          baseDocumentEntity ??
+          (await requireEntity(conn, DOCUMENTS.sales, "Документ-основание «Реализация товаров и услуг»"));
+        const b = await invoiceBasis(conn, baseSet, baseDocumentRef);
+        const d = odataDate(date ? new Date(`${date}T00:00:00`) : new Date());
+        const baseGuid = baseDocumentRef.replace(/[{}']/g, "");
+        const baseRow = clean({
+          LineNumber: 1,
+          ДокументОснование: baseGuid,
+          ДокументОснование_Type: `StandardODATA.${baseSet}`,
+        });
+        const payload = clean({
+          Date: d,
+          Posted: false,
+          ВидСчетаФактуры: "НаРеализацию",
+          Организация_Key: b.org,
+          Контрагент_Key: b.counterparty,
+          ДоговорКонтрагента_Key: b.contract,
+          ДокументОснование: baseGuid,
+          ДокументОснование_Type: `StandardODATA.${baseSet}`,
+          ДатаВыставления: d,
+          КодВидаОперации: operationCode ?? "01",
+          СуммаДокумента: b.total,
+          СуммаНДСДокумента: b.vat,
+          ДокументыОснования: [baseRow],
+        });
+        return createOrPreview(conn, set, payload, confirm);
+      }),
+  );
+
+  server.registerTool(
+    "create_received_invoice",
+    {
+      title: "Создать счёт-фактуру полученный",
+      description:
+        "Создаёт «Счёт-фактура полученный» НА ОСНОВАНИИ поступления товаров и услуг. " +
+        "Реквизиты наследуются от основания; дату входящего счёта-фактуры продавца указывают вручную " +
+        "(в поступлении её нет). НЕПРОВЕДЁННЫЙ; провести — post_document. dry-run/confirm.",
+      inputSchema: {
+        database: databaseField,
+        baseDocumentRef: z.string().describe("Ref_Key документа-основания (поступление товаров и услуг)"),
+        baseDocumentEntity: z
+          .string()
+          .optional()
+          .describe("Имя набора документа-основания, если это не «Поступление…»"),
+        incomingDate: z.string().optional().describe("Дата входящего счёта-фактуры продавца YYYY-MM-DD"),
+        operationCode: z.string().optional().describe("Код вида операции (по умолчанию 01)"),
+        date: z.string().optional().describe("Дата регистрации YYYY-MM-DD (по умолчанию сегодня)"),
+        confirm: confirmField,
+      },
+    },
+    ({ database, baseDocumentRef, baseDocumentEntity, incomingDate, operationCode, date, confirm }) =>
+      guard("create_received_invoice", async () => {
+        const conn = ctx.db(database);
+        const set = await requireEntity(
+          conn,
+          DOCUMENTS.receivedInvoice,
+          "Документ «Счёт-фактура полученный»",
+        );
+        const baseSet =
+          baseDocumentEntity ??
+          (await requireEntity(
+            conn,
+            DOCUMENTS.purchases,
+            "Документ-основание «Поступление товаров и услуг»",
+          ));
+        const b = await invoiceBasis(conn, baseSet, baseDocumentRef);
+        const baseGuid = baseDocumentRef.replace(/[{}']/g, "");
+        const baseRow = clean({
+          LineNumber: 1,
+          ДокументОснование: baseGuid,
+          ДокументОснование_Type: `StandardODATA.${baseSet}`,
+        });
+        const payload = clean({
+          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Posted: false,
+          ВидСчетаФактуры: "НаПоступление",
+          Организация_Key: b.org,
+          Контрагент_Key: b.counterparty,
+          ДоговорКонтрагента_Key: b.contract,
+          ДатаВходящегоДокумента: incomingDate ? odataDate(new Date(`${incomingDate}T00:00:00`)) : undefined,
+          ДокументОснование: baseGuid,
+          ДокументОснование_Type: `StandardODATA.${baseSet}`,
+          НДСПредъявленКВычету: true,
+          КодВидаОперации: operationCode ?? "01",
+          СуммаДокумента: b.total,
+          СуммаНДСДокумента: b.vat,
+          ДокументыОснования: [baseRow],
+        });
+        return createOrPreview(conn, set, payload, confirm);
       }),
   );
 

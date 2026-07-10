@@ -30,6 +30,9 @@ export const DOCUMENTS = {
   paymentOrder: ["Document_ПлатежноеПоручение"],
   cashIn: ["Document_ПриходныйКассовыйОрдер"],
   cashOut: ["Document_РасходныйКассовыйОрдер"],
+  // Счета-фактуры (фаза 3) — создаются на основании реализации/поступления.
+  issuedInvoice: ["Document_СчетФактураВыданный"],
+  receivedInvoice: ["Document_СчетФактураПолученный"],
   // Товарные складские документы (фаза 1).
   returnFromCustomer: ["Document_ВозвратТоваровОтПокупателя"],
   returnToSupplier: ["Document_ВозвратТоваровПоставщику"],
