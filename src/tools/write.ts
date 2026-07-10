@@ -456,6 +456,26 @@ async function resolveOrgBankAccount(
   }
 }
 
+/** Валюта документа по умолчанию: код 643 (рубль), иначе — единственная в справочнике. */
+async function resolveDefaultCurrency(conn: Connection): Promise<string | undefined> {
+  const set = resolveEntity(CATALOGS.currencies, await conn.available());
+  if (!set) return undefined;
+  try {
+    const byCode = await fetchAll(
+      conn.client,
+      set,
+      { filter: cmp("Code", "eq", odataString("643")), select: ["Ref_Key"] },
+      2,
+      2,
+    );
+    if (byCode.rows[0]) return String(byCode.rows[0]["Ref_Key"]);
+    const all = await fetchAll(conn.client, set, { select: ["Ref_Key"] }, 2, 2);
+    return all.rows.length === 1 ? String((all.rows[0] as ODataEntity)["Ref_Key"]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const confirmField = z
   .boolean()
   .default(false)
@@ -1134,6 +1154,128 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           СуммаВключаетНДС: sumIncludesVat,
           СуммаДокумента: rowsTotal(rows),
           Товары: rows,
+        });
+        return createOrPreview(conn, set, payload, confirm);
+      }),
+  );
+
+  server.registerTool(
+    "create_payout_order",
+    {
+      title: "Создать платёжное поручение (исходящее) контрагенту",
+      description:
+        "Создаёт документ «Платёжное поручение» — исходящую выплату контрагенту (напр. оплата " +
+        "по агентскому договору / услугам, зеркало платёжки, уже ушедшей в банк). Документ ВСЕГДА " +
+        "создаётся НЕПРОВЕДЁННЫМ (Posted=false) — эта операция намеренно не проводит документ, " +
+        "проведение делайте отдельно через post_document, если вообще нужно. Номер (number) — " +
+        "задаётся явно вызывающим (обычно чтобы совпасть с номером уже отправленной банковской " +
+        "платёжки), не генерируется автоматически. По умолчанию dry-run (confirm=false); создание — " +
+        "при confirm=true. Счёт организации и валюта — резолвятся автоматически, если не заданы.",
+      inputSchema: {
+        database: databaseField,
+        organization: organizationField,
+        counterpartyRef: z.string().describe("Ref_Key контрагента-получателя (из find_counterparty)"),
+        counterpartyAccountRef: z
+          .string()
+          .optional()
+          .describe("Ref_Key банковского счёта контрагента (СчетКонтрагента_Key)"),
+        contractRef: z
+          .string()
+          .optional()
+          .describe("Ref_Key договора с контрагентом (ДоговорКонтрагента_Key)"),
+        amount: z.number().positive().describe("Сумма документа"),
+        number: z
+          .string()
+          .describe(
+            "Номер документа — задайте явно (напр. чтобы совпасть с номером банковской платёжки). " +
+              "1С автонумерует новые документы только если Number не передан вовсе — но здесь он обязателен.",
+          ),
+        date: z.string().optional().describe("Дата документа YYYY-MM-DD (по умолчанию сегодня)"),
+        purposeText: z.string().describe("Назначение платежа (НазначениеПлатежа)"),
+        recipientText: z.string().describe("Текст получателя — как печатается в платёжке (ТекстПолучателя)"),
+        recipientInn: z.string().optional().describe("ИНН получателя"),
+        recipientKpp: z.string().optional().describe("КПП получателя"),
+        payerText: z.string().optional().describe("Текст плательщика (по умолчанию — имя организации)"),
+        payerInn: z.string().optional().describe("ИНН плательщика (по умолчанию — ИНН организации)"),
+        orgAccountRef: z
+          .string()
+          .optional()
+          .describe(
+            "Ref_Key счёта организации-плательщика (СчетОрганизации_Key); без указания — подбирается",
+          ),
+        responsibleRef: z.string().optional().describe("Ref_Key ответственного (Ответственный_Key)"),
+        cashflowItemRef: z
+          .string()
+          .optional()
+          .describe("Ref_Key статьи движения денежных средств (СтатьяДвиженияДенежныхСредств_Key)"),
+        currencyRef: z.string().optional().describe("Ref_Key валюты документа; без указания — рубль (643)"),
+        vatRate: z.enum(VAT_RATES).default("БезНДС").describe("Ставка НДС"),
+        operationKind: z
+          .string()
+          .default("ОплатаПоставщику")
+          .describe("Вид операции (ВидОперации), напр. ОплатаПоставщику"),
+        priority: z.number().int().default(5).describe("Очередность платежа (ОчередностьПлатежа)"),
+        comment: z.string().optional().describe("Комментарий к документу"),
+        confirm: confirmField,
+      },
+    },
+    ({
+      database,
+      organization,
+      counterpartyRef,
+      counterpartyAccountRef,
+      contractRef,
+      amount,
+      number,
+      date,
+      purposeText,
+      recipientText,
+      recipientInn,
+      recipientKpp,
+      payerText,
+      payerInn,
+      orgAccountRef,
+      responsibleRef,
+      cashflowItemRef,
+      currencyRef,
+      vatRate,
+      operationKind,
+      priority,
+      comment,
+      confirm,
+    }) =>
+      guard("create_payout_order", async () => {
+        const conn = ctx.db(database);
+        const set = await requireEntity(conn, DOCUMENTS.paymentOrder, "Документ «Платёжное поручение»");
+        const org = await resolveOrgOrDefault(conn, organization);
+        const [resolvedOrgAccount, resolvedCurrency] = await Promise.all([
+          orgAccountRef ? Promise.resolve(orgAccountRef) : resolveOrgBankAccount(conn, org.ref, undefined),
+          currencyRef ? Promise.resolve(currencyRef) : resolveDefaultCurrency(conn),
+        ]);
+        const payload = clean({
+          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Posted: false,
+          Number: number,
+          Организация_Key: org.ref,
+          СчетОрганизации_Key: resolvedOrgAccount,
+          Контрагент: counterpartyRef,
+          Контрагент_Type: COUNTERPARTY_TYPE,
+          СчетКонтрагента_Key: counterpartyAccountRef,
+          ДоговорКонтрагента_Key: contractRef,
+          СуммаДокумента: amount,
+          СтавкаНДС: vatRate,
+          ВидОперации: operationKind,
+          ОчередностьПлатежа: priority,
+          НазначениеПлатежа: purposeText,
+          ТекстПолучателя: recipientText,
+          ИННПолучателя: recipientInn,
+          КПППолучателя: recipientKpp,
+          ТекстПлательщика: payerText ?? org.name,
+          ИННПлательщика: payerInn ?? org.inn,
+          Ответственный_Key: responsibleRef,
+          СтатьяДвиженияДенежныхСредств_Key: cashflowItemRef,
+          ВалютаДокумента_Key: resolvedCurrency,
+          Комментарий: comment,
         });
         return createOrPreview(conn, set, payload, confirm);
       }),
