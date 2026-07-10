@@ -30,6 +30,13 @@ export const DOCUMENTS = {
   paymentOrder: ["Document_ПлатежноеПоручение"],
   cashIn: ["Document_ПриходныйКассовыйОрдер"],
   cashOut: ["Document_РасходныйКассовыйОрдер"],
+  // Товарные складские документы (фаза 1).
+  returnFromCustomer: ["Document_ВозвратТоваровОтПокупателя"],
+  returnToSupplier: ["Document_ВозвратТоваровПоставщику"],
+  transfer: ["Document_ПеремещениеТоваров"],
+  surplus: ["Document_ОприходованиеТоваров"],
+  writeoff: ["Document_СписаниеТоваров"],
+  inventory: ["Document_ИнвентаризацияТоваровНаСкладе"],
 } as const;
 
 export const REGISTERS = {

@@ -396,6 +396,26 @@ async function goodsAccounts(
   };
 }
 
+/**
+ * Счёт учёта товаров (41.01) на строку — для складских документов без расчётов
+ * с контрагентом (перемещение/оприходование/списание/инвентаризация).
+ */
+async function goodsOnlyAccounts(
+  conn: Connection,
+  orgKey: string,
+  lines: GoodsLine[],
+): Promise<(nomRef: string) => Record<string, string>> {
+  const codes = await accountsByCode(conn, ["41.01", "41"]);
+  const defaults: NomAccounts = { goods: pickAccount(codes, "41.01", "41") };
+  const accMap = await resolveLineAccounts(
+    conn,
+    orgKey,
+    lines.map((l) => l.nomenclatureRef),
+    defaults,
+  );
+  return (nomRef) => clean({ СчетУчета_Key: accMap.get(nomRef)?.goods }) as Record<string, string>;
+}
+
 /** Читает документ: организация, проведён ли, и текущие строки «Товары» как GoodsLine[]. */
 async function getDocInfo(
   conn: Connection,
@@ -425,10 +445,32 @@ async function buildSectionRows(
     const rows = buildInvoiceRows(lines);
     return { rows, total: rowsTotal(rows) };
   }
-  if (inList(DOCUMENTS.purchases) || inList(DOCUMENTS.sales)) {
-    const kind = inList(DOCUMENTS.purchases) ? "purchase" : "shipment";
+  // Реализация/поступление и возвраты: возврат покупателя считается как реализация
+  // (Дт 90/62), возврат поставщику — как поступление (Дт 41/19).
+  if (
+    inList(DOCUMENTS.purchases) ||
+    inList(DOCUMENTS.sales) ||
+    inList(DOCUMENTS.returnFromCustomer) ||
+    inList(DOCUMENTS.returnToSupplier)
+  ) {
+    const kind = inList(DOCUMENTS.sales) || inList(DOCUMENTS.returnFromCustomer) ? "shipment" : "purchase";
     const { lineAccountsFor } = await goodsAccounts(conn, orgKey, lines, kind);
     const rows = buildGoodsRows(lines, lineAccountsFor);
+    return { rows, total: rowsTotal(rows) };
+  }
+  if (inList(DOCUMENTS.surplus) || inList(DOCUMENTS.writeoff) || inList(DOCUMENTS.transfer)) {
+    const lineAcc = await goodsOnlyAccounts(conn, orgKey, lines);
+    const withSum = !inList(DOCUMENTS.transfer); // у перемещения в ТЧ нет суммы
+    const rows = lines.map((l, i) =>
+      clean({
+        LineNumber: i + 1,
+        Номенклатура_Key: l.nomenclatureRef,
+        Количество: l.quantity,
+        Цена: l.price,
+        ...(withSum ? { Сумма: lineSum(l) } : {}),
+        ...lineAcc(l.nomenclatureRef),
+      }),
+    );
     return { rows, total: rowsTotal(rows) };
   }
   return undefined;
@@ -1366,7 +1408,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const built = await buildSectionRows(conn, entitySet, info.orgKey, lines);
         if (!built) {
           return fail(
-            "Поддерживаются: счёт покупателю, поступление товаров и услуг, реализация товаров и услуг.",
+            "Поддерживаются: счёт покупателю, поступление/реализация товаров и услуг, возвраты, " +
+              "перемещение, оприходование, списание товаров.",
           );
         }
         return patchOrPreview(
@@ -1376,6 +1419,309 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           { Товары: built.rows, СуммаДокумента: built.total },
           confirm,
         );
+      }),
+  );
+
+  // === Фаза 1: товарные складские документы ===
+
+  const whLines = z
+    .array(
+      z.object({
+        nomenclatureRef: z.string().describe("Ref_Key номенклатуры"),
+        quantity: z.number().positive().describe("Количество"),
+        price: z.number().nonnegative().default(0).describe("Цена за единицу (для оценки)"),
+      }),
+    )
+    .min(1)
+    .describe("Позиции документа");
+
+  const toGoodsLines = (
+    lines: Array<{ nomenclatureRef: string; quantity: number; price: number }>,
+  ): GoodsLine[] => lines.map((l) => ({ ...l, vatRate: "БезНДС" }));
+
+  server.registerTool(
+    "create_return_from_customer",
+    {
+      title: "Создать возврат товаров от покупателя",
+      description:
+        "Создаёт документ «Возврат товаров от покупателя» с табличной частью «Товары». НЕПРОВЕДЁННЫЙ; " +
+        "провести — post_document (проводки сторнируют реализацию: Дт 90.02 Кт 41, Дт 62 Кт 90.01 со знаком минус). " +
+        "dry-run/confirm. Контрагент — покупатель.",
+      inputSchema: goodsDocInput,
+    },
+    ({ database, organization, counterpartyRef, contractRef, warehouse, date, lines, confirm }) =>
+      guard("create_return_from_customer", async () => {
+        const conn = ctx.db(database);
+        const set = await requireEntity(
+          conn,
+          DOCUMENTS.returnFromCustomer,
+          "Документ «Возврат товаров от покупателя»",
+        );
+        const org = await resolveOrg(conn, organization);
+        const warehouseKey = await resolveWarehouse(conn, warehouse);
+        const { settlement, lineAccountsFor } = await goodsAccounts(conn, org.key, lines, "shipment");
+        const rows = buildGoodsRows(lines, lineAccountsFor);
+        const payload = clean({
+          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Posted: false,
+          Организация_Key: org.key,
+          Склад_Key: warehouseKey,
+          Контрагент_Key: counterpartyRef,
+          ДоговорКонтрагента_Key: contractRef,
+          СчетУчетаРасчетовСКонтрагентом_Key: settlement,
+          СуммаДокумента: rowsTotal(rows),
+          Товары: rows,
+        });
+        return createOrPreview(conn, set, payload, confirm);
+      }),
+  );
+
+  server.registerTool(
+    "create_return_to_supplier",
+    {
+      title: "Создать возврат товаров поставщику",
+      description:
+        "Создаёт документ «Возврат товаров поставщику» с табличной частью «Товары». НЕПРОВЕДЁННЫЙ; " +
+        "провести — post_document (проводки сторнируют поступление: Дт 60 Кт 41/19). dry-run/confirm. " +
+        "Контрагент — поставщик.",
+      inputSchema: goodsDocInput,
+    },
+    ({ database, organization, counterpartyRef, contractRef, warehouse, date, lines, confirm }) =>
+      guard("create_return_to_supplier", async () => {
+        const conn = ctx.db(database);
+        const set = await requireEntity(
+          conn,
+          DOCUMENTS.returnToSupplier,
+          "Документ «Возврат товаров поставщику»",
+        );
+        const org = await resolveOrg(conn, organization);
+        const warehouseKey = await resolveWarehouse(conn, warehouse);
+        const { settlement, lineAccountsFor } = await goodsAccounts(conn, org.key, lines, "purchase");
+        const rows = buildGoodsRows(lines, lineAccountsFor);
+        const payload = clean({
+          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Posted: false,
+          Организация_Key: org.key,
+          Склад_Key: warehouseKey,
+          Контрагент_Key: counterpartyRef,
+          ДоговорКонтрагента_Key: contractRef,
+          СчетУчетаРасчетовСКонтрагентом_Key: settlement,
+          СуммаДокумента: rowsTotal(rows),
+          Товары: rows,
+        });
+        return createOrPreview(conn, set, payload, confirm);
+      }),
+  );
+
+  server.registerTool(
+    "create_transfer",
+    {
+      title: "Создать перемещение товаров",
+      description:
+        "Создаёт документ «Перемещение товаров» между складами. НЕПРОВЕДЁННЫЙ; провести — post_document " +
+        "(проводки Дт 41(склад-получатель) Кт 41(склад-отправитель)). dry-run/confirm.",
+      inputSchema: {
+        database: databaseField,
+        organization: organizationField,
+        fromWarehouse: z.string().describe("Название склада-отправителя"),
+        toWarehouse: z.string().describe("Название склада-получателя"),
+        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
+        lines: whLines,
+        confirm: confirmField,
+      },
+    },
+    ({ database, organization, fromWarehouse, toWarehouse, date, lines, confirm }) =>
+      guard("create_transfer", async () => {
+        const conn = ctx.db(database);
+        const set = await requireEntity(conn, DOCUMENTS.transfer, "Документ «Перемещение товаров»");
+        const org = await resolveOrg(conn, organization);
+        const [fromKey, toKey] = await Promise.all([
+          resolveWarehouse(conn, fromWarehouse),
+          resolveWarehouse(conn, toWarehouse),
+        ]);
+        const lineAcc = await goodsOnlyAccounts(conn, org.key, toGoodsLines(lines));
+        const rows = lines.map((l, i) =>
+          clean({
+            LineNumber: i + 1,
+            Номенклатура_Key: l.nomenclatureRef,
+            Количество: l.quantity,
+            Цена: l.price,
+            ...lineAcc(l.nomenclatureRef),
+          }),
+        );
+        const payload = clean({
+          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Posted: false,
+          Организация_Key: org.key,
+          СкладОтправитель_Key: fromKey,
+          СкладПолучатель_Key: toKey,
+          Товары: rows,
+        });
+        return createOrPreview(conn, set, payload, confirm);
+      }),
+  );
+
+  server.registerTool(
+    "create_surplus",
+    {
+      title: "Создать оприходование товаров",
+      description:
+        "Создаёт документ «Оприходование товаров» (излишки). НЕПРОВЕДЁННЫЙ; провести — post_document " +
+        "(проводки Дт 41 Кт 91.01). Можно указать документ-основание — инвентаризацию. dry-run/confirm.",
+      inputSchema: {
+        database: databaseField,
+        organization: organizationField,
+        warehouse: z.string().optional().describe("Название склада (если несколько)"),
+        inventoryRef: z.string().optional().describe("Ref_Key инвентаризации-основания (необязательно)"),
+        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
+        lines: whLines,
+        confirm: confirmField,
+      },
+    },
+    ({ database, organization, warehouse, inventoryRef, date, lines, confirm }) =>
+      guard("create_surplus", async () => {
+        const conn = ctx.db(database);
+        const set = await requireEntity(conn, DOCUMENTS.surplus, "Документ «Оприходование товаров»");
+        const org = await resolveOrg(conn, organization);
+        const warehouseKey = await resolveWarehouse(conn, warehouse);
+        const lineAcc = await goodsOnlyAccounts(conn, org.key, toGoodsLines(lines));
+        const rows = lines.map((l, i) =>
+          clean({
+            LineNumber: i + 1,
+            Номенклатура_Key: l.nomenclatureRef,
+            Количество: l.quantity,
+            Цена: l.price,
+            Сумма: Math.round(l.quantity * l.price * 100) / 100,
+            ...lineAcc(l.nomenclatureRef),
+          }),
+        );
+        const payload = clean({
+          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Posted: false,
+          Организация_Key: org.key,
+          Склад_Key: warehouseKey,
+          ИнвентаризацияТоваровНаСкладе_Key: inventoryRef,
+          СуммаДокумента: rowsTotal(rows),
+          Товары: rows,
+        });
+        return createOrPreview(conn, set, payload, confirm);
+      }),
+  );
+
+  server.registerTool(
+    "create_writeoff",
+    {
+      title: "Создать списание товаров",
+      description:
+        "Создаёт документ «Списание товаров» (недостача/порча). НЕПРОВЕДЁННЫЙ; провести — post_document " +
+        "(проводки Дт 94 Кт 41). Можно указать документ-основание — инвентаризацию. dry-run/confirm.",
+      inputSchema: {
+        database: databaseField,
+        organization: organizationField,
+        warehouse: z.string().optional().describe("Название склада (если несколько)"),
+        inventoryRef: z.string().optional().describe("Ref_Key инвентаризации-основания (необязательно)"),
+        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
+        lines: whLines,
+        confirm: confirmField,
+      },
+    },
+    ({ database, organization, warehouse, inventoryRef, date, lines, confirm }) =>
+      guard("create_writeoff", async () => {
+        const conn = ctx.db(database);
+        const set = await requireEntity(conn, DOCUMENTS.writeoff, "Документ «Списание товаров»");
+        const org = await resolveOrg(conn, organization);
+        const warehouseKey = await resolveWarehouse(conn, warehouse);
+        const lineAcc = await goodsOnlyAccounts(conn, org.key, toGoodsLines(lines));
+        const rows = lines.map((l, i) =>
+          clean({
+            LineNumber: i + 1,
+            Номенклатура_Key: l.nomenclatureRef,
+            Количество: l.quantity,
+            Цена: l.price,
+            Сумма: Math.round(l.quantity * l.price * 100) / 100,
+            ...lineAcc(l.nomenclatureRef),
+          }),
+        );
+        const payload = clean({
+          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Posted: false,
+          Организация_Key: org.key,
+          Склад_Key: warehouseKey,
+          ИнвентаризацияТоваровНаСкладе_Key: inventoryRef,
+          СуммаДокумента: rowsTotal(rows),
+          Товары: rows,
+        });
+        return createOrPreview(conn, set, payload, confirm);
+      }),
+  );
+
+  server.registerTool(
+    "create_inventory",
+    {
+      title: "Создать инвентаризацию товаров",
+      description:
+        "Создаёт документ «Инвентаризация товаров на складе» (сверка факт/учёт). Документ НЕ проводится " +
+        "(движений не делает) — служит основанием для оприходования/списания. dry-run/confirm. " +
+        "Для каждой позиции: фактическое и учётное количество.",
+      inputSchema: {
+        database: databaseField,
+        organization: organizationField,
+        warehouse: z.string().optional().describe("Название склада (если несколько)"),
+        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
+        lines: z
+          .array(
+            z.object({
+              nomenclatureRef: z.string().describe("Ref_Key номенклатуры"),
+              factQuantity: z.number().nonnegative().describe("Фактическое количество"),
+              accountingQuantity: z.number().nonnegative().describe("Количество по учёту"),
+              price: z.number().nonnegative().default(0).describe("Цена (для оценки)"),
+            }),
+          )
+          .min(1)
+          .describe("Позиции инвентаризации"),
+        confirm: confirmField,
+      },
+    },
+    ({ database, organization, warehouse, date, lines, confirm }) =>
+      guard("create_inventory", async () => {
+        const conn = ctx.db(database);
+        const set = await requireEntity(
+          conn,
+          DOCUMENTS.inventory,
+          "Документ «Инвентаризация товаров на складе»",
+        );
+        const org = await resolveOrg(conn, organization);
+        const warehouseKey = await resolveWarehouse(conn, warehouse);
+        const lineAcc = await goodsOnlyAccounts(
+          conn,
+          org.key,
+          lines.map((l) => ({
+            nomenclatureRef: l.nomenclatureRef,
+            quantity: l.factQuantity,
+            price: l.price,
+            vatRate: "БезНДС",
+          })),
+        );
+        const rows = lines.map((l, i) =>
+          clean({
+            LineNumber: i + 1,
+            Номенклатура_Key: l.nomenclatureRef,
+            Количество: l.factQuantity,
+            КоличествоУчет: l.accountingQuantity,
+            Цена: l.price,
+            Сумма: Math.round(l.factQuantity * l.price * 100) / 100,
+            СуммаУчет: Math.round(l.accountingQuantity * l.price * 100) / 100,
+            ...lineAcc(l.nomenclatureRef),
+          }),
+        );
+        const payload = clean({
+          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Posted: false,
+          Организация_Key: org.key,
+          Склад_Key: warehouseKey,
+          Товары: rows,
+        });
+        return createOrPreview(conn, set, payload, confirm);
       }),
   );
 
@@ -1408,7 +1754,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const info = await getDocInfo(conn, entitySet, ref.replace(/[{}']/g, ""));
         if (info.posted) return fail("Документ проведён. Сначала отмените проведение, затем меняйте строки.");
         const built = await buildSectionRows(conn, entitySet, info.orgKey, [...info.lines, line]);
-        if (!built) return fail("Поддерживаются: счёт, поступление, реализация.");
+        if (!built)
+          return fail(
+            "Поддерживаются: счёт, поступление/реализация, возвраты, перемещение, оприходование, списание.",
+          );
         return patchOrPreview(
           conn,
           entitySet,
@@ -1445,7 +1794,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         if (kept.length === 0)
           return fail("Нельзя удалить последнюю строку — в документе должна остаться хотя бы одна позиция.");
         const built = await buildSectionRows(conn, entitySet, info.orgKey, kept);
-        if (!built) return fail("Поддерживаются: счёт, поступление, реализация.");
+        if (!built)
+          return fail(
+            "Поддерживаются: счёт, поступление/реализация, возвраты, перемещение, оприходование, списание.",
+          );
         return patchOrPreview(
           conn,
           entitySet,

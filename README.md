@@ -124,7 +124,7 @@ Claude: Готово: контрагент 00-000123, счёт № … (черн
 
 ## Инструменты
 
-42 инструмента (21 чтение/аналитика + 21 запись). У всех есть необязательный параметр **`database`** (какая база 1С — см. `list_databases`); у аналитических — ещё и **`organization`** (фильтр по юрлицу — см. `list_organizations`).
+49 инструментов (21 чтение/аналитика + 28 запись). У всех есть необязательный параметр **`database`** (какая база 1С — см. `list_databases`); у аналитических — ещё и **`organization`** (фильтр по юрлицу — см. `list_organizations`).
 
 **Чтение и аналитика:**
 
@@ -154,8 +154,12 @@ Claude: Готово: контрагент 00-000123, счёт № … (черн
 | `create_contract` | Договор (вид, номер, валюта, тип цен, руководитель контрагента) |
 | `create_invoice` / `create_supplier_invoice` | Счёт покупателю / счёт на оплату поставщика (непроведёнными) |
 | `create_purchase` / `create_shipment` | Поступление от поставщика / реализация покупателю |
+| `create_return_from_customer` / `create_return_to_supplier` | Возврат товаров от покупателя / поставщику |
+| `create_transfer` | Перемещение товаров между складами |
+| `create_surplus` / `create_writeoff` | Оприходование / списание товаров |
+| `create_inventory` | Инвентаризация товаров на складе |
 | `create_act` | Реализация услуг (акт) |
-| `create_payment` | Оплата от покупателя (поступление на расчётный счёт) |
+| `create_payment` / `create_payout_order` | Оплата от покупателя (поступление на р/с) / платёжное поручение |
 | `create_folder` / `move_to_folder` | Папка (группа) справочника / перемещение в папку |
 | `update_counterparty` / `update_nomenclature` / `update_entity` | Изменение реквизитов (PATCH) |
 | `update_document_lines` / `add_document_line` / `remove_document_line` | Редактирование строк документа |
