@@ -1870,6 +1870,84 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
+    "create_services_act",
+    {
+      title: "Создать акт об оказании услуг",
+      description:
+        "Создаёт «Акт об оказании производственных услуг» (услуги с учётом доходов/расходов по " +
+        "номенклатурной группе). Отличается от create_act тем, что требует номенклатурную группу " +
+        "(субконто счёта 90.01) — она НЕ угадывается. Проводки Дт 62 Кт 90.01, НДС 90.03. " +
+        "НЕПРОВЕДЁННЫЙ; провести — post_document. dry-run/confirm.",
+      inputSchema: {
+        database: databaseField,
+        organization: organizationField,
+        counterpartyRef: z.string().describe("Ref_Key покупателя"),
+        contractRef: z.string().optional().describe("Ref_Key договора"),
+        nomenclatureGroupRef: z
+          .string()
+          .describe(
+            "Ref_Key номенклатурной группы (ОБЯЗАТЕЛЬНО, субконто счёта доходов 90.01 — не угадывается)",
+          ),
+        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
+        sumIncludesVat: z.boolean().default(true).describe("Сумма включает НДС"),
+        lines: z.array(lineObject).min(1).describe("Позиции-услуги"),
+        confirm: confirmField,
+      },
+    },
+    ({
+      database,
+      organization,
+      counterpartyRef,
+      contractRef,
+      nomenclatureGroupRef,
+      date,
+      sumIncludesVat,
+      lines,
+      confirm,
+    }) =>
+      guard("create_services_act", async () => {
+        const conn = ctx.db(database);
+        const set = await requireEntity(
+          conn,
+          DOCUMENTS.servicesAct,
+          "Документ «Акт об оказании производственных услуг»",
+        );
+        const org = await resolveOrg(conn, organization);
+        const { settlement, lineAccountsFor } = await goodsAccounts(conn, org.key, lines, "service");
+        const grpSet = resolveEntity(CATALOGS.nomenclatureGroups, await conn.available());
+        const grpSubconto = grpSet
+          ? { Субконто: nomenclatureGroupRef, Субконто_Type: `StandardODATA.${grpSet}` }
+          : {};
+        const rows = lines.map((l, i) =>
+          clean({
+            LineNumber: i + 1,
+            Номенклатура_Key: l.nomenclatureRef,
+            Количество: l.quantity,
+            Цена: l.price,
+            Сумма: lineSum(l),
+            СтавкаНДС: l.vatRate,
+            НоменклатурнаяГруппа_Key: nomenclatureGroupRef,
+            ...grpSubconto,
+            ...lineAccountsFor(l.nomenclatureRef, l.vatRate),
+          }),
+        );
+        const payload = clean({
+          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Posted: false,
+          Организация_Key: org.key,
+          Контрагент_Key: counterpartyRef,
+          ДоговорКонтрагента_Key: contractRef,
+          НоменклатурнаяГруппа_Key: nomenclatureGroupRef,
+          СчетУчетаРасчетовСКонтрагентом_Key: settlement,
+          СуммаВключаетНДС: sumIncludesVat,
+          СуммаДокумента: rowsTotal(rows),
+          Услуги: rows,
+        });
+        return createOrPreview(conn, set, payload, confirm);
+      }),
+  );
+
+  server.registerTool(
     "create_payment",
     {
       title: "Создать оплату от покупателя",

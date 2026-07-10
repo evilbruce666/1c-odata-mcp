@@ -18,6 +18,7 @@ export const CATALOGS = {
   priceTypes: ["Catalog_ТипыЦенНоменклатуры", "Catalog_ТипыЦен"],
   cashflowItems: ["Catalog_СтатьиДвиженияДенежныхСредств"],
   physicalPersons: ["Catalog_ФизическиеЛица"],
+  nomenclatureGroups: ["Catalog_НоменклатурныеГруппы"],
 } as const;
 
 export const DOCUMENTS = {
@@ -33,6 +34,8 @@ export const DOCUMENTS = {
   // Счета-фактуры (фаза 3) — создаются на основании реализации/поступления.
   issuedInvoice: ["Document_СчетФактураВыданный"],
   receivedInvoice: ["Document_СчетФактураПолученный"],
+  // Акт об оказании услуг (фаза 4) — доходы/расходы по номенклатурной группе.
+  servicesAct: ["Document_АктОбОказанииПроизводственныхУслуг"],
   // Товарные складские документы (фаза 1).
   returnFromCustomer: ["Document_ВозвратТоваровОтПокупателя"],
   returnToSupplier: ["Document_ВозвратТоваровПоставщику"],
