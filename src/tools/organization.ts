@@ -130,7 +130,7 @@ async function findResponsiblePersons(
 
 export function registerOrganizationTools(server: McpServer, ctx: ServerContext): void {
   server.registerTool(
-    "get_organization_card",
+    "read.organization.get_organization_card",
     {
       title: "Карточка организации (реквизиты)",
       description:
@@ -149,7 +149,7 @@ export function registerOrganizationTools(server: McpServer, ctx: ServerContext)
       },
     },
     ({ database, organization }) =>
-      guard("get_organization_card", async () => {
+      guard("read.organization.get_organization_card", async () => {
         const conn = ctx.db(database);
         const org = await resolveOrgOrDefault(conn, organization);
         const available = await conn.available();

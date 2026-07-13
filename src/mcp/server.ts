@@ -28,12 +28,13 @@ const INSTRUCTIONS =
   "Запись включается отдельно и по умолчанию работает в режиме предпросмотра (dry-run): " +
   "сначала показывайте пользователю, что будет создано/изменено, и выполняйте запись " +
   "только после явного согласия (confirm=true). У инструментов есть параметр database " +
-  "(см. list_databases) и organization (см. list_organizations).";
+  "(см. read.system.list_databases) и organization (см. read.system.list_organizations).";
 
-/** Подсказки клиенту о характере инструмента — по имени (одна точка вместо правок 33 конфигов). */
+/** Подсказки клиенту о характере инструмента — по имени (одна точка вместо правок 55 конфигов). */
 function annotationsFor(name: string) {
-  if (name === "post_document" || name === "mark_for_deletion") return DESTRUCTIVE_HINTS;
-  if (/^(get_|list_|find_|describe_|search_|health_)/.test(name)) return READ_HINTS;
+  if (name === "write.document.post_document" || name === "write.entity.mark_for_deletion")
+    return DESTRUCTIVE_HINTS;
+  if (name.startsWith("read.")) return READ_HINTS;
   return WRITE_HINTS;
 }
 

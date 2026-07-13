@@ -33,7 +33,7 @@ const counterpartySet = (conn: Connection): Promise<string> =>
 
 export function registerCounterpartyTools(server: McpServer, ctx: ServerContext): void {
   server.registerTool(
-    "find_counterparty",
+    "read.counterparty.find_counterparty",
     {
       title: "Поиск контрагента",
       description:
@@ -47,7 +47,7 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
       },
     },
     ({ database, query, limit }) =>
-      guard("find_counterparty", async () => {
+      guard("read.counterparty.find_counterparty", async () => {
         const conn = ctx.db(database);
         const set = await counterpartySet(conn);
         const isInn = /^\d{10,12}$/.test(query.trim());
@@ -67,7 +67,7 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
   );
 
   server.registerTool(
-    "get_counterparty",
+    "read.counterparty.get_counterparty",
     {
       title: "Карточка контрагента",
       description:
@@ -79,7 +79,7 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
       },
     },
     ({ database, ref }) =>
-      guard("get_counterparty", async () => {
+      guard("read.counterparty.get_counterparty", async () => {
         const conn = ctx.db(database);
         const set = await counterpartySet(conn);
         const path = `${set}(guid'${ref.replace(/[{}']/g, "")}')${buildQuery({})}`;
@@ -151,7 +151,7 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
   }
 
   server.registerTool(
-    "get_customer_history",
+    "read.counterparty.get_customer_history",
     {
       title: "История по покупателю",
       description:
@@ -160,7 +160,7 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
       inputSchema: historyInput,
     },
     ({ database, organization, ref, from, to, limit }) =>
-      guard("get_customer_history", async () => {
+      guard("read.counterparty.get_customer_history", async () => {
         const conn = ctx.db(database);
         const orgKey = await orgKeyOf(conn, organization);
         const r = await history(
@@ -184,7 +184,7 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
   );
 
   server.registerTool(
-    "get_supplier_history",
+    "read.counterparty.get_supplier_history",
     {
       title: "История по поставщику",
       description:
@@ -193,7 +193,7 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
       inputSchema: historyInput,
     },
     ({ database, organization, ref, from, to, limit }) =>
-      guard("get_supplier_history", async () => {
+      guard("read.counterparty.get_supplier_history", async () => {
         const conn = ctx.db(database);
         const orgKey = await orgKeyOf(conn, organization);
         const r = await history(conn, [...DOCUMENTS.purchases], ref, orgKey, from, to, limit);

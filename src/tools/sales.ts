@@ -169,7 +169,7 @@ export function registerSalesTools(server: McpServer, ctx: ServerContext): void 
   };
 
   server.registerTool(
-    "get_sales_breakdown",
+    "read.analytics.get_sales_breakdown",
     {
       title: "Разбивка продаж за период",
       description:
@@ -181,13 +181,13 @@ export function registerSalesTools(server: McpServer, ctx: ServerContext): void 
       inputSchema: commonInput,
     },
     (a) =>
-      guard("get_sales_breakdown", async () =>
+      guard("read.analytics.get_sales_breakdown", async () =>
         aggregate(ctx.db(a.database), DOCUMENTS.sales, "Реализация товаров и услуг", a),
       ),
   );
 
   server.registerTool(
-    "get_purchases_breakdown",
+    "read.analytics.get_purchases_breakdown",
     {
       title: "Разбивка закупок за период",
       description:
@@ -198,7 +198,7 @@ export function registerSalesTools(server: McpServer, ctx: ServerContext): void 
       inputSchema: commonInput,
     },
     (a) =>
-      guard("get_purchases_breakdown", async () =>
+      guard("read.analytics.get_purchases_breakdown", async () =>
         aggregate(ctx.db(a.database), DOCUMENTS.purchases, "Поступление товаров и услуг", a),
       ),
   );

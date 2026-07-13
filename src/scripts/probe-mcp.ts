@@ -38,17 +38,24 @@ async function main(): Promise<void> {
   const dbArg = db ? { database: db } : {};
 
   line("\n— list_databases —");
-  line(textOf((await client.callTool({ name: "list_databases", arguments: {} })) as ToolText));
+  line(textOf((await client.callTool({ name: "read.system.list_databases", arguments: {} })) as ToolText));
 
   line(`\n— health_check ${db ? `(database=${db})` : ""} —`);
-  line(textOf((await client.callTool({ name: "health_check", arguments: dbArg })) as ToolText));
+  line(textOf((await client.callTool({ name: "read.system.health_check", arguments: dbArg })) as ToolText));
 
   line("\n— list_organizations —");
-  line(textOf((await client.callTool({ name: "list_organizations", arguments: dbArg })) as ToolText));
+  line(
+    textOf((await client.callTool({ name: "read.system.list_organizations", arguments: dbArg })) as ToolText),
+  );
 
   line("\n— get_debtors (top 3) —");
   line(
-    textOf((await client.callTool({ name: "get_debtors", arguments: { ...dbArg, limit: 3 } })) as ToolText),
+    textOf(
+      (await client.callTool({
+        name: "read.analytics.get_debtors",
+        arguments: { ...dbArg, limit: 3 },
+      })) as ToolText,
+    ),
   );
 
   await client.close();

@@ -62,7 +62,7 @@ interface Bucket {
 
 export function registerCashflowTools(server: McpServer, ctx: ServerContext): void {
   server.registerTool(
-    "get_payments_breakdown",
+    "read.analytics.get_payments_breakdown",
     {
       title: "Разбивка платежей за период",
       description:
@@ -125,7 +125,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
       operationType,
       groupBy,
     }) =>
-      guard("get_payments_breakdown", async () => {
+      guard("read.analytics.get_payments_breakdown", async () => {
         const t0 = Date.now();
         if (from > to) return fail(`Период задан наоборот: from (${from}) позже to (${to}).`);
         const conn = ctx.db(database);
@@ -300,7 +300,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
 
   // === Класс 5: история по сделке/договору ===
   server.registerTool(
-    "get_deal_history",
+    "read.analytics.get_deal_history",
     {
       title: "Движения по сделке/договору",
       description:
@@ -329,7 +329,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
       },
     },
     ({ database, organization, dealKey, contractRef, from, to, limit }) =>
-      guard("get_deal_history", async () => {
+      guard("read.analytics.get_deal_history", async () => {
         const t0 = Date.now();
         if (!dealKey && !contractRef) return fail("Укажите dealKey или contractRef.");
         if (dealKey && contractRef) return fail("dealKey и contractRef взаимоисключающие — оставьте один.");
@@ -460,7 +460,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
 
   // === Класс 6: уплаченные налоги/взносы ===
   server.registerTool(
-    "get_taxes_paid",
+    "read.analytics.get_taxes_paid",
     {
       title: "Уплаченные налоги и взносы за период",
       description:
@@ -487,7 +487,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
       },
     },
     ({ database, organization, from, to, cashflowItem, groupBy }) =>
-      guard("get_taxes_paid", async () => {
+      guard("read.analytics.get_taxes_paid", async () => {
         const t0 = Date.now();
         if (from > to) return fail(`Период задан наоборот: from (${from}) позже to (${to}).`);
         const conn = ctx.db(database);

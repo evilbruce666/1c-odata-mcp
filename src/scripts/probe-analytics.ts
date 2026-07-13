@@ -1,7 +1,7 @@
 /**
  * Проверка аналитических путей (дебиторка / остатки) на живых данных.
  * Запуск: node --env-file=.env dist/scripts/probe-analytics.js
- * Использует те же хелперы, что и инструменты get_debtors / get_inventory.
+ * Использует те же хелперы, что и инструменты read.analytics.get_debtors / read.analytics.get_inventory.
  */
 import { loadConfig } from "../config/env.js";
 import { ServerContext } from "../context.js";

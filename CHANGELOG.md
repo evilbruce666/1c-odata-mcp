@@ -5,6 +5,29 @@
 
 ## [Не выпущено]
 
+**BREAKING:** все 55 инструментов переименованы с плоского `snake_case`
+(`get_debtors`) на трёхсегментный dot-notation `<read|write>.<категория>.<имя>`
+(`read.analytics.get_debtors`). Причина — критерий Naming в оценке качества
+листинга Smithery: плоский список инструментов без иерархии получает 0 баллов
+(«Tool and trigger names should form a navigable tree via dot-notation … Flat
+lists and over-nested paths both reduce the score»). Алиасов на старые имена
+нет — сервер опубликован на Smithery только сегодня, внешних пользователей
+листинга ещё нет, лучший момент для чистого переименования. Категории:
+`system`/`schema`/`counterparty`/`document`/`analytics`/`organization` (чтение),
+`counterparty`/`entity`/`catalog`/`document`/`sales`/`purchase`/`warehouse`/
+`money` (запись) — полная таблица соответствий в
+[README «Инструменты»](README.md#инструменты). Заодно упростилась
+`annotationsFor()` в `src/mcp/server.ts`: вместо regex-подбора по префиксу имени
+теперь просто `name.startsWith("read.")`/`"write."`.
+
+### Исправлено
+- Пять параметров без описания (`limit` в `search_documents`/
+  `get_customer_history`/`get_supplier_history`; `entitySet`/`ref`/`line` в
+  `add_document_line`/`remove_document_line`) — найдено проверкой Smithery
+  quality score («Parameter descriptions»). Манифест Smithery (`manifest.json`)
+  также получил `title`/`annotations` по каждому инструменту — раньше терялись
+  при выгрузке (закрывает критерии Naming/Annotations).
+
 ## [0.2.0] — 2026-07-10
 
 Крупный релиз записи: 12 новых инструментов создания документов (возвраты,

@@ -22,7 +22,7 @@ async function main(): Promise<void> {
 
   const { tools } = await client.listTools();
   line(`✓ tools/list: ${tools.length} инструментов`);
-  const writeTools = tools.filter((t) => t.name.startsWith("create_")).map((t) => t.name);
+  const writeTools = tools.filter((t) => t.name.startsWith("write.")).map((t) => t.name);
   line(`  инструменты записи: ${writeTools.join(", ")}`);
 
   const args = (extra: object) => ({
@@ -35,7 +35,7 @@ async function main(): Promise<void> {
   line(
     textOf(
       (await client.callTool({
-        name: "create_counterparty",
+        name: "write.counterparty.create_counterparty",
         arguments: args({ confirm: false }),
       })) as ToolText,
     ),
@@ -45,7 +45,7 @@ async function main(): Promise<void> {
   line(
     textOf(
       (await client.callTool({
-        name: "create_counterparty",
+        name: "write.counterparty.create_counterparty",
         arguments: args({ confirm: true }),
       })) as ToolText,
     ),

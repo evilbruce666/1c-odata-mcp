@@ -62,7 +62,7 @@ async function orgKeyOf(conn: Connection, organization?: string): Promise<{ key?
 
 export function registerRegisterTools(server: McpServer, ctx: ServerContext): void {
   server.registerTool(
-    "get_sales",
+    "read.analytics.get_sales",
     {
       title: "Продажи за период",
       description:
@@ -76,7 +76,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
       },
     },
     ({ database, organization, from, to }) =>
-      guard("get_sales", async () => {
+      guard("read.analytics.get_sales", async () => {
         const t0 = Date.now();
         if (from > to) return fail(`Период задан наоборот: from (${from}) позже to (${to}).`);
         const conn = ctx.db(database);
@@ -97,7 +97,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
   );
 
   server.registerTool(
-    "get_cashflow",
+    "read.analytics.get_cashflow",
     {
       title: "Движение денежных средств",
       description:
@@ -111,7 +111,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
       },
     },
     ({ database, organization, from, to }) =>
-      guard("get_cashflow", async () => {
+      guard("read.analytics.get_cashflow", async () => {
         const t0 = Date.now();
         if (from > to) return fail(`Период задан наоборот: from (${from}) позже to (${to}).`);
         const conn = ctx.db(database);
@@ -139,7 +139,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
   );
 
   server.registerTool(
-    "get_debtors",
+    "read.analytics.get_debtors",
     {
       title: "Дебиторская задолженность",
       description:
@@ -156,7 +156,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
       },
     },
     ({ database, organization, asOf, limit }) =>
-      guard("get_debtors", async () => {
+      guard("read.analytics.get_debtors", async () => {
         const t0 = Date.now();
         const conn = ctx.db(database);
         const org = await orgKeyOf(conn, organization);
@@ -204,7 +204,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
   );
 
   server.registerTool(
-    "get_inventory",
+    "read.analytics.get_inventory",
     {
       title: "Остатки товаров",
       description:
@@ -221,7 +221,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
       },
     },
     ({ database, organization, asOf, limit }) =>
-      guard("get_inventory", async () => {
+      guard("read.analytics.get_inventory", async () => {
         const t0 = Date.now();
         const conn = ctx.db(database);
         const org = await orgKeyOf(conn, organization);

@@ -26,7 +26,7 @@ function toSummary(r: ODataEntity, set: string): DocumentSummary {
 
 export function registerDocumentTools(server: McpServer, ctx: ServerContext): void {
   server.registerTool(
-    "search_documents",
+    "read.document.search_documents",
     {
       title: "Поиск документов",
       description:
@@ -46,7 +46,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
       },
     },
     ({ database, organization, entitySet, from, to, counterpartyRef, postedOnly, minAmount, limit }) =>
-      guard("search_documents", async () => {
+      guard("read.document.search_documents", async () => {
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
         const orgKey = organization ? (await resolveOrganization(conn, organization)).ref : undefined;
@@ -106,7 +106,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
   );
 
   server.registerTool(
-    "get_document",
+    "read.document.get_document",
     {
       title: "Документ целиком",
       description:
@@ -119,7 +119,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
       },
     },
     ({ database, entitySet, ref }) =>
-      guard("get_document", async () => {
+      guard("read.document.get_document", async () => {
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
         const path = `${entitySet}(guid'${ref.replace(/[{}']/g, "")}')${buildQuery({})}`;

@@ -654,7 +654,7 @@ async function createSubordinate(
 
 export function registerWriteTools(server: McpServer, ctx: ServerContext): void {
   server.registerTool(
-    "create_counterparty",
+    "write.counterparty.create_counterparty",
     {
       title: "Создать контрагента",
       description:
@@ -679,7 +679,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, name, inn, kpp, fullName, legalType, phone, email, address, ogrn, confirm }) =>
-      guard("create_counterparty", async () => {
+      guard("write.counterparty.create_counterparty", async () => {
         const conn = ctx.db(database);
         const set = await resolveSet(conn, CATALOGS.counterparties, "Контрагенты");
         const { fields, notes } = await counterpartyExtras(conn, { phone, email, address, ogrn });
@@ -696,7 +696,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "mark_for_deletion",
+    "write.entity.mark_for_deletion",
     {
       title: "Пометить на удаление",
       description:
@@ -712,7 +712,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, entitySet, ref, mark, confirm }) =>
-      guard("mark_for_deletion", async () => {
+      guard("write.entity.mark_for_deletion", async () => {
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
         const guid = ref.replace(/[{}']/g, "");
@@ -737,7 +737,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "create_nomenclature",
+    "write.catalog.create_nomenclature",
     {
       title: "Создать номенклатуру",
       description:
@@ -759,7 +759,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, name, fullName, article, folder, isService, confirm }) =>
-      guard("create_nomenclature", async () => {
+      guard("write.catalog.create_nomenclature", async () => {
         const conn = ctx.db(database);
         const set = await resolveSet(conn, CATALOGS.nomenclature, "Номенклатура");
         const parentRef = await folderRefOf(conn, set, folder);
@@ -775,7 +775,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "create_contract",
+    "write.catalog.create_contract",
     {
       title: "Создать договор",
       description:
@@ -827,7 +827,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       headPosition,
       confirm,
     }) =>
-      guard("create_contract", async () => {
+      guard("write.catalog.create_contract", async () => {
         const conn = ctx.db(database);
         const set = await resolveSet(conn, CATALOGS.contracts, "Договоры контрагентов");
         const org = await resolveOrg(conn, organization);
@@ -864,7 +864,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "create_invoice",
+    "write.sales.create_invoice",
     {
       title: "Создать счёт покупателю",
       description:
@@ -894,7 +894,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, organization, counterpartyRef, contractRef, date, sumIncludesVat, lines, confirm }) =>
-      guard("create_invoice", async () => {
+      guard("write.sales.create_invoice", async () => {
         const conn = ctx.db(database);
         const set = await requireEntity(
           conn,
@@ -918,7 +918,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "post_document",
+    "write.document.post_document",
     {
       title: "Провести / отменить проведение документа",
       description:
@@ -933,7 +933,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, entitySet, ref, post, confirm }) =>
-      guard("post_document", async () => {
+      guard("write.document.post_document", async () => {
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
         const guid = ref.replace(/[{}']/g, "");
@@ -953,7 +953,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "update_entity",
+    "write.entity.update_entity",
     {
       title: "Изменить объект (общий)",
       description:
@@ -971,7 +971,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, entitySet, ref, fields, confirm }) =>
-      guard("update_entity", async () => {
+      guard("write.entity.update_entity", async () => {
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
         if (Object.keys(fields).length === 0) return fail("Не заданы поля для изменения.");
@@ -980,7 +980,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "update_counterparty",
+    "write.counterparty.update_counterparty",
     {
       title: "Изменить контрагента",
       description:
@@ -1001,7 +1001,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, ref, name, inn, kpp, fullName, phone, email, address, ogrn, confirm }) =>
-      guard("update_counterparty", async () => {
+      guard("write.counterparty.update_counterparty", async () => {
         const conn = ctx.db(database);
         const set = await resolveSet(conn, CATALOGS.counterparties, "Справочник «Контрагенты»");
         const fields: Record<string, unknown> = clean({
@@ -1043,7 +1043,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "update_nomenclature",
+    "write.catalog.update_nomenclature",
     {
       title: "Изменить номенклатуру",
       description:
@@ -1059,7 +1059,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, ref, name, fullName, article, confirm }) =>
-      guard("update_nomenclature", async () => {
+      guard("write.catalog.update_nomenclature", async () => {
         const conn = ctx.db(database);
         const set = await resolveSet(conn, CATALOGS.nomenclature, "Справочник «Номенклатура»");
         const fields = clean({ Description: name, НаименованиеПолное: fullName, Артикул: article });
@@ -1092,7 +1092,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   };
 
   server.registerTool(
-    "create_purchase",
+    "write.purchase.create_purchase",
     {
       title: "Создать поступление от поставщика",
       description:
@@ -1112,7 +1112,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       lines,
       confirm,
     }) =>
-      guard("create_purchase", async () => {
+      guard("write.purchase.create_purchase", async () => {
         const conn = ctx.db(database);
         const set = await requireEntity(conn, DOCUMENTS.purchases, "Документ «Поступление товаров и услуг»");
         const org = await resolveOrg(conn, organization);
@@ -1138,7 +1138,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "create_supplier_invoice",
+    "write.purchase.create_supplier_invoice",
     {
       title: "Зарегистрировать счёт от поставщика",
       description:
@@ -1193,7 +1193,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       lines,
       confirm,
     }) =>
-      guard("create_supplier_invoice", async () => {
+      guard("write.purchase.create_supplier_invoice", async () => {
         const conn = ctx.db(database);
         const set = await requireEntity(
           conn,
@@ -1221,7 +1221,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "create_payout_order",
+    "write.money.create_payout_order",
     {
       title: "Создать платёжное поручение (исходящее) контрагенту",
       description:
@@ -1305,7 +1305,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       comment,
       confirm,
     }) =>
-      guard("create_payout_order", async () => {
+      guard("write.money.create_payout_order", async () => {
         const conn = ctx.db(database);
         const set = await requireEntity(conn, DOCUMENTS.paymentOrder, "Документ «Платёжное поручение»");
         const org = await resolveOrgOrDefault(conn, organization);
@@ -1343,7 +1343,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "create_shipment",
+    "write.sales.create_shipment",
     {
       title: "Создать реализацию покупателю",
       description:
@@ -1363,7 +1363,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       lines,
       confirm,
     }) =>
-      guard("create_shipment", async () => {
+      guard("write.sales.create_shipment", async () => {
         const conn = ctx.db(database);
         const set = await requireEntity(conn, DOCUMENTS.sales, "Документ «Реализация товаров и услуг»");
         const org = await resolveOrg(conn, organization);
@@ -1389,7 +1389,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "update_document_lines",
+    "write.document.update_document_lines",
     {
       title: "Изменить строки документа",
       description:
@@ -1415,7 +1415,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, entitySet, ref, lines, confirm }) =>
-      guard("update_document_lines", async () => {
+      guard("write.document.update_document_lines", async () => {
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
         const info = await getDocInfo(conn, entitySet, ref.replace(/[{}']/g, ""));
@@ -1459,7 +1459,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   ): GoodsLine[] => lines.map((l) => ({ ...l, vatRate: "БезНДС" }));
 
   server.registerTool(
-    "create_return_from_customer",
+    "write.warehouse.create_return_from_customer",
     {
       title: "Создать возврат товаров от покупателя",
       description:
@@ -1469,7 +1469,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       inputSchema: goodsDocInput,
     },
     ({ database, organization, counterpartyRef, contractRef, warehouse, date, lines, confirm }) =>
-      guard("create_return_from_customer", async () => {
+      guard("write.warehouse.create_return_from_customer", async () => {
         const conn = ctx.db(database);
         const set = await requireEntity(
           conn,
@@ -1496,7 +1496,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "create_return_to_supplier",
+    "write.warehouse.create_return_to_supplier",
     {
       title: "Создать возврат товаров поставщику",
       description:
@@ -1506,7 +1506,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       inputSchema: goodsDocInput,
     },
     ({ database, organization, counterpartyRef, contractRef, warehouse, date, lines, confirm }) =>
-      guard("create_return_to_supplier", async () => {
+      guard("write.warehouse.create_return_to_supplier", async () => {
         const conn = ctx.db(database);
         const set = await requireEntity(
           conn,
@@ -1533,7 +1533,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "create_transfer",
+    "write.warehouse.create_transfer",
     {
       title: "Создать перемещение товаров",
       description:
@@ -1550,7 +1550,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, organization, fromWarehouse, toWarehouse, date, lines, confirm }) =>
-      guard("create_transfer", async () => {
+      guard("write.warehouse.create_transfer", async () => {
         const conn = ctx.db(database);
         const set = await requireEntity(conn, DOCUMENTS.transfer, "Документ «Перемещение товаров»");
         const org = await resolveOrg(conn, organization);
@@ -1581,7 +1581,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "create_surplus",
+    "write.warehouse.create_surplus",
     {
       title: "Создать оприходование товаров",
       description:
@@ -1598,7 +1598,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, organization, warehouse, inventoryRef, date, lines, confirm }) =>
-      guard("create_surplus", async () => {
+      guard("write.warehouse.create_surplus", async () => {
         const conn = ctx.db(database);
         const set = await requireEntity(conn, DOCUMENTS.surplus, "Документ «Оприходование товаров»");
         const org = await resolveOrg(conn, organization);
@@ -1628,7 +1628,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "create_writeoff",
+    "write.warehouse.create_writeoff",
     {
       title: "Создать списание товаров",
       description:
@@ -1645,7 +1645,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, organization, warehouse, inventoryRef, date, lines, confirm }) =>
-      guard("create_writeoff", async () => {
+      guard("write.warehouse.create_writeoff", async () => {
         const conn = ctx.db(database);
         const set = await requireEntity(conn, DOCUMENTS.writeoff, "Документ «Списание товаров»");
         const org = await resolveOrg(conn, organization);
@@ -1675,7 +1675,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "create_inventory",
+    "write.warehouse.create_inventory",
     {
       title: "Создать инвентаризацию товаров",
       description:
@@ -1702,7 +1702,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, organization, warehouse, date, lines, confirm }) =>
-      guard("create_inventory", async () => {
+      guard("write.warehouse.create_inventory", async () => {
         const conn = ctx.db(database);
         const set = await requireEntity(
           conn,
@@ -1752,7 +1752,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   });
 
   server.registerTool(
-    "add_document_line",
+    "write.document.add_document_line",
     {
       title: "Добавить строку в документ",
       description:
@@ -1767,7 +1767,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, entitySet, ref, line, confirm }) =>
-      guard("add_document_line", async () => {
+      guard("write.document.add_document_line", async () => {
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
         const info = await getDocInfo(conn, entitySet, ref.replace(/[{}']/g, ""));
@@ -1788,7 +1788,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "remove_document_line",
+    "write.document.remove_document_line",
     {
       title: "Удалить строку документа",
       description:
@@ -1803,7 +1803,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, entitySet, ref, lineNumber, confirm }) =>
-      guard("remove_document_line", async () => {
+      guard("write.document.remove_document_line", async () => {
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
         const info = await getDocInfo(conn, entitySet, ref.replace(/[{}']/g, ""));
@@ -1828,7 +1828,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "create_act",
+    "write.sales.create_act",
     {
       title: "Создать акт (реализация услуг)",
       description:
@@ -1847,7 +1847,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, organization, counterpartyRef, contractRef, date, sumIncludesVat, lines, confirm }) =>
-      guard("create_act", async () => {
+      guard("write.sales.create_act", async () => {
         const conn = ctx.db(database);
         const set = await requireEntity(conn, DOCUMENTS.sales, "Документ «Реализация товаров и услуг»");
         const org = await resolveOrg(conn, organization);
@@ -1870,7 +1870,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "create_services_act",
+    "write.sales.create_services_act",
     {
       title: "Создать акт об оказании услуг",
       description:
@@ -1905,7 +1905,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       lines,
       confirm,
     }) =>
-      guard("create_services_act", async () => {
+      guard("write.sales.create_services_act", async () => {
         const conn = ctx.db(database);
         const set = await requireEntity(
           conn,
@@ -1948,7 +1948,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "create_payment",
+    "write.money.create_payment",
     {
       title: "Создать оплату от покупателя",
       description:
@@ -1970,7 +1970,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, organization, counterpartyRef, contractRef, amount, bankAccount, date, confirm }) =>
-      guard("create_payment", async () => {
+      guard("write.money.create_payment", async () => {
         const conn = ctx.db(database);
         const set = await requireEntity(conn, DOCUMENTS.bankIn, "Документ «Поступление на расчётный счёт»");
         const org = await resolveOrg(conn, organization);
@@ -2045,7 +2045,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   };
 
   server.registerTool(
-    "create_bank_writeoff",
+    "write.money.create_bank_writeoff",
     {
       title: "Создать списание с расчётного счёта",
       description:
@@ -2089,7 +2089,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       comment,
       confirm,
     }) =>
-      guard("create_bank_writeoff", async () => {
+      guard("write.money.create_bank_writeoff", async () => {
         const conn = ctx.db(database);
         const set = await requireEntity(conn, DOCUMENTS.bankOut, "Документ «Списание с расчётного счёта»");
         const org = await resolveOrg(conn, organization);
@@ -2163,7 +2163,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   };
 
   server.registerTool(
-    "create_cash_receipt",
+    "write.money.create_cash_receipt",
     {
       title: "Создать приходный кассовый ордер (ПКО)",
       description:
@@ -2173,7 +2173,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       inputSchema: cashDocInput,
     },
     (a) =>
-      guard("create_cash_receipt", async () => {
+      guard("write.money.create_cash_receipt", async () => {
         const conn = ctx.db(a.database);
         const set = await requireEntity(conn, DOCUMENTS.cashIn, "Документ «Приходный кассовый ордер»");
         const org = await resolveOrg(conn, a.organization);
@@ -2183,7 +2183,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "create_cash_payment",
+    "write.money.create_cash_payment",
     {
       title: "Создать расходный кассовый ордер (РКО)",
       description:
@@ -2193,7 +2193,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       inputSchema: cashDocInput,
     },
     (a) =>
-      guard("create_cash_payment", async () => {
+      guard("write.money.create_cash_payment", async () => {
         const conn = ctx.db(a.database);
         const set = await requireEntity(conn, DOCUMENTS.cashOut, "Документ «Расходный кассовый ордер»");
         const org = await resolveOrg(conn, a.organization);
@@ -2203,7 +2203,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "create_issued_invoice",
+    "write.sales.create_issued_invoice",
     {
       title: "Создать счёт-фактуру выданный",
       description:
@@ -2225,7 +2225,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, baseDocumentRef, baseDocumentEntity, operationCode, date, confirm }) =>
-      guard("create_issued_invoice", async () => {
+      guard("write.sales.create_issued_invoice", async () => {
         const conn = ctx.db(database);
         const set = await requireEntity(conn, DOCUMENTS.issuedInvoice, "Документ «Счёт-фактура выданный»");
         const baseSet =
@@ -2259,7 +2259,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "create_received_invoice",
+    "write.purchase.create_received_invoice",
     {
       title: "Создать счёт-фактуру полученный",
       description:
@@ -2280,7 +2280,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, baseDocumentRef, baseDocumentEntity, incomingDate, operationCode, date, confirm }) =>
-      guard("create_received_invoice", async () => {
+      guard("write.purchase.create_received_invoice", async () => {
         const conn = ctx.db(database);
         const set = await requireEntity(
           conn,
@@ -2322,7 +2322,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "create_bank_account",
+    "write.counterparty.create_bank_account",
     {
       title: "Создать банковский счёт контрагента",
       description:
@@ -2341,7 +2341,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, ownerRef, accountNumber, bik, currency, label, makeMain, confirm }) =>
-      guard("create_bank_account", async () => {
+      guard("write.counterparty.create_bank_account", async () => {
         const conn = ctx.db(database);
         const set = await requireEntity(conn, CATALOGS.bankAccounts, "Справочник «Банковские счета»");
         const bank = await resolveBankByBik(conn, bik);
@@ -2373,7 +2373,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "create_contact_person",
+    "write.counterparty.create_contact_person",
     {
       title: "Создать контактное лицо (директор и т.п.)",
       description:
@@ -2391,7 +2391,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, ownerRef, name, lastName, firstName, position, makeMain, confirm }) =>
-      guard("create_contact_person", async () => {
+      guard("write.counterparty.create_contact_person", async () => {
         const conn = ctx.db(database);
         const set = await requireEntity(conn, ["Catalog_КонтактныеЛица"], "Справочник «Контактные лица»");
         const payload = clean({
@@ -2419,7 +2419,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "create_folder",
+    "write.entity.create_folder",
     {
       title: "Создать папку (группу) справочника",
       description:
@@ -2438,7 +2438,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, entitySet, name, parent, confirm }) =>
-      guard("create_folder", async () => {
+      guard("write.entity.create_folder", async () => {
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
         const parentRef = await folderRefOf(conn, entitySet, parent);
@@ -2448,7 +2448,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   );
 
   server.registerTool(
-    "move_to_folder",
+    "write.entity.move_to_folder",
     {
       title: "Переместить объект в папку",
       description:
@@ -2466,7 +2466,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       },
     },
     ({ database, entitySet, ref, folder, confirm }) =>
-      guard("move_to_folder", async () => {
+      guard("write.entity.move_to_folder", async () => {
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
         const parentRef = await folderRefOf(conn, entitySet, folder);

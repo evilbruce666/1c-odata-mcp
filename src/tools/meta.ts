@@ -25,7 +25,7 @@ const CLASS_LABEL: Record<EntityClass, string> = {
 
 export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
   server.registerTool(
-    "list_databases",
+    "read.system.list_databases",
     {
       title: "Список баз 1С",
       description:
@@ -34,11 +34,14 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
         "Вызывайте, если нужно понять, какие базы доступны или сравнить данные нескольких баз.",
       inputSchema: {},
     },
-    () => guard("list_databases", async () => ok({ default: ctx.defaultName, databases: ctx.databases() })),
+    () =>
+      guard("read.system.list_databases", async () =>
+        ok({ default: ctx.defaultName, databases: ctx.databases() }),
+      ),
   );
 
   server.registerTool(
-    "health_check",
+    "read.system.health_check",
     {
       title: "Проверка соединения",
       description:
@@ -48,7 +51,7 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
       inputSchema: { database: databaseField },
     },
     ({ database }) =>
-      guard("health_check", async () => {
+      guard("read.system.health_check", async () => {
         const conn = ctx.db(database);
         const meta = await conn.getMetadata();
         return ok({
@@ -64,7 +67,7 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
   );
 
   server.registerTool(
-    "list_organizations",
+    "read.system.list_organizations",
     {
       title: "Организации базы",
       description:
@@ -74,14 +77,14 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
       inputSchema: { database: databaseField },
     },
     ({ database }) =>
-      guard("list_organizations", async () => {
+      guard("read.system.list_organizations", async () => {
         const orgs = await listOrganizations(ctx.db(database));
         return ok({ count: orgs.length, organizations: orgs });
       }),
   );
 
   server.registerTool(
-    "list_entities",
+    "read.schema.list_entities",
     {
       title: "Карта объектов базы",
       description:
@@ -107,7 +110,7 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
       },
     },
     ({ database, class: cls, search }) =>
-      guard("list_entities", async () => {
+      guard("read.schema.list_entities", async () => {
         const meta = await ctx.db(database).getMetadata();
         const needle = search?.toLowerCase();
         const grouped: Record<string, Array<{ entitySet: string; name: string }>> = {};
@@ -124,7 +127,7 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
   );
 
   server.registerTool(
-    "describe_entity",
+    "read.schema.describe_entity",
     {
       title: "Описание объекта",
       description:
@@ -137,7 +140,7 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
       },
     },
     ({ database, entitySet }) =>
-      guard("describe_entity", async () => {
+      guard("read.schema.describe_entity", async () => {
         const meta = await ctx.db(database).getMetadata();
         const e = meta.entities.get(entitySet);
         if (!e) {
