@@ -34,7 +34,9 @@
     "entry_point": "dist/index.js",
     "mcp_config": {
       "command": "node",
-      "args": ["${__dirname}/dist/index.js"],
+      "args": [
+        "${__dirname}/dist/index.js"
+      ],
       "env": {
         "ODATA_BASE_URL": "${user_config.base_url}",
         "ODATA_USERNAME": "${user_config.username}",
@@ -81,9 +83,3022 @@
   },
   "compatibility": {
     "claude_desktop": ">=0.10.0",
-    "platforms": ["darwin", "win32", "linux"],
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
     "runtimes": {
       "node": ">=20.0.0"
     }
-  }
+  },
+  "tools": [
+    {
+      "name": "list_databases",
+      "description": "Показывает настроенные базы 1С, к которым подключён сервер, и какая из них основная. Имя базы передаётся в параметр database остальных инструментов. Вызывайте, если нужно понять, какие базы доступны или сравнить данные нескольких баз.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "health_check",
+      "description": "Проверяет доступность OData-сервиса 1С и корректность авторизации для выбранной базы. Возвращает версию OData и число опубликованных объектов. Вызывайте первым, если другие инструменты выдают ошибки.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "list_organizations",
+      "description": "Список организаций (юрлиц) внутри выбранной базы 1С. Название организации передаётся в параметр organization аналитических инструментов (get_sales, get_debtors, get_cashflow, get_inventory и др.), чтобы получить данные по одному юрлицу.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "list_entities",
+      "description": "Возвращает карту бизнес-объектов 1С, сгруппированную по классам: справочники, документы, регистры, перечисления и т.д. Используйте, чтобы понять, какие данные доступны в базе. Можно отфильтровать по классу и/или подстроке имени.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "class": {
+            "type": "string",
+            "enum": [
+              "catalog",
+              "document",
+              "accumulationRegister",
+              "accountingRegister",
+              "informationRegister",
+              "enum",
+              "chartOfAccounts"
+            ],
+            "description": "Ограничить одним классом объектов"
+          },
+          "search": {
+            "type": "string",
+            "description": "Подстрока в имени объекта (без учёта регистра)"
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "describe_entity",
+      "description": "Показывает поля (с типами) и связи конкретного объекта 1С из $metadata. Принимает техническое имя EntitySet, напр. 'Catalog_Контрагенты' или 'Document_РеализацияТоваровУслуг'. Используйте перед поиском, чтобы узнать доступные поля.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "entitySet": {
+            "type": "string",
+            "description": "Техническое имя объекта, напр. Catalog_Контрагенты"
+          }
+        },
+        "required": [
+          "entitySet"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "find_counterparty",
+      "description": "Ищет контрагентов по части названия или по ИНН. Возвращает список совпадений с Ref_Key (используйте его в get_counterparty и истории взаиморасчётов). Пример: «найди контрагента Ромашка» или «контрагент с ИНН 7701234567».",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Часть названия или ИНН контрагента"
+          },
+          "limit": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 100,
+            "default": 20,
+            "description": "Сколько вернуть"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "get_counterparty",
+      "description": "Возвращает полную карточку контрагента по его Ref_Key: реквизиты (ИНН/КПП), наименования, код. Ref_Key берётся из find_counterparty.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "ref": {
+            "type": "string",
+            "description": "Ref_Key контрагента (GUID)"
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "get_customer_history",
+      "description": "Документы реализации и счета по контрагенту-покупателю за период. Показывает, что и на какие суммы продавали клиенту. Ref_Key — из find_counterparty.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "ref": {
+            "type": "string",
+            "description": "Ref_Key контрагента"
+          },
+          "from": {
+            "type": "string",
+            "description": "Дата начала периода (YYYY-MM-DD)"
+          },
+          "to": {
+            "type": "string",
+            "description": "Дата конца периода (YYYY-MM-DD)"
+          },
+          "limit": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 500,
+            "default": 100
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "get_supplier_history",
+      "description": "Документы поступления по контрагенту-поставщику за период. Показывает закупки у поставщика. Ref_Key — из find_counterparty.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "ref": {
+            "type": "string",
+            "description": "Ref_Key контрагента"
+          },
+          "from": {
+            "type": "string",
+            "description": "Дата начала периода (YYYY-MM-DD)"
+          },
+          "to": {
+            "type": "string",
+            "description": "Дата конца периода (YYYY-MM-DD)"
+          },
+          "limit": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 500,
+            "default": 100
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "search_documents",
+      "description": "Ищет документы заданного типа по периоду, контрагенту, организации, статусу проведения и сумме. Тип документа — техническое имя из list_entities, напр. 'Document_РеализацияТоваровУслуг'. Сначала уточните имя через list_entities (class=document), а поля — через describe_entity.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "entitySet": {
+            "type": "string",
+            "description": "Имя документа, напр. Document_РеализацияТоваровУслуг"
+          },
+          "from": {
+            "type": "string",
+            "description": "Дата начала (YYYY-MM-DD)"
+          },
+          "to": {
+            "type": "string",
+            "description": "Дата конца (YYYY-MM-DD)"
+          },
+          "counterpartyRef": {
+            "type": "string",
+            "description": "Ref_Key контрагента для фильтра"
+          },
+          "postedOnly": {
+            "type": "boolean",
+            "default": false,
+            "description": "Только проведённые документы"
+          },
+          "minAmount": {
+            "type": "number",
+            "description": "Минимальная сумма документа"
+          },
+          "limit": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 500,
+            "default": 50
+          }
+        },
+        "required": [
+          "entitySet"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "get_document",
+      "description": "Возвращает документ по типу и Ref_Key со всеми полями, включая табличные части. Ref_Key берётся из search_documents или истории взаиморасчётов.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "entitySet": {
+            "type": "string",
+            "description": "Имя документа, напр. Document_РеализацияТоваровУслуг"
+          },
+          "ref": {
+            "type": "string",
+            "description": "Ref_Key документа (GUID)"
+          }
+        },
+        "required": [
+          "entitySet",
+          "ref"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "get_sales",
+      "description": "Сумма выручки по проведённым документам реализации за период (по полю СуммаДокумента). Можно ограничить организацией. Период задаётся датами YYYY-MM-DD.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "from": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+            "description": "Дата начала периода (YYYY-MM-DD)"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+            "description": "Дата конца периода (YYYY-MM-DD)"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "get_cashflow",
+      "description": "Приход и расход денег за период по проведённым банковским и кассовым документам. Возвращает приток, отток и сальдо. Можно ограничить организацией. Период — даты YYYY-MM-DD.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "from": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+            "description": "Дата начала периода (YYYY-MM-DD)"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+            "description": "Дата конца периода (YYYY-MM-DD)"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "get_debtors",
+      "description": "Кто и сколько должен компании: сальдо счёта 62 (расчёты с покупателями) из регистра бухгалтерии Хозрасчетный, сгруппированное по контрагентам. Дебетовое сальдо = долг клиента, кредитовое = полученные авансы (вычитается). Можно ограничить организацией. По умолчанию берётся текущее сальдо; параметром asOf=YYYY-MM-DD можно получить дебиторку на конец указанной даты (для аудита/исторических отчётов). Возвращает только долг > 0.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "asOf": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+            "description": "Дата сальдо — на конец этой даты (без параметра — текущее) (YYYY-MM-DD)"
+          },
+          "limit": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 1000,
+            "default": 100,
+            "description": "Сколько контрагентов вернуть"
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "get_inventory",
+      "description": "Остатки товаров/материалов на складах: сальдо счетов 41/10/43 регистра Хозрасчетный, сгруппированное по номенклатуре. Возвращает количество и сумму остатка. Можно ограничить организацией. По умолчанию — текущие остатки; параметром asOf=YYYY-MM-DD можно получить остатки на конец указанной даты (для инвентаризации/аудита). (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "asOf": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+            "description": "Дата остатков — на конец этой даты (без параметра — текущие) (YYYY-MM-DD)"
+          },
+          "limit": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 1000,
+            "default": 200,
+            "description": "Сколько позиций вернуть"
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "get_payments_breakdown",
+      "description": "Суммирует проведённые банковские и кассовые документы за период с разбивкой по выбранному признаку (вид операции / месяц / контрагент / статья ДДС / итог). Фильтры: направление (приход/расход), контрагент (Ref_Key), категория контрагента (ИП/ЮрЛицо/ФизЛицо/Нерезидент/Госорган), статья ДДС (по коду/имени/Ref), подстрока в назначении платежа (напр. «аренда»), вид операции. Отвечает на вопросы вроде «сколько процентов получили за год от такого-то банка», «сколько заплатили ИП за год», «куда уходили деньги по статьям ДДС», «приход по месяцам». Период — даты YYYY-MM-DD. Контрагент в банковских документах хранится полиморфно — фильтр применяется на стороне коннектора; статья ДДС / назначение / период / организация — на сервере 1С.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "from": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+            "description": "Дата начала периода (YYYY-MM-DD)"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+            "description": "Дата конца периода (YYYY-MM-DD)"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "in",
+              "out",
+              "both"
+            ],
+            "default": "both",
+            "description": "in — приход, out — расход, both — оба (по умолчанию)"
+          },
+          "counterpartyRef": {
+            "type": "string",
+            "description": "Ref_Key контрагента (из find_counterparty)"
+          },
+          "counterpartyKind": {
+            "type": "string",
+            "enum": [
+              "ИП",
+              "ЮрЛицо",
+              "ФизЛицо",
+              "Нерезидент",
+              "Госорган"
+            ],
+            "description": "Категория контрагента: ИП, ЮрЛицо, ФизЛицо (без ИП), Нерезидент, Госорган. Берётся из справочника по полям ЮридическоеФизическоеЛицо / ИндивидуальныйПредприниматель и т.п."
+          },
+          "cashflowItem": {
+            "type": "string",
+            "description": "Статья ДДС: код (напр. «00-000006»), часть наименования (напр. «Аренда») или Ref_Key"
+          },
+          "purposeContains": {
+            "type": "string",
+            "description": "Подстрока в назначении платежа (напр. «процент», «депозит», «аренда»)"
+          },
+          "operationType": {
+            "type": "string",
+            "description": "Точный вид операции (ВидОперации), напр. «ПрочееПоступление», «Депозит»"
+          },
+          "groupBy": {
+            "type": "string",
+            "enum": [
+              "operation",
+              "month",
+              "counterparty",
+              "cashflowItem",
+              "total"
+            ],
+            "default": "operation",
+            "description": "Разбивка: operation (вид операции), month (месяц), counterparty (контрагент), cashflowItem (статья ДДС), total (без разбивки)"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "get_deal_history",
+      "description": "Хронология всех проведённых банковских и кассовых движений по конкретной сделке либо договору: приход, расход, итоги и сальдо. Сделку можно задать кодом из назначения платежа (dealKey, напр. «CB12812240037987» — банковский идентификатор депозита/займа/контракта в назначении) или ссылкой на договор (contractRef, Ref_Key из find_counterparty + договор). Обязателен ровно один из них. Период — опционально (без него — всё время).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "dealKey": {
+            "type": "string",
+            "description": "Код сделки/контракта/документа в назначении платежа (напр. «CB12812240037987»). Серверный фильтр substringof по НазначениеПлатежа."
+          },
+          "contractRef": {
+            "type": "string",
+            "description": "Ref_Key договора (для документов с ДоговорКонтрагента_Key)"
+          },
+          "from": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+            "description": "Дата начала (YYYY-MM-DD)"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+            "description": "Дата конца (YYYY-MM-DD)"
+          },
+          "limit": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 1000,
+            "default": 200,
+            "description": "Сколько событий вернуть"
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "get_taxes_paid",
+      "description": "Сумма уплаченных налогов/страховых взносов за период: исходящие банковские списания с ВидОперации=«ПеречислениеНалога» (это надёжный маркер уплаты налога в БП 3.0; покрывает ЕНП, НДФЛ, страховые взносы, налог УСН/ПСН, налог на прибыль и т.п.). По умолчанию — итог; разбивка по статье ДДС / месяцу / получателю (обычно ФНС/Казначейство) / итог. Параметр cashflowItem уточняет конкретный вид налога (напр. «УСН», «Страховые», «НДФЛ», «ЕНП»). Отвечает на вопросы вроде «сколько налогов мы заплатили в прошлом году», «сколько ушло страховых взносов в квартал», «помесячная нагрузка по налогам». Период — даты YYYY-MM-DD.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "from": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+            "description": "Дата начала периода (YYYY-MM-DD)"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+            "description": "Дата конца периода (YYYY-MM-DD)"
+          },
+          "cashflowItem": {
+            "type": "string",
+            "description": "Уточнить статью ДДС (напр. «УСН», «Страховые», «НДФЛ», «ЕНП», код «00-000010»)"
+          },
+          "groupBy": {
+            "type": "string",
+            "enum": [
+              "cashflowItem",
+              "month",
+              "counterparty",
+              "total"
+            ],
+            "default": "cashflowItem",
+            "description": "Разбивка: cashflowItem (по налогу) / month / counterparty / total"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "get_sales_breakdown",
+      "description": "Суммирует проведённые реализации (СуммаДокумента) за период с разбивкой по контрагенту / месяцу / договору / итогу. Можно фильтровать конкретным контрагентом, категорией контрагента (ИП/ЮрЛицо/ФизЛицо/Нерезидент/Госорган) или договором. Отвечает на вопросы вроде «топ покупателей за год», «выручка по месяцам», «сколько продали ИП», «продажи по конкретному договору». Период — даты YYYY-MM-DD.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "from": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+            "description": "Дата начала периода (YYYY-MM-DD)"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+            "description": "Дата конца периода (YYYY-MM-DD)"
+          },
+          "counterpartyRef": {
+            "type": "string",
+            "description": "Ref_Key контрагента (точечный фильтр)"
+          },
+          "counterpartyKind": {
+            "type": "string",
+            "enum": [
+              "ИП",
+              "ЮрЛицо",
+              "ФизЛицо",
+              "Нерезидент",
+              "Госорган"
+            ],
+            "description": "Категория контрагента: ИП, ЮрЛицо, ФизЛицо (без ИП), Нерезидент, Госорган"
+          },
+          "contractRef": {
+            "type": "string",
+            "description": "Ref_Key договора (точечный фильтр)"
+          },
+          "groupBy": {
+            "type": "string",
+            "enum": [
+              "counterparty",
+              "month",
+              "contract",
+              "total"
+            ],
+            "default": "counterparty",
+            "description": "Разбивка: counterparty (контрагент), month (месяц), contract (договор), total (без разбивки)"
+          },
+          "limit": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 1000,
+            "default": 50,
+            "description": "Сколько групп вернуть"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "get_purchases_breakdown",
+      "description": "Суммирует проведённые поступления товаров/услуг (закупки) за период с разбивкой по поставщику / месяцу / договору / итогу. Можно фильтровать конкретным поставщиком, категорией контрагента или договором. Отвечает на вопросы вроде «топ поставщиков за год», «закупки по месяцам», «сколько закупили у ИП». Период — даты YYYY-MM-DD.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "from": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+            "description": "Дата начала периода (YYYY-MM-DD)"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+            "description": "Дата конца периода (YYYY-MM-DD)"
+          },
+          "counterpartyRef": {
+            "type": "string",
+            "description": "Ref_Key контрагента (точечный фильтр)"
+          },
+          "counterpartyKind": {
+            "type": "string",
+            "enum": [
+              "ИП",
+              "ЮрЛицо",
+              "ФизЛицо",
+              "Нерезидент",
+              "Госорган"
+            ],
+            "description": "Категория контрагента: ИП, ЮрЛицо, ФизЛицо (без ИП), Нерезидент, Госорган"
+          },
+          "contractRef": {
+            "type": "string",
+            "description": "Ref_Key договора (точечный фильтр)"
+          },
+          "groupBy": {
+            "type": "string",
+            "enum": [
+              "counterparty",
+              "month",
+              "contract",
+              "total"
+            ],
+            "default": "counterparty",
+            "description": "Разбивка: counterparty (контрагент), month (месяц), contract (договор), total (без разбивки)"
+          },
+          "limit": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 1000,
+            "default": 50,
+            "description": "Сколько групп вернуть"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "get_organization_card",
+      "description": "Полные реквизиты организации (юрлица) из настроек 1С: ИНН/КПП/ОГРН, полное и сокращённое наименование, дата регистрации, ОКВЭД, налоговый орган, контактная информация (юридический/фактический/почтовый адрес, телефон, email), основной банковский счёт, а также директор и главный бухгалтер. Для ИП директором считается сам предприниматель (берётся из карточки организации); для ООО и т.п. — из регистра «Ответственные лица организаций», если он опубликован в OData (если нет — вернётся заметка, что нужно добавить в «Состав OData»). Работает для любой организации базы — по названию (organization) или автоматически, если она в базе одна.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_counterparty",
+      "description": "Создаёт нового контрагента в справочнике. ПО УМОЛЧАНИЮ это предпросмотр (dry-run) — сначала покажите пользователю, что будет создано, и только после явного согласия вызовите повторно с confirm=true. Запись идёт в боевую базу, поэтому без подтверждения не создавайте.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Наименование контрагента (Description)"
+          },
+          "inn": {
+            "type": "string",
+            "description": "ИНН"
+          },
+          "kpp": {
+            "type": "string",
+            "description": "КПП"
+          },
+          "fullName": {
+            "type": "string",
+            "description": "Полное наименование"
+          },
+          "legalType": {
+            "type": "string",
+            "enum": [
+              "ЮридическоеЛицо",
+              "ФизическоеЛицо"
+            ],
+            "description": "Юридическое или физическое лицо"
+          },
+          "phone": {
+            "type": "string",
+            "description": "Телефон (в контактную информацию)"
+          },
+          "email": {
+            "type": "string",
+            "description": "Email (в контактную информацию)"
+          },
+          "address": {
+            "type": "string",
+            "description": "Адрес текстом (в контактную информацию, юр. адрес)"
+          },
+          "ogrn": {
+            "type": "string",
+            "description": "ОГРН (пишется, если в базе настроен доп.реквизит «ОГРН»)"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "mark_for_deletion",
+      "description": "Ставит/снимает пометку на удаление у объекта (как в 1С) — мягкое удаление, физически данные не стираются. По умолчанию предпросмотр (dry-run); для применения повторите с confirm=true. Полезно, чтобы убрать ошибочно созданную запись.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "entitySet": {
+            "type": "string",
+            "description": "Имя объекта, напр. Catalog_Контрагенты"
+          },
+          "ref": {
+            "type": "string",
+            "description": "Ref_Key объекта (GUID)"
+          },
+          "mark": {
+            "type": "boolean",
+            "default": true,
+            "description": "true — пометить на удаление, false — снять пометку"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "entitySet",
+          "ref"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_nomenclature",
+      "description": "Создаёт новую позицию номенклатуры (товар/услуга). ПО УМОЛЧАНИЮ предпросмотр (dry-run): покажите пользователю payload и только после согласия повторите с confirm=true. Можно указать артикул, папку (folder — имя группы или Ref_Key) и пометить услугой (isService). Запись идёт в боевую базу.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Наименование номенклатуры (Description)"
+          },
+          "fullName": {
+            "type": "string",
+            "description": "Полное наименование"
+          },
+          "article": {
+            "type": "string",
+            "description": "Артикул"
+          },
+          "folder": {
+            "type": "string",
+            "description": "Папка/группа — имя или Ref_Key (для размещения в группе)"
+          },
+          "isService": {
+            "type": "boolean",
+            "default": false,
+            "description": "true — услуга (Услуга=true, вид «Услуга»), false — товар"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_contract",
+      "description": "Заводит договор контрагента (подчинённый справочник): владелец — контрагент, организация, ВИД договора, номер/дата, валюта/тип цен и (опц.) руководитель/подписант. ВАЖНО: вид договора (kind) обязателен и его НЕЛЬЗЯ выбирать самостоятельно — уточните у пользователя, т.к. один контрагент может быть и покупателем, и поставщиком. Номер по умолчанию «б/н», дата — сегодня. По умолчанию предпросмотр (dry-run); создание — при confirm=true.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "counterpartyRef": {
+            "type": "string",
+            "description": "Ref_Key контрагента (владелец договора)"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "СПокупателем",
+              "СПоставщиком",
+              "Прочее",
+              "СКомиссионером",
+              "СКомитентом"
+            ],
+            "description": "Вид договора — ОБЯЗАТЕЛЬНО спросить у пользователя, не выбирать самому"
+          },
+          "number": {
+            "type": "string",
+            "description": "Номер договора (по умолчанию «б/н»)"
+          },
+          "date": {
+            "type": "string",
+            "description": "Дата договора YYYY-MM-DD (по умолчанию сегодня)"
+          },
+          "name": {
+            "type": "string",
+            "description": "Наименование договора (по умолчанию «Договор <номер>»)"
+          },
+          "currency": {
+            "type": "string",
+            "description": "Валюта взаиморасчётов — код (напр. 643/840) или название (RUB/USD)"
+          },
+          "priceType": {
+            "type": "string",
+            "description": "Тип цен — название или код (из справочника Типы цен номенклатуры)"
+          },
+          "headName": {
+            "type": "string",
+            "description": "ФИО руководителя/подписанта контрагента (реквизит договора)"
+          },
+          "headPosition": {
+            "type": "string",
+            "description": "Должность руководителя контрагента (напр. «Генеральный директор»)"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "counterpartyRef",
+          "kind"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_invoice",
+      "description": "Создаёт счёт на оплату покупателю (документ) с табличной частью «Товары». Документ создаётся НЕПРОВЕДЁННЫМ (черновик) — провести можно вручную в 1С или инструментом post_document. По умолчанию предпросмотр (dry-run); создание — при confirm=true. Контрагент и (опц.) договор — по Ref_Key; позиции — по Ref_Key номенклатуры.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "counterpartyRef": {
+            "type": "string",
+            "description": "Ref_Key контрагента-покупателя"
+          },
+          "contractRef": {
+            "type": "string",
+            "description": "Ref_Key договора (необязательно)"
+          },
+          "date": {
+            "type": "string",
+            "description": "Дата документа YYYY-MM-DD (по умолчанию сегодня)"
+          },
+          "sumIncludesVat": {
+            "type": "boolean",
+            "default": true,
+            "description": "Сумма включает НДС"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "nomenclatureRef": {
+                  "type": "string",
+                  "description": "Ref_Key номенклатуры"
+                },
+                "quantity": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "Количество"
+                },
+                "price": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Цена за единицу"
+                },
+                "vatRate": {
+                  "type": "string",
+                  "enum": [
+                    "БезНДС",
+                    "НДС0",
+                    "НДС5",
+                    "НДС7",
+                    "НДС10",
+                    "НДС20",
+                    "НДС22"
+                  ],
+                  "default": "БезНДС",
+                  "description": "Ставка НДС"
+                }
+              },
+              "required": [
+                "nomenclatureRef",
+                "quantity",
+                "price"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "description": "Позиции счёта"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "counterpartyRef",
+          "lines"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "post_document",
+      "description": "Проводит документ (влияет на учёт) или отменяет проведение. По умолчанию предпросмотр (dry-run); применение — при confirm=true. ВНИМАНИЕ: проведение меняет учётные данные — используйте осознанно.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "entitySet": {
+            "type": "string",
+            "description": "Имя документа, напр. Document_СчетНаОплатуПокупателю"
+          },
+          "ref": {
+            "type": "string",
+            "description": "Ref_Key документа (GUID)"
+          },
+          "post": {
+            "type": "boolean",
+            "default": true,
+            "description": "true — провести, false — отменить проведение"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "entitySet",
+          "ref"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "update_entity",
+      "description": "Изменяет произвольные поля объекта 1С через PATCH по Ref_Key. Имена полей — технические (узнать через describe_entity), напр. {\"ИНН\":\"7701234567\"}. По умолчанию предпросмотр (dry-run); применение — при confirm=true. Мощный инструмент: меняйте только те поля, что указали.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "entitySet": {
+            "type": "string",
+            "description": "Имя объекта, напр. Catalog_Контрагенты"
+          },
+          "ref": {
+            "type": "string",
+            "description": "Ref_Key объекта (GUID)"
+          },
+          "fields": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            },
+            "description": "Поля для изменения: { техническоеИмя: значение }"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "entitySet",
+          "ref",
+          "fields"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "update_counterparty",
+      "description": "Изменяет реквизиты контрагента по Ref_Key (наименование/ИНН/КПП/полное имя). По умолчанию предпросмотр (dry-run); применение — при confirm=true. Указывайте только меняемые поля.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "ref": {
+            "type": "string",
+            "description": "Ref_Key контрагента"
+          },
+          "name": {
+            "type": "string",
+            "description": "Новое наименование (Description)"
+          },
+          "inn": {
+            "type": "string",
+            "description": "ИНН"
+          },
+          "kpp": {
+            "type": "string",
+            "description": "КПП"
+          },
+          "fullName": {
+            "type": "string",
+            "description": "Полное наименование"
+          },
+          "phone": {
+            "type": "string",
+            "description": "Телефон (контактная информация)"
+          },
+          "email": {
+            "type": "string",
+            "description": "Email (контактная информация)"
+          },
+          "address": {
+            "type": "string",
+            "description": "Адрес текстом (юр. адрес)"
+          },
+          "ogrn": {
+            "type": "string",
+            "description": "ОГРН (если в базе настроен доп.реквизит)"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "update_nomenclature",
+      "description": "Изменяет реквизиты номенклатуры по Ref_Key (наименование/полное имя/артикул). По умолчанию предпросмотр (dry-run); применение — при confirm=true. Указывайте только меняемые поля.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "ref": {
+            "type": "string",
+            "description": "Ref_Key номенклатуры"
+          },
+          "name": {
+            "type": "string",
+            "description": "Новое наименование (Description)"
+          },
+          "fullName": {
+            "type": "string",
+            "description": "Полное наименование"
+          },
+          "article": {
+            "type": "string",
+            "description": "Артикул"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_purchase",
+      "description": "Создаёт документ «Поступление товаров и услуг» (закупка у поставщика) с табличной частью «Товары». Документ НЕПРОВЕДЁННЫЙ; провести — вручную в 1С или post_document (тогда 1С сформирует проводки Дт 41/19 Кт 60). По умолчанию dry-run; создание — при confirm=true. Контрагент — поставщик, договор — вида «СПоставщиком».",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "counterpartyRef": {
+            "type": "string",
+            "description": "Ref_Key контрагента"
+          },
+          "contractRef": {
+            "type": "string",
+            "description": "Ref_Key договора (необязательно)"
+          },
+          "warehouse": {
+            "type": "string",
+            "description": "Название склада (если в базе несколько)"
+          },
+          "date": {
+            "type": "string",
+            "description": "Дата документа YYYY-MM-DD (по умолчанию сегодня)"
+          },
+          "sumIncludesVat": {
+            "type": "boolean",
+            "default": true,
+            "description": "Сумма включает НДС"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "nomenclatureRef": {
+                  "type": "string",
+                  "description": "Ref_Key номенклатуры"
+                },
+                "quantity": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "Количество"
+                },
+                "price": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Цена за единицу"
+                },
+                "vatRate": {
+                  "type": "string",
+                  "enum": [
+                    "БезНДС",
+                    "НДС0",
+                    "НДС5",
+                    "НДС7",
+                    "НДС10",
+                    "НДС20",
+                    "НДС22"
+                  ],
+                  "default": "БезНДС",
+                  "description": "Ставка НДС"
+                }
+              },
+              "required": [
+                "nomenclatureRef",
+                "quantity",
+                "price"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "description": "Позиции документа"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "counterpartyRef",
+          "lines"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_supplier_invoice",
+      "description": "Создаёт документ «Счёт на оплату поставщика» — регистрирует входящий счёт-основание для оплаты (подходит для предоплаты, когда товар ещё не пришёл). Проводок НЕ делает (счёт не проводится), счета учёта не нужны. Табличная часть «Товары» вмещает и товары, и услуги (напр. доставку — задайте content/Содержание). Реквизиты входящего счёта: incomingNumber/incomingDate. По умолчанию dry-run; создание — при confirm=true. Контрагент — поставщик, договор — вида «СПоставщиком».",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "counterpartyRef": {
+            "type": "string",
+            "description": "Ref_Key контрагента-поставщика"
+          },
+          "contractRef": {
+            "type": "string",
+            "description": "Ref_Key договора (вид «СПоставщиком»)"
+          },
+          "supplierBankAccountRef": {
+            "type": "string",
+            "description": "Ref_Key банковского счёта поставщика (БанковскийСчетКонтрагента)"
+          },
+          "incomingNumber": {
+            "type": "string",
+            "description": "Номер входящего счёта поставщика"
+          },
+          "incomingDate": {
+            "type": "string",
+            "description": "Дата входящего счёта YYYY-MM-DD"
+          },
+          "date": {
+            "type": "string",
+            "description": "Дата документа YYYY-MM-DD (по умолчанию сегодня)"
+          },
+          "comment": {
+            "type": "string",
+            "description": "Комментарий к документу"
+          },
+          "sumIncludesVat": {
+            "type": "boolean",
+            "default": true,
+            "description": "Сумма включает НДС"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "nomenclatureRef": {
+                  "type": "string",
+                  "description": "Ref_Key номенклатуры"
+                },
+                "quantity": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "Количество"
+                },
+                "price": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Цена за единицу"
+                },
+                "vatRate": {
+                  "type": "string",
+                  "enum": [
+                    "БезНДС",
+                    "НДС0",
+                    "НДС5",
+                    "НДС7",
+                    "НДС10",
+                    "НДС20",
+                    "НДС22"
+                  ],
+                  "default": "БезНДС",
+                  "description": "Ставка НДС"
+                },
+                "content": {
+                  "type": "string",
+                  "description": "Содержание строки (напр. «Доставка СДЭК») — удобно для услуг"
+                }
+              },
+              "required": [
+                "nomenclatureRef",
+                "quantity",
+                "price"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "description": "Позиции счёта (товары и услуги в одной таблице)"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "counterpartyRef",
+          "lines"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_payout_order",
+      "description": "Создаёт документ «Платёжное поручение» — исходящую выплату контрагенту (напр. оплата по агентскому договору / услугам, зеркало платёжки, уже ушедшей в банк). Документ ВСЕГДА создаётся НЕПРОВЕДЁННЫМ (Posted=false) — эта операция намеренно не проводит документ, проведение делайте отдельно через post_document, если вообще нужно. Номер (number) — задаётся явно вызывающим (обычно чтобы совпасть с номером уже отправленной банковской платёжки), не генерируется автоматически. По умолчанию dry-run (confirm=false); создание — при confirm=true. Счёт организации и валюта — резолвятся автоматически, если не заданы.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "counterpartyRef": {
+            "type": "string",
+            "description": "Ref_Key контрагента-получателя (из find_counterparty)"
+          },
+          "counterpartyAccountRef": {
+            "type": "string",
+            "description": "Ref_Key банковского счёта контрагента (СчетКонтрагента_Key)"
+          },
+          "contractRef": {
+            "type": "string",
+            "description": "Ref_Key договора с контрагентом (ДоговорКонтрагента_Key)"
+          },
+          "amount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Сумма документа"
+          },
+          "number": {
+            "type": "string",
+            "description": "Номер документа — задайте явно (напр. чтобы совпасть с номером банковской платёжки). 1С автонумерует новые документы только если Number не передан вовсе — но здесь он обязателен."
+          },
+          "date": {
+            "type": "string",
+            "description": "Дата документа YYYY-MM-DD (по умолчанию сегодня)"
+          },
+          "purposeText": {
+            "type": "string",
+            "description": "Назначение платежа (НазначениеПлатежа)"
+          },
+          "recipientText": {
+            "type": "string",
+            "description": "Текст получателя — как печатается в платёжке (ТекстПолучателя)"
+          },
+          "recipientInn": {
+            "type": "string",
+            "description": "ИНН получателя"
+          },
+          "recipientKpp": {
+            "type": "string",
+            "description": "КПП получателя"
+          },
+          "payerText": {
+            "type": "string",
+            "description": "Текст плательщика (по умолчанию — имя организации)"
+          },
+          "payerInn": {
+            "type": "string",
+            "description": "ИНН плательщика (по умолчанию — ИНН организации)"
+          },
+          "orgAccountRef": {
+            "type": "string",
+            "description": "Ref_Key счёта организации-плательщика (СчетОрганизации_Key); без указания — подбирается"
+          },
+          "responsibleRef": {
+            "type": "string",
+            "description": "Ref_Key ответственного (Ответственный_Key)"
+          },
+          "cashflowItemRef": {
+            "type": "string",
+            "description": "Ref_Key статьи движения денежных средств (СтатьяДвиженияДенежныхСредств_Key)"
+          },
+          "currencyRef": {
+            "type": "string",
+            "description": "Ref_Key валюты документа; без указания — рубль (643)"
+          },
+          "vatRate": {
+            "type": "string",
+            "enum": [
+              "БезНДС",
+              "НДС0",
+              "НДС5",
+              "НДС7",
+              "НДС10",
+              "НДС20",
+              "НДС22"
+            ],
+            "default": "БезНДС",
+            "description": "Ставка НДС"
+          },
+          "operationKind": {
+            "type": "string",
+            "default": "ОплатаПоставщику",
+            "description": "Вид операции (ВидОперации), напр. ОплатаПоставщику"
+          },
+          "priority": {
+            "type": "integer",
+            "default": 5,
+            "description": "Очередность платежа (ОчередностьПлатежа)"
+          },
+          "comment": {
+            "type": "string",
+            "description": "Комментарий к документу"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "counterpartyRef",
+          "amount",
+          "number",
+          "purposeText",
+          "recipientText"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_shipment",
+      "description": "Создаёт документ «Реализация товаров и услуг» (отгрузка покупателю) с табличной частью «Товары». Документ НЕПРОВЕДЁННЫЙ; провести — вручную в 1С или post_document (тогда 1С сформирует проводки Дт 62 Кт 90, Дт 90 Кт 41 и др.). По умолчанию dry-run; создание — при confirm=true. Контрагент — покупатель, договор — вида «СПокупателем».",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "counterpartyRef": {
+            "type": "string",
+            "description": "Ref_Key контрагента"
+          },
+          "contractRef": {
+            "type": "string",
+            "description": "Ref_Key договора (необязательно)"
+          },
+          "warehouse": {
+            "type": "string",
+            "description": "Название склада (если в базе несколько)"
+          },
+          "date": {
+            "type": "string",
+            "description": "Дата документа YYYY-MM-DD (по умолчанию сегодня)"
+          },
+          "sumIncludesVat": {
+            "type": "boolean",
+            "default": true,
+            "description": "Сумма включает НДС"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "nomenclatureRef": {
+                  "type": "string",
+                  "description": "Ref_Key номенклатуры"
+                },
+                "quantity": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "Количество"
+                },
+                "price": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Цена за единицу"
+                },
+                "vatRate": {
+                  "type": "string",
+                  "enum": [
+                    "БезНДС",
+                    "НДС0",
+                    "НДС5",
+                    "НДС7",
+                    "НДС10",
+                    "НДС20",
+                    "НДС22"
+                  ],
+                  "default": "БезНДС",
+                  "description": "Ставка НДС"
+                }
+              },
+              "required": [
+                "nomenclatureRef",
+                "quantity",
+                "price"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "description": "Позиции документа"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "counterpartyRef",
+          "lines"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "update_document_lines",
+      "description": "Заменяет табличную часть «Товары» существующего документа новым набором строк и пересчитывает сумму. Поддержаны: счёт покупателю, поступление, реализация. Документ должен быть НЕПРОВЕДЁННЫМ (если проведён — сначала отмените проведение через post_document). По умолчанию dry-run; применение — при confirm=true.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "entitySet": {
+            "type": "string",
+            "description": "Имя документа, напр. Document_РеализацияТоваровУслуг"
+          },
+          "ref": {
+            "type": "string",
+            "description": "Ref_Key документа"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "nomenclatureRef": {
+                  "type": "string",
+                  "description": "Ref_Key номенклатуры"
+                },
+                "quantity": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "Количество"
+                },
+                "price": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Цена за единицу"
+                },
+                "vatRate": {
+                  "type": "string",
+                  "enum": [
+                    "БезНДС",
+                    "НДС0",
+                    "НДС5",
+                    "НДС7",
+                    "НДС10",
+                    "НДС20",
+                    "НДС22"
+                  ],
+                  "default": "БезНДС",
+                  "description": "Ставка НДС"
+                }
+              },
+              "required": [
+                "nomenclatureRef",
+                "quantity",
+                "price"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "description": "Новый полный набор строк (заменяет прежние)"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "entitySet",
+          "ref",
+          "lines"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_return_from_customer",
+      "description": "Создаёт документ «Возврат товаров от покупателя» с табличной частью «Товары». НЕПРОВЕДЁННЫЙ; провести — post_document (проводки сторнируют реализацию: Дт 90.02 Кт 41, Дт 62 Кт 90.01 со знаком минус). dry-run/confirm. Контрагент — покупатель.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "counterpartyRef": {
+            "type": "string",
+            "description": "Ref_Key контрагента"
+          },
+          "contractRef": {
+            "type": "string",
+            "description": "Ref_Key договора (необязательно)"
+          },
+          "warehouse": {
+            "type": "string",
+            "description": "Название склада (если в базе несколько)"
+          },
+          "date": {
+            "type": "string",
+            "description": "Дата документа YYYY-MM-DD (по умолчанию сегодня)"
+          },
+          "sumIncludesVat": {
+            "type": "boolean",
+            "default": true,
+            "description": "Сумма включает НДС"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "nomenclatureRef": {
+                  "type": "string",
+                  "description": "Ref_Key номенклатуры"
+                },
+                "quantity": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "Количество"
+                },
+                "price": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Цена за единицу"
+                },
+                "vatRate": {
+                  "type": "string",
+                  "enum": [
+                    "БезНДС",
+                    "НДС0",
+                    "НДС5",
+                    "НДС7",
+                    "НДС10",
+                    "НДС20",
+                    "НДС22"
+                  ],
+                  "default": "БезНДС",
+                  "description": "Ставка НДС"
+                }
+              },
+              "required": [
+                "nomenclatureRef",
+                "quantity",
+                "price"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "description": "Позиции документа"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "counterpartyRef",
+          "lines"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_return_to_supplier",
+      "description": "Создаёт документ «Возврат товаров поставщику» с табличной частью «Товары». НЕПРОВЕДЁННЫЙ; провести — post_document (проводки сторнируют поступление: Дт 60 Кт 41/19). dry-run/confirm. Контрагент — поставщик.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "counterpartyRef": {
+            "type": "string",
+            "description": "Ref_Key контрагента"
+          },
+          "contractRef": {
+            "type": "string",
+            "description": "Ref_Key договора (необязательно)"
+          },
+          "warehouse": {
+            "type": "string",
+            "description": "Название склада (если в базе несколько)"
+          },
+          "date": {
+            "type": "string",
+            "description": "Дата документа YYYY-MM-DD (по умолчанию сегодня)"
+          },
+          "sumIncludesVat": {
+            "type": "boolean",
+            "default": true,
+            "description": "Сумма включает НДС"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "nomenclatureRef": {
+                  "type": "string",
+                  "description": "Ref_Key номенклатуры"
+                },
+                "quantity": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "Количество"
+                },
+                "price": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Цена за единицу"
+                },
+                "vatRate": {
+                  "type": "string",
+                  "enum": [
+                    "БезНДС",
+                    "НДС0",
+                    "НДС5",
+                    "НДС7",
+                    "НДС10",
+                    "НДС20",
+                    "НДС22"
+                  ],
+                  "default": "БезНДС",
+                  "description": "Ставка НДС"
+                }
+              },
+              "required": [
+                "nomenclatureRef",
+                "quantity",
+                "price"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "description": "Позиции документа"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "counterpartyRef",
+          "lines"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_transfer",
+      "description": "Создаёт документ «Перемещение товаров» между складами. НЕПРОВЕДЁННЫЙ; провести — post_document (проводки Дт 41(склад-получатель) Кт 41(склад-отправитель)). dry-run/confirm.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "fromWarehouse": {
+            "type": "string",
+            "description": "Название склада-отправителя"
+          },
+          "toWarehouse": {
+            "type": "string",
+            "description": "Название склада-получателя"
+          },
+          "date": {
+            "type": "string",
+            "description": "Дата YYYY-MM-DD (по умолчанию сегодня)"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "nomenclatureRef": {
+                  "type": "string",
+                  "description": "Ref_Key номенклатуры"
+                },
+                "quantity": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "Количество"
+                },
+                "price": {
+                  "type": "number",
+                  "minimum": 0,
+                  "default": 0,
+                  "description": "Цена за единицу (для оценки)"
+                }
+              },
+              "required": [
+                "nomenclatureRef",
+                "quantity"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "description": "Позиции документа"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "fromWarehouse",
+          "toWarehouse",
+          "lines"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_surplus",
+      "description": "Создаёт документ «Оприходование товаров» (излишки). НЕПРОВЕДЁННЫЙ; провести — post_document (проводки Дт 41 Кт 91.01). Можно указать документ-основание — инвентаризацию. dry-run/confirm.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "warehouse": {
+            "type": "string",
+            "description": "Название склада (если несколько)"
+          },
+          "inventoryRef": {
+            "type": "string",
+            "description": "Ref_Key инвентаризации-основания (необязательно)"
+          },
+          "date": {
+            "type": "string",
+            "description": "Дата YYYY-MM-DD (по умолчанию сегодня)"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "nomenclatureRef": {
+                  "type": "string",
+                  "description": "Ref_Key номенклатуры"
+                },
+                "quantity": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "Количество"
+                },
+                "price": {
+                  "type": "number",
+                  "minimum": 0,
+                  "default": 0,
+                  "description": "Цена за единицу (для оценки)"
+                }
+              },
+              "required": [
+                "nomenclatureRef",
+                "quantity"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "description": "Позиции документа"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "lines"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_writeoff",
+      "description": "Создаёт документ «Списание товаров» (недостача/порча). НЕПРОВЕДЁННЫЙ; провести — post_document (проводки Дт 94 Кт 41). Можно указать документ-основание — инвентаризацию. dry-run/confirm.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "warehouse": {
+            "type": "string",
+            "description": "Название склада (если несколько)"
+          },
+          "inventoryRef": {
+            "type": "string",
+            "description": "Ref_Key инвентаризации-основания (необязательно)"
+          },
+          "date": {
+            "type": "string",
+            "description": "Дата YYYY-MM-DD (по умолчанию сегодня)"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "nomenclatureRef": {
+                  "type": "string",
+                  "description": "Ref_Key номенклатуры"
+                },
+                "quantity": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "Количество"
+                },
+                "price": {
+                  "type": "number",
+                  "minimum": 0,
+                  "default": 0,
+                  "description": "Цена за единицу (для оценки)"
+                }
+              },
+              "required": [
+                "nomenclatureRef",
+                "quantity"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "description": "Позиции документа"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "lines"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_inventory",
+      "description": "Создаёт документ «Инвентаризация товаров на складе» (сверка факт/учёт). Документ НЕ проводится (движений не делает) — служит основанием для оприходования/списания. dry-run/confirm. Для каждой позиции: фактическое и учётное количество.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "warehouse": {
+            "type": "string",
+            "description": "Название склада (если несколько)"
+          },
+          "date": {
+            "type": "string",
+            "description": "Дата YYYY-MM-DD (по умолчанию сегодня)"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "nomenclatureRef": {
+                  "type": "string",
+                  "description": "Ref_Key номенклатуры"
+                },
+                "factQuantity": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Фактическое количество"
+                },
+                "accountingQuantity": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Количество по учёту"
+                },
+                "price": {
+                  "type": "number",
+                  "minimum": 0,
+                  "default": 0,
+                  "description": "Цена (для оценки)"
+                }
+              },
+              "required": [
+                "nomenclatureRef",
+                "factQuantity",
+                "accountingQuantity"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "description": "Позиции инвентаризации"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "lines"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "add_document_line",
+      "description": "Добавляет одну позицию в табличную часть «Товары» существующего НЕПРОВЕДЁННОГО документа (счёт/поступление/реализация), сохраняя прежние строки. dry-run/confirm.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "entitySet": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "line": {
+            "type": "object",
+            "properties": {
+              "nomenclatureRef": {
+                "type": "string",
+                "description": "Ref_Key номенклатуры"
+              },
+              "quantity": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "description": "Количество"
+              },
+              "price": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Цена за единицу"
+              },
+              "vatRate": {
+                "type": "string",
+                "enum": [
+                  "БезНДС",
+                  "НДС0",
+                  "НДС5",
+                  "НДС7",
+                  "НДС10",
+                  "НДС20",
+                  "НДС22"
+                ],
+                "default": "БезНДС",
+                "description": "Ставка НДС"
+              }
+            },
+            "required": [
+              "nomenclatureRef",
+              "quantity",
+              "price"
+            ],
+            "additionalProperties": false
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "entitySet",
+          "ref",
+          "line"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "remove_document_line",
+      "description": "Удаляет строку (по номеру LineNumber, начиная с 1) из табличной части «Товары» существующего НЕПРОВЕДЁННОГО документа. Нельзя удалить последнюю строку. dry-run/confirm.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "entitySet": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "lineNumber": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "description": "Номер строки (с 1)"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "entitySet",
+          "ref",
+          "lineNumber"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_act",
+      "description": "Создаёт «Реализация (акт, накладная)» с табличной частью УСЛУГИ (без склада/остатков). Документ НЕПРОВЕДЁННЫЙ; проводки при проведении Дт 62 Кт 90.01 (без 41). dry-run/confirm. Контрагент — покупатель; позиции — услуги-номенклатура.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "counterpartyRef": {
+            "type": "string",
+            "description": "Ref_Key покупателя"
+          },
+          "contractRef": {
+            "type": "string",
+            "description": "Ref_Key договора"
+          },
+          "date": {
+            "type": "string",
+            "description": "Дата YYYY-MM-DD (по умолчанию сегодня)"
+          },
+          "sumIncludesVat": {
+            "type": "boolean",
+            "default": true,
+            "description": "Сумма включает НДС"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "nomenclatureRef": {
+                  "type": "string",
+                  "description": "Ref_Key номенклатуры"
+                },
+                "quantity": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "Количество"
+                },
+                "price": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Цена за единицу"
+                },
+                "vatRate": {
+                  "type": "string",
+                  "enum": [
+                    "БезНДС",
+                    "НДС0",
+                    "НДС5",
+                    "НДС7",
+                    "НДС10",
+                    "НДС20",
+                    "НДС22"
+                  ],
+                  "default": "БезНДС",
+                  "description": "Ставка НДС"
+                }
+              },
+              "required": [
+                "nomenclatureRef",
+                "quantity",
+                "price"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "description": "Позиции-услуги"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "counterpartyRef",
+          "lines"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_services_act",
+      "description": "Создаёт «Акт об оказании производственных услуг» (услуги с учётом доходов/расходов по номенклатурной группе). Отличается от create_act тем, что требует номенклатурную группу (субконто счёта 90.01) — она НЕ угадывается. Проводки Дт 62 Кт 90.01, НДС 90.03. НЕПРОВЕДЁННЫЙ; провести — post_document. dry-run/confirm.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "counterpartyRef": {
+            "type": "string",
+            "description": "Ref_Key покупателя"
+          },
+          "contractRef": {
+            "type": "string",
+            "description": "Ref_Key договора"
+          },
+          "nomenclatureGroupRef": {
+            "type": "string",
+            "description": "Ref_Key номенклатурной группы (ОБЯЗАТЕЛЬНО, субконто счёта доходов 90.01 — не угадывается)"
+          },
+          "date": {
+            "type": "string",
+            "description": "Дата YYYY-MM-DD (по умолчанию сегодня)"
+          },
+          "sumIncludesVat": {
+            "type": "boolean",
+            "default": true,
+            "description": "Сумма включает НДС"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "nomenclatureRef": {
+                  "type": "string",
+                  "description": "Ref_Key номенклатуры"
+                },
+                "quantity": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "Количество"
+                },
+                "price": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Цена за единицу"
+                },
+                "vatRate": {
+                  "type": "string",
+                  "enum": [
+                    "БезНДС",
+                    "НДС0",
+                    "НДС5",
+                    "НДС7",
+                    "НДС10",
+                    "НДС20",
+                    "НДС22"
+                  ],
+                  "default": "БезНДС",
+                  "description": "Ставка НДС"
+                }
+              },
+              "required": [
+                "nomenclatureRef",
+                "quantity",
+                "price"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1,
+            "description": "Позиции-услуги"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "counterpartyRef",
+          "nomenclatureGroupRef",
+          "lines"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_payment",
+      "description": "Создаёт «Поступление на расчётный счёт» (оплата от покупателя) на сумму, по контрагенту и договору. Документ НЕПРОВЕДЁННЫЙ; при проведении проводка Дт 51 Кт 62. Банковский счёт организации берётся по названию или первый. dry-run/confirm.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "counterpartyRef": {
+            "type": "string",
+            "description": "Ref_Key покупателя"
+          },
+          "contractRef": {
+            "type": "string",
+            "description": "Ref_Key договора"
+          },
+          "amount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Сумма оплаты"
+          },
+          "bankAccount": {
+            "type": "string",
+            "description": "Название банковского счёта организации (если несколько)"
+          },
+          "date": {
+            "type": "string",
+            "description": "Дата YYYY-MM-DD (по умолчанию сегодня)"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "counterpartyRef",
+          "contractRef",
+          "amount"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_bank_writeoff",
+      "description": "Создаёт документ «Списание с расчётного счёта» (исходящий платёж с банка). НЕПРОВЕДЁННЫЙ; провести — post_document. Вид операции ОБЯЗАТЕЛЕН и не угадывается (напр. «ОплатаПоставщику», «ПеречислениеНалога», «ПеречислениеЗаработнойПлаты», «ПереводНаДругойСчет», «ПрочееСписание»). Для оплаты поставщику с договором заполняется расшифровка (сч. 60). dry-run/confirm.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "operationKind": {
+            "type": "string",
+            "description": "Вид операции (ОБЯЗАТЕЛЬНО, не угадывать): ОплатаПоставщику / ПеречислениеНалога / ПеречислениеЗаработнойПлаты / ПереводНаДругойСчет / ПрочееСписание …"
+          },
+          "amount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Сумма списания"
+          },
+          "counterpartyRef": {
+            "type": "string",
+            "description": "Ref_Key контрагента (для расчётов)"
+          },
+          "contractRef": {
+            "type": "string",
+            "description": "Ref_Key договора (для расшифровки взаиморасчётов)"
+          },
+          "purposeText": {
+            "type": "string",
+            "description": "Назначение платежа (текст)"
+          },
+          "cashflowItemRef": {
+            "type": "string",
+            "description": "Ref_Key статьи ДДС"
+          },
+          "bankAccount": {
+            "type": "string",
+            "description": "Название банковского счёта организации (если несколько)"
+          },
+          "date": {
+            "type": "string",
+            "description": "Дата YYYY-MM-DD (по умолчанию сегодня)"
+          },
+          "comment": {
+            "type": "string",
+            "description": "Комментарий"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "operationKind",
+          "amount"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_cash_receipt",
+      "description": "Создаёт «Приходный кассовый ордер» (приём наличных в кассу). НЕПРОВЕДЁННЫЙ; провести — post_document. Вид операции ОБЯЗАТЕЛЕН (напр. «ПоступлениеОплатыОтПокупателя», «ПрочийПриход», «ПолучениеНаличныхВБанке»). dry-run/confirm.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "operationKind": {
+            "type": "string",
+            "description": "Вид операции (ОБЯЗАТЕЛЬНО, не угадывать)"
+          },
+          "amount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Сумма"
+          },
+          "cashRef": {
+            "type": "string",
+            "description": "Ref_Key кассы организации (СчетКасса)"
+          },
+          "counterpartyRef": {
+            "type": "string",
+            "description": "Ref_Key контрагента (для расчётов)"
+          },
+          "contractRef": {
+            "type": "string",
+            "description": "Ref_Key договора"
+          },
+          "basis": {
+            "type": "string",
+            "description": "Основание (текст)"
+          },
+          "cashflowItemRef": {
+            "type": "string",
+            "description": "Ref_Key статьи ДДС"
+          },
+          "date": {
+            "type": "string",
+            "description": "Дата YYYY-MM-DD (по умолчанию сегодня)"
+          },
+          "comment": {
+            "type": "string",
+            "description": "Комментарий"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "operationKind",
+          "amount"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_cash_payment",
+      "description": "Создаёт «Расходный кассовый ордер» (выдача наличных из кассы). НЕПРОВЕДЁННЫЙ; провести — post_document. Вид операции ОБЯЗАТЕЛЕН (напр. «ОплатаПоставщику», «ВыдачаПодотчетномуЛицу», «ВзносНаличнымиВБанк», «ВыплатаЗаработнойПлатыПоВедомостям»). dry-run/confirm.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "organization": {
+            "type": "string",
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы."
+          },
+          "operationKind": {
+            "type": "string",
+            "description": "Вид операции (ОБЯЗАТЕЛЬНО, не угадывать)"
+          },
+          "amount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Сумма"
+          },
+          "cashRef": {
+            "type": "string",
+            "description": "Ref_Key кассы организации (СчетКасса)"
+          },
+          "counterpartyRef": {
+            "type": "string",
+            "description": "Ref_Key контрагента (для расчётов)"
+          },
+          "contractRef": {
+            "type": "string",
+            "description": "Ref_Key договора"
+          },
+          "basis": {
+            "type": "string",
+            "description": "Основание (текст)"
+          },
+          "cashflowItemRef": {
+            "type": "string",
+            "description": "Ref_Key статьи ДДС"
+          },
+          "date": {
+            "type": "string",
+            "description": "Дата YYYY-MM-DD (по умолчанию сегодня)"
+          },
+          "comment": {
+            "type": "string",
+            "description": "Комментарий"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "operationKind",
+          "amount"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_issued_invoice",
+      "description": "Создаёт «Счёт-фактура выданный» НА ОСНОВАНИИ реализации (или иного документа отгрузки). Реквизиты (организация, контрагент, договор, суммы, НДС) наследуются от документа-основания. НЕПРОВЕДЁННЫЙ; провести — post_document. dry-run/confirm.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "baseDocumentRef": {
+            "type": "string",
+            "description": "Ref_Key документа-основания (реализация товаров и услуг)"
+          },
+          "baseDocumentEntity": {
+            "type": "string",
+            "description": "Имя набора документа-основания, если это не «Реализация…» (напр. Document_ОтчетКомитентуОПродажах)"
+          },
+          "operationCode": {
+            "type": "string",
+            "description": "Код вида операции (по умолчанию 01)"
+          },
+          "date": {
+            "type": "string",
+            "description": "Дата и дата выставления YYYY-MM-DD (по умолчанию сегодня)"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "baseDocumentRef"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_received_invoice",
+      "description": "Создаёт «Счёт-фактура полученный» НА ОСНОВАНИИ поступления товаров и услуг. Реквизиты наследуются от основания; дату входящего счёта-фактуры продавца указывают вручную (в поступлении её нет). НЕПРОВЕДЁННЫЙ; провести — post_document. dry-run/confirm.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "baseDocumentRef": {
+            "type": "string",
+            "description": "Ref_Key документа-основания (поступление товаров и услуг)"
+          },
+          "baseDocumentEntity": {
+            "type": "string",
+            "description": "Имя набора документа-основания, если это не «Поступление…»"
+          },
+          "incomingDate": {
+            "type": "string",
+            "description": "Дата входящего счёта-фактуры продавца YYYY-MM-DD"
+          },
+          "operationCode": {
+            "type": "string",
+            "description": "Код вида операции (по умолчанию 01)"
+          },
+          "date": {
+            "type": "string",
+            "description": "Дата регистрации YYYY-MM-DD (по умолчанию сегодня)"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "baseDocumentRef"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_bank_account",
+      "description": "Заводит расчётный счёт контрагента (подчинённый справочник): банк по БИК + номер счёта. Можно сделать счёт основным. По умолчанию dry-run; создание — при confirm=true. Ref контрагента — из find_counterparty.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "ownerRef": {
+            "type": "string",
+            "description": "Ref_Key контрагента-владельца счёта"
+          },
+          "accountNumber": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Номер расчётного счёта"
+          },
+          "bik": {
+            "type": "string",
+            "minLength": 1,
+            "description": "БИК банка (ищется в справочнике «Банки»)"
+          },
+          "currency": {
+            "type": "string",
+            "description": "Валюта (код/название; по умолчанию рубль)"
+          },
+          "label": {
+            "type": "string",
+            "description": "Наименование счёта (по умолчанию — номер счёта)"
+          },
+          "makeMain": {
+            "type": "boolean",
+            "default": false,
+            "description": "Сделать основным банковским счётом контрагента"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "ownerRef",
+          "accountNumber",
+          "bik"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_contact_person",
+      "description": "Заводит контактное лицо контрагента (директор, бухгалтер, менеджер): ФИО + должность. Можно сделать основным контактным лицом. По умолчанию dry-run; создание — при confirm=true.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "ownerRef": {
+            "type": "string",
+            "description": "Ref_Key контрагента"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "ФИО (наименование контактного лица)"
+          },
+          "lastName": {
+            "type": "string",
+            "description": "Фамилия"
+          },
+          "firstName": {
+            "type": "string",
+            "description": "Имя"
+          },
+          "position": {
+            "type": "string",
+            "description": "Должность (напр. «Директор»)"
+          },
+          "makeMain": {
+            "type": "boolean",
+            "default": false,
+            "description": "Сделать основным контактным лицом контрагента"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "ownerRef",
+          "name"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "create_folder",
+      "description": "Создаёт папку/группу в иерархическом справочнике 1С (по умолчанию — Контрагенты). Опционально вкладывает в родительскую папку (parent — имя папки или Ref_Key). В 1С «папки» = группы справочника; отдельных тегов в типовой Бухгалтерии нет. dry-run/confirm.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "entitySet": {
+            "type": "string",
+            "default": "Catalog_Контрагенты",
+            "description": "Иерархический справочник (по умолчанию Catalog_Контрагенты)"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Название папки"
+          },
+          "parent": {
+            "type": "string",
+            "description": "Родительская папка — имя или Ref_Key (для вложенности)"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "move_to_folder",
+      "description": "Перемещает элемент справочника (напр. контрагента) в папку/группу — задаёт родителя (Parent_Key). folder — имя папки или Ref_Key. По умолчанию справочник Контрагенты. dry-run/confirm.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
+          },
+          "entitySet": {
+            "type": "string",
+            "default": "Catalog_Контрагенты",
+            "description": "Справочник (по умолчанию Catalog_Контрагенты)"
+          },
+          "ref": {
+            "type": "string",
+            "description": "Ref_Key перемещаемого элемента"
+          },
+          "folder": {
+            "type": "string",
+            "description": "Папка назначения — имя или Ref_Key"
+          },
+          "confirm": {
+            "type": "boolean",
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя."
+          }
+        },
+        "required": [
+          "ref",
+          "folder"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    }
+  ],
+  "tools_generated": false
 }
