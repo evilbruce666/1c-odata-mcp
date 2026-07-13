@@ -1,6 +1,6 @@
 {
   "name": "1c-odata-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "MCP server for 1C:Enterprise (1С) over OData. Ask your accounting database in natural language — debtors, sales, taxes, cash flow — from any MCP client (Claude, Cursor, VS Code, local models…). 55 tools, run with npx, nothing installed inside 1C; read-only by default with opt-in (gated) write.",
   "type": "module",
   "bin": {
