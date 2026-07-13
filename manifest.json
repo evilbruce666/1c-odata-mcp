@@ -95,15 +95,21 @@
   "tools": [
     {
       "name": "list_databases",
+      "title": "Список баз 1С",
       "description": "Показывает настроенные базы 1С, к которым подключён сервер, и какая из них основная. Имя базы передаётся в параметр database остальных инструментов. Вызывайте, если нужно понять, какие базы доступны или сравнить данные нескольких баз.",
       "inputSchema": {
         "type": "object",
         "properties": {},
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "health_check",
+      "title": "Проверка соединения",
       "description": "Проверяет доступность OData-сервиса 1С и корректность авторизации для выбранной базы. Возвращает версию OData и число опубликованных объектов. Вызывайте первым, если другие инструменты выдают ошибки.",
       "inputSchema": {
         "type": "object",
@@ -115,10 +121,15 @@
         },
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "list_organizations",
+      "title": "Организации базы",
       "description": "Список организаций (юрлиц) внутри выбранной базы 1С. Название организации передаётся в параметр organization аналитических инструментов (get_sales, get_debtors, get_cashflow, get_inventory и др.), чтобы получить данные по одному юрлицу.",
       "inputSchema": {
         "type": "object",
@@ -130,10 +141,15 @@
         },
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "list_entities",
+      "title": "Карта объектов базы",
       "description": "Возвращает карту бизнес-объектов 1С, сгруппированную по классам: справочники, документы, регистры, перечисления и т.д. Используйте, чтобы понять, какие данные доступны в базе. Можно отфильтровать по классу и/или подстроке имени.",
       "inputSchema": {
         "type": "object",
@@ -162,10 +178,15 @@
         },
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "describe_entity",
+      "title": "Описание объекта",
       "description": "Показывает поля (с типами) и связи конкретного объекта 1С из $metadata. Принимает техническое имя EntitySet, напр. 'Catalog_Контрагенты' или 'Document_РеализацияТоваровУслуг'. Используйте перед поиском, чтобы узнать доступные поля.",
       "inputSchema": {
         "type": "object",
@@ -184,10 +205,15 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "find_counterparty",
+      "title": "Поиск контрагента",
       "description": "Ищет контрагентов по части названия или по ИНН. Возвращает список совпадений с Ref_Key (используйте его в get_counterparty и истории взаиморасчётов). Пример: «найди контрагента Ромашка» или «контрагент с ИНН 7701234567».",
       "inputSchema": {
         "type": "object",
@@ -214,10 +240,15 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "get_counterparty",
+      "title": "Карточка контрагента",
       "description": "Возвращает полную карточку контрагента по его Ref_Key: реквизиты (ИНН/КПП), наименования, код. Ref_Key берётся из find_counterparty.",
       "inputSchema": {
         "type": "object",
@@ -236,10 +267,15 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "get_customer_history",
+      "title": "История по покупателю",
       "description": "Документы реализации и счета по контрагенту-покупателю за период. Показывает, что и на какие суммы продавали клиенту. Ref_Key — из find_counterparty.",
       "inputSchema": {
         "type": "object",
@@ -268,7 +304,8 @@
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 500,
-            "default": 100
+            "default": 100,
+            "description": "Сколько документов вернуть"
           }
         },
         "required": [
@@ -276,10 +313,15 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "get_supplier_history",
+      "title": "История по поставщику",
       "description": "Документы поступления по контрагенту-поставщику за период. Показывает закупки у поставщика. Ref_Key — из find_counterparty.",
       "inputSchema": {
         "type": "object",
@@ -308,7 +350,8 @@
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 500,
-            "default": 100
+            "default": 100,
+            "description": "Сколько документов вернуть"
           }
         },
         "required": [
@@ -316,10 +359,15 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "search_documents",
+      "title": "Поиск документов",
       "description": "Ищет документы заданного типа по периоду, контрагенту, организации, статусу проведения и сумме. Тип документа — техническое имя из list_entities, напр. 'Document_РеализацияТоваровУслуг'. Сначала уточните имя через list_entities (class=document), а поля — через describe_entity.",
       "inputSchema": {
         "type": "object",
@@ -361,7 +409,8 @@
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 500,
-            "default": 50
+            "default": 50,
+            "description": "Сколько документов вернуть"
           }
         },
         "required": [
@@ -369,10 +418,15 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "get_document",
+      "title": "Документ целиком",
       "description": "Возвращает документ по типу и Ref_Key со всеми полями, включая табличные части. Ref_Key берётся из search_documents или истории взаиморасчётов.",
       "inputSchema": {
         "type": "object",
@@ -396,10 +450,15 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "get_sales",
+      "title": "Продажи за период",
       "description": "Сумма выручки по проведённым документам реализации за период (по полю СуммаДокумента). Можно ограничить организацией. Период задаётся датами YYYY-MM-DD.",
       "inputSchema": {
         "type": "object",
@@ -429,10 +488,15 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "get_cashflow",
+      "title": "Движение денежных средств",
       "description": "Приход и расход денег за период по проведённым банковским и кассовым документам. Возвращает приток, отток и сальдо. Можно ограничить организацией. Период — даты YYYY-MM-DD.",
       "inputSchema": {
         "type": "object",
@@ -462,10 +526,15 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "get_debtors",
+      "title": "Дебиторская задолженность",
       "description": "Кто и сколько должен компании: сальдо счёта 62 (расчёты с покупателями) из регистра бухгалтерии Хозрасчетный, сгруппированное по контрагентам. Дебетовое сальдо = долг клиента, кредитовое = полученные авансы (вычитается). Можно ограничить организацией. По умолчанию берётся текущее сальдо; параметром asOf=YYYY-MM-DD можно получить дебиторку на конец указанной даты (для аудита/исторических отчётов). Возвращает только долг > 0.",
       "inputSchema": {
         "type": "object",
@@ -493,10 +562,15 @@
         },
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "get_inventory",
+      "title": "Остатки товаров",
       "description": "Остатки товаров/материалов на складах: сальдо счетов 41/10/43 регистра Хозрасчетный, сгруппированное по номенклатуре. Возвращает количество и сумму остатка. Можно ограничить организацией. По умолчанию — текущие остатки; параметром asOf=YYYY-MM-DD можно получить остатки на конец указанной даты (для инвентаризации/аудита). (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
       "inputSchema": {
         "type": "object",
@@ -524,10 +598,15 @@
         },
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "get_payments_breakdown",
+      "title": "Разбивка платежей за период",
       "description": "Суммирует проведённые банковские и кассовые документы за период с разбивкой по выбранному признаку (вид операции / месяц / контрагент / статья ДДС / итог). Фильтры: направление (приход/расход), контрагент (Ref_Key), категория контрагента (ИП/ЮрЛицо/ФизЛицо/Нерезидент/Госорган), статья ДДС (по коду/имени/Ref), подстрока в назначении платежа (напр. «аренда»), вид операции. Отвечает на вопросы вроде «сколько процентов получили за год от такого-то банка», «сколько заплатили ИП за год», «куда уходили деньги по статьям ДДС», «приход по месяцам». Период — даты YYYY-MM-DD. Контрагент в банковских документах хранится полиморфно — фильтр применяется на стороне коннектора; статья ДДС / назначение / период / организация — на сервере 1С.",
       "inputSchema": {
         "type": "object",
@@ -606,10 +685,15 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "get_deal_history",
+      "title": "Движения по сделке/договору",
       "description": "Хронология всех проведённых банковских и кассовых движений по конкретной сделке либо договору: приход, расход, итоги и сальдо. Сделку можно задать кодом из назначения платежа (dealKey, напр. «CB12812240037987» — банковский идентификатор депозита/займа/контракта в назначении) или ссылкой на договор (contractRef, Ref_Key из find_counterparty + договор). Обязателен ровно один из них. Период — опционально (без него — всё время).",
       "inputSchema": {
         "type": "object",
@@ -650,10 +734,15 @@
         },
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "get_taxes_paid",
+      "title": "Уплаченные налоги и взносы за период",
       "description": "Сумма уплаченных налогов/страховых взносов за период: исходящие банковские списания с ВидОперации=«ПеречислениеНалога» (это надёжный маркер уплаты налога в БП 3.0; покрывает ЕНП, НДФЛ, страховые взносы, налог УСН/ПСН, налог на прибыль и т.п.). По умолчанию — итог; разбивка по статье ДДС / месяцу / получателю (обычно ФНС/Казначейство) / итог. Параметр cashflowItem уточняет конкретный вид налога (напр. «УСН», «Страховые», «НДФЛ», «ЕНП»). Отвечает на вопросы вроде «сколько налогов мы заплатили в прошлом году», «сколько ушло страховых взносов в квартал», «помесячная нагрузка по налогам». Период — даты YYYY-MM-DD.",
       "inputSchema": {
         "type": "object",
@@ -698,10 +787,15 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "get_sales_breakdown",
+      "title": "Разбивка продаж за период",
       "description": "Суммирует проведённые реализации (СуммаДокумента) за период с разбивкой по контрагенту / месяцу / договору / итогу. Можно фильтровать конкретным контрагентом, категорией контрагента (ИП/ЮрЛицо/ФизЛицо/Нерезидент/Госорган) или договором. Отвечает на вопросы вроде «топ покупателей за год», «выручка по месяцам», «сколько продали ИП», «продажи по конкретному договору». Период — даты YYYY-MM-DD.",
       "inputSchema": {
         "type": "object",
@@ -768,10 +862,15 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "get_purchases_breakdown",
+      "title": "Разбивка закупок за период",
       "description": "Суммирует проведённые поступления товаров/услуг (закупки) за период с разбивкой по поставщику / месяцу / договору / итогу. Можно фильтровать конкретным поставщиком, категорией контрагента или договором. Отвечает на вопросы вроде «топ поставщиков за год», «закупки по месяцам», «сколько закупили у ИП». Период — даты YYYY-MM-DD.",
       "inputSchema": {
         "type": "object",
@@ -838,10 +937,15 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "get_organization_card",
+      "title": "Карточка организации (реквизиты)",
       "description": "Полные реквизиты организации (юрлица) из настроек 1С: ИНН/КПП/ОГРН, полное и сокращённое наименование, дата регистрации, ОКВЭД, налоговый орган, контактная информация (юридический/фактический/почтовый адрес, телефон, email), основной банковский счёт, а также директор и главный бухгалтер. Для ИП директором считается сам предприниматель (берётся из карточки организации); для ООО и т.п. — из регистра «Ответственные лица организаций», если он опубликован в OData (если нет — вернётся заметка, что нужно добавить в «Состав OData»). Работает для любой организации базы — по названию (organization) или автоматически, если она в базе одна.",
       "inputSchema": {
         "type": "object",
@@ -857,10 +961,15 @@
         },
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_counterparty",
+      "title": "Создать контрагента",
       "description": "Создаёт нового контрагента в справочнике. ПО УМОЛЧАНИЮ это предпросмотр (dry-run) — сначала покажите пользователю, что будет создано, и только после явного согласия вызовите повторно с confirm=true. Запись идёт в боевую базу, поэтому без подтверждения не создавайте.",
       "inputSchema": {
         "type": "object",
@@ -921,10 +1030,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "mark_for_deletion",
+      "title": "Пометить на удаление",
       "description": "Ставит/снимает пометку на удаление у объекта (как в 1С) — мягкое удаление, физически данные не стираются. По умолчанию предпросмотр (dry-run); для применения повторите с confirm=true. Полезно, чтобы убрать ошибочно созданную запись.",
       "inputSchema": {
         "type": "object",
@@ -958,10 +1073,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_nomenclature",
+      "title": "Создать номенклатуру",
       "description": "Создаёт новую позицию номенклатуры (товар/услуга). ПО УМОЛЧАНИЮ предпросмотр (dry-run): покажите пользователю payload и только после согласия повторите с confirm=true. Можно указать артикул, папку (folder — имя группы или Ref_Key) и пометить услугой (isService). Запись идёт в боевую базу.",
       "inputSchema": {
         "type": "object",
@@ -1003,10 +1124,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_contract",
+      "title": "Создать договор",
       "description": "Заводит договор контрагента (подчинённый справочник): владелец — контрагент, организация, ВИД договора, номер/дата, валюта/тип цен и (опц.) руководитель/подписант. ВАЖНО: вид договора (kind) обязателен и его НЕЛЬЗЯ выбирать самостоятельно — уточните у пользователя, т.к. один контрагент может быть и покупателем, и поставщиком. Номер по умолчанию «б/н», дата — сегодня. По умолчанию предпросмотр (dry-run); создание — при confirm=true.",
       "inputSchema": {
         "type": "object",
@@ -1074,10 +1201,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_invoice",
+      "title": "Создать счёт покупателю",
       "description": "Создаёт счёт на оплату покупателю (документ) с табличной частью «Товары». Документ создаётся НЕПРОВЕДЁННЫМ (черновик) — провести можно вручную в 1С или инструментом post_document. По умолчанию предпросмотр (dry-run); создание — при confirm=true. Контрагент и (опц.) договор — по Ref_Key; позиции — по Ref_Key номенклатуры.",
       "inputSchema": {
         "type": "object",
@@ -1163,10 +1296,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "post_document",
+      "title": "Провести / отменить проведение документа",
       "description": "Проводит документ (влияет на учёт) или отменяет проведение. По умолчанию предпросмотр (dry-run); применение — при confirm=true. ВНИМАНИЕ: проведение меняет учётные данные — используйте осознанно.",
       "inputSchema": {
         "type": "object",
@@ -1200,10 +1339,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": true
       }
     },
     {
       "name": "update_entity",
+      "title": "Изменить объект (общий)",
       "description": "Изменяет произвольные поля объекта 1С через PATCH по Ref_Key. Имена полей — технические (узнать через describe_entity), напр. {\"ИНН\":\"7701234567\"}. По умолчанию предпросмотр (dry-run); применение — при confirm=true. Мощный инструмент: меняйте только те поля, что указали.",
       "inputSchema": {
         "type": "object",
@@ -1245,10 +1390,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "update_counterparty",
+      "title": "Изменить контрагента",
       "description": "Изменяет реквизиты контрагента по Ref_Key (наименование/ИНН/КПП/полное имя). По умолчанию предпросмотр (dry-run); применение — при confirm=true. Указывайте только меняемые поля.",
       "inputSchema": {
         "type": "object",
@@ -1304,10 +1455,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "update_nomenclature",
+      "title": "Изменить номенклатуру",
       "description": "Изменяет реквизиты номенклатуры по Ref_Key (наименование/полное имя/артикул). По умолчанию предпросмотр (dry-run); применение — при confirm=true. Указывайте только меняемые поля.",
       "inputSchema": {
         "type": "object",
@@ -1343,10 +1500,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_purchase",
+      "title": "Создать поступление от поставщика",
       "description": "Создаёт документ «Поступление товаров и услуг» (закупка у поставщика) с табличной частью «Товары». Документ НЕПРОВЕДЁННЫЙ; провести — вручную в 1С или post_document (тогда 1С сформирует проводки Дт 41/19 Кт 60). По умолчанию dry-run; создание — при confirm=true. Контрагент — поставщик, договор — вида «СПоставщиком».",
       "inputSchema": {
         "type": "object",
@@ -1436,10 +1599,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_supplier_invoice",
+      "title": "Зарегистрировать счёт от поставщика",
       "description": "Создаёт документ «Счёт на оплату поставщика» — регистрирует входящий счёт-основание для оплаты (подходит для предоплаты, когда товар ещё не пришёл). Проводок НЕ делает (счёт не проводится), счета учёта не нужны. Табличная часть «Товары» вмещает и товары, и услуги (напр. доставку — задайте content/Содержание). Реквизиты входящего счёта: incomingNumber/incomingDate. По умолчанию dry-run; создание — при confirm=true. Контрагент — поставщик, договор — вида «СПоставщиком».",
       "inputSchema": {
         "type": "object",
@@ -1545,10 +1714,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_payout_order",
+      "title": "Создать платёжное поручение (исходящее) контрагенту",
       "description": "Создаёт документ «Платёжное поручение» — исходящую выплату контрагенту (напр. оплата по агентскому договору / услугам, зеркало платёжки, уже ушедшей в банк). Документ ВСЕГДА создаётся НЕПРОВЕДЁННЫМ (Posted=false) — эта операция намеренно не проводит документ, проведение делайте отдельно через post_document, если вообще нужно. Номер (number) — задаётся явно вызывающим (обычно чтобы совпасть с номером уже отправленной банковской платёжки), не генерируется автоматически. По умолчанию dry-run (confirm=false); создание — при confirm=true. Счёт организации и валюта — резолвятся автоматически, если не заданы.",
       "inputSchema": {
         "type": "object",
@@ -1669,10 +1844,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_shipment",
+      "title": "Создать реализацию покупателю",
       "description": "Создаёт документ «Реализация товаров и услуг» (отгрузка покупателю) с табличной частью «Товары». Документ НЕПРОВЕДЁННЫЙ; провести — вручную в 1С или post_document (тогда 1С сформирует проводки Дт 62 Кт 90, Дт 90 Кт 41 и др.). По умолчанию dry-run; создание — при confirm=true. Контрагент — покупатель, договор — вида «СПокупателем».",
       "inputSchema": {
         "type": "object",
@@ -1762,10 +1943,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "update_document_lines",
+      "title": "Изменить строки документа",
       "description": "Заменяет табличную часть «Товары» существующего документа новым набором строк и пересчитывает сумму. Поддержаны: счёт покупателю, поступление, реализация. Документ должен быть НЕПРОВЕДЁННЫМ (если проведён — сначала отмените проведение через post_document). По умолчанию dry-run; применение — при confirm=true.",
       "inputSchema": {
         "type": "object",
@@ -1839,10 +2026,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_return_from_customer",
+      "title": "Создать возврат товаров от покупателя",
       "description": "Создаёт документ «Возврат товаров от покупателя» с табличной частью «Товары». НЕПРОВЕДЁННЫЙ; провести — post_document (проводки сторнируют реализацию: Дт 90.02 Кт 41, Дт 62 Кт 90.01 со знаком минус). dry-run/confirm. Контрагент — покупатель.",
       "inputSchema": {
         "type": "object",
@@ -1932,10 +2125,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_return_to_supplier",
+      "title": "Создать возврат товаров поставщику",
       "description": "Создаёт документ «Возврат товаров поставщику» с табличной частью «Товары». НЕПРОВЕДЁННЫЙ; провести — post_document (проводки сторнируют поступление: Дт 60 Кт 41/19). dry-run/confirm. Контрагент — поставщик.",
       "inputSchema": {
         "type": "object",
@@ -2025,10 +2224,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_transfer",
+      "title": "Создать перемещение товаров",
       "description": "Создаёт документ «Перемещение товаров» между складами. НЕПРОВЕДЁННЫЙ; провести — post_document (проводки Дт 41(склад-получатель) Кт 41(склад-отправитель)). dry-run/confirm.",
       "inputSchema": {
         "type": "object",
@@ -2096,10 +2301,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_surplus",
+      "title": "Создать оприходование товаров",
       "description": "Создаёт документ «Оприходование товаров» (излишки). НЕПРОВЕДЁННЫЙ; провести — post_document (проводки Дт 41 Кт 91.01). Можно указать документ-основание — инвентаризацию. dry-run/confirm.",
       "inputSchema": {
         "type": "object",
@@ -2165,10 +2376,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_writeoff",
+      "title": "Создать списание товаров",
       "description": "Создаёт документ «Списание товаров» (недостача/порча). НЕПРОВЕДЁННЫЙ; провести — post_document (проводки Дт 94 Кт 41). Можно указать документ-основание — инвентаризацию. dry-run/confirm.",
       "inputSchema": {
         "type": "object",
@@ -2234,10 +2451,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_inventory",
+      "title": "Создать инвентаризацию товаров",
       "description": "Создаёт документ «Инвентаризация товаров на складе» (сверка факт/учёт). Документ НЕ проводится (движений не делает) — служит основанием для оприходования/списания. dry-run/confirm. Для каждой позиции: фактическое и учётное количество.",
       "inputSchema": {
         "type": "object",
@@ -2305,10 +2528,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "add_document_line",
+      "title": "Добавить строку в документ",
       "description": "Добавляет одну позицию в табличную часть «Товары» существующего НЕПРОВЕДЁННОГО документа (счёт/поступление/реализация), сохраняя прежние строки. dry-run/confirm.",
       "inputSchema": {
         "type": "object",
@@ -2318,10 +2547,12 @@
             "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
           },
           "entitySet": {
-            "type": "string"
+            "type": "string",
+            "description": "Имя документа, напр. Document_РеализацияТоваровУслуг"
           },
           "ref": {
-            "type": "string"
+            "type": "string",
+            "description": "Ref_Key документа (GUID)"
           },
           "line": {
             "type": "object",
@@ -2360,7 +2591,8 @@
               "quantity",
               "price"
             ],
-            "additionalProperties": false
+            "additionalProperties": false,
+            "description": "Добавляемая позиция"
           },
           "confirm": {
             "type": "boolean",
@@ -2375,10 +2607,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "remove_document_line",
+      "title": "Удалить строку документа",
       "description": "Удаляет строку (по номеру LineNumber, начиная с 1) из табличной части «Товары» существующего НЕПРОВЕДЁННОГО документа. Нельзя удалить последнюю строку. dry-run/confirm.",
       "inputSchema": {
         "type": "object",
@@ -2388,10 +2626,12 @@
             "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию."
           },
           "entitySet": {
-            "type": "string"
+            "type": "string",
+            "description": "Имя документа, напр. Document_РеализацияТоваровУслуг"
           },
           "ref": {
-            "type": "string"
+            "type": "string",
+            "description": "Ref_Key документа (GUID)"
           },
           "lineNumber": {
             "type": "integer",
@@ -2411,10 +2651,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_act",
+      "title": "Создать акт (реализация услуг)",
       "description": "Создаёт «Реализация (акт, накладная)» с табличной частью УСЛУГИ (без склада/остатков). Документ НЕПРОВЕДЁННЫЙ; проводки при проведении Дт 62 Кт 90.01 (без 41). dry-run/confirm. Контрагент — покупатель; позиции — услуги-номенклатура.",
       "inputSchema": {
         "type": "object",
@@ -2500,10 +2746,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_services_act",
+      "title": "Создать акт об оказании услуг",
       "description": "Создаёт «Акт об оказании производственных услуг» (услуги с учётом доходов/расходов по номенклатурной группе). Отличается от create_act тем, что требует номенклатурную группу (субконто счёта 90.01) — она НЕ угадывается. Проводки Дт 62 Кт 90.01, НДС 90.03. НЕПРОВЕДЁННЫЙ; провести — post_document. dry-run/confirm.",
       "inputSchema": {
         "type": "object",
@@ -2594,10 +2846,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_payment",
+      "title": "Создать оплату от покупателя",
       "description": "Создаёт «Поступление на расчётный счёт» (оплата от покупателя) на сумму, по контрагенту и договору. Документ НЕПРОВЕДЁННЫЙ; при проведении проводка Дт 51 Кт 62. Банковский счёт организации берётся по названию или первый. dry-run/confirm.",
       "inputSchema": {
         "type": "object",
@@ -2644,10 +2902,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_bank_writeoff",
+      "title": "Создать списание с расчётного счёта",
       "description": "Создаёт документ «Списание с расчётного счёта» (исходящий платёж с банка). НЕПРОВЕДЁННЫЙ; провести — post_document. Вид операции ОБЯЗАТЕЛЕН и не угадывается (напр. «ОплатаПоставщику», «ПеречислениеНалога», «ПеречислениеЗаработнойПлаты», «ПереводНаДругойСчет», «ПрочееСписание»). Для оплаты поставщику с договором заполняется расшифровка (сч. 60). dry-run/confirm.",
       "inputSchema": {
         "type": "object",
@@ -2709,10 +2973,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_cash_receipt",
+      "title": "Создать приходный кассовый ордер (ПКО)",
       "description": "Создаёт «Приходный кассовый ордер» (приём наличных в кассу). НЕПРОВЕДЁННЫЙ; провести — post_document. Вид операции ОБЯЗАТЕЛЕН (напр. «ПоступлениеОплатыОтПокупателя», «ПрочийПриход», «ПолучениеНаличныхВБанке»). dry-run/confirm.",
       "inputSchema": {
         "type": "object",
@@ -2774,10 +3044,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_cash_payment",
+      "title": "Создать расходный кассовый ордер (РКО)",
       "description": "Создаёт «Расходный кассовый ордер» (выдача наличных из кассы). НЕПРОВЕДЁННЫЙ; провести — post_document. Вид операции ОБЯЗАТЕЛЕН (напр. «ОплатаПоставщику», «ВыдачаПодотчетномуЛицу», «ВзносНаличнымиВБанк», «ВыплатаЗаработнойПлатыПоВедомостям»). dry-run/confirm.",
       "inputSchema": {
         "type": "object",
@@ -2839,10 +3115,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_issued_invoice",
+      "title": "Создать счёт-фактуру выданный",
       "description": "Создаёт «Счёт-фактура выданный» НА ОСНОВАНИИ реализации (или иного документа отгрузки). Реквизиты (организация, контрагент, договор, суммы, НДС) наследуются от документа-основания. НЕПРОВЕДЁННЫЙ; провести — post_document. dry-run/confirm.",
       "inputSchema": {
         "type": "object",
@@ -2878,10 +3160,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_received_invoice",
+      "title": "Создать счёт-фактуру полученный",
       "description": "Создаёт «Счёт-фактура полученный» НА ОСНОВАНИИ поступления товаров и услуг. Реквизиты наследуются от основания; дату входящего счёта-фактуры продавца указывают вручную (в поступлении её нет). НЕПРОВЕДЁННЫЙ; провести — post_document. dry-run/confirm.",
       "inputSchema": {
         "type": "object",
@@ -2921,10 +3209,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_bank_account",
+      "title": "Создать банковский счёт контрагента",
       "description": "Заводит расчётный счёт контрагента (подчинённый справочник): банк по БИК + номер счёта. Можно сделать счёт основным. По умолчанию dry-run; создание — при confirm=true. Ref контрагента — из find_counterparty.",
       "inputSchema": {
         "type": "object",
@@ -2973,10 +3267,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_contact_person",
+      "title": "Создать контактное лицо (директор и т.п.)",
       "description": "Заводит контактное лицо контрагента (директор, бухгалтер, менеджер): ФИО + должность. Можно сделать основным контактным лицом. По умолчанию dry-run; создание — при confirm=true.",
       "inputSchema": {
         "type": "object",
@@ -3023,10 +3323,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "create_folder",
+      "title": "Создать папку (группу) справочника",
       "description": "Создаёт папку/группу в иерархическом справочнике 1С (по умолчанию — Контрагенты). Опционально вкладывает в родительскую папку (parent — имя папки или Ref_Key). В 1С «папки» = группы справочника; отдельных тегов в типовой Бухгалтерии нет. dry-run/confirm.",
       "inputSchema": {
         "type": "object",
@@ -3060,10 +3366,16 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     },
     {
       "name": "move_to_folder",
+      "title": "Переместить объект в папку",
       "description": "Перемещает элемент справочника (напр. контрагента) в папку/группу — задаёт родителя (Parent_Key). folder — имя папки или Ref_Key. По умолчанию справочник Контрагенты. dry-run/confirm.",
       "inputSchema": {
         "type": "object",
@@ -3097,6 +3409,11 @@
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
       }
     }
   ],

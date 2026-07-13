@@ -42,7 +42,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
         counterpartyRef: z.string().optional().describe("Ref_Key контрагента для фильтра"),
         postedOnly: z.boolean().default(false).describe("Только проведённые документы"),
         minAmount: z.number().optional().describe("Минимальная сумма документа"),
-        limit: z.number().int().positive().max(500).default(50),
+        limit: z.number().int().positive().max(500).default(50).describe("Сколько документов вернуть"),
       },
     },
     ({ database, organization, entitySet, from, to, counterpartyRef, postedOnly, minAmount, limit }) =>

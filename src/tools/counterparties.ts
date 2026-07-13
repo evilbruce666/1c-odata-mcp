@@ -94,7 +94,7 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
     ref: z.string().describe("Ref_Key контрагента"),
     from: z.string().optional().describe("Дата начала периода (YYYY-MM-DD)"),
     to: z.string().optional().describe("Дата конца периода (YYYY-MM-DD)"),
-    limit: z.number().int().positive().max(500).default(100),
+    limit: z.number().int().positive().max(500).default(100).describe("Сколько документов вернуть"),
   };
 
   async function history(

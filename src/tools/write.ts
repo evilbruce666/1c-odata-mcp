@@ -1760,9 +1760,9 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "(счёт/поступление/реализация), сохраняя прежние строки. dry-run/confirm.",
       inputSchema: {
         database: databaseField,
-        entitySet: z.string(),
-        ref: z.string(),
-        line: lineObject,
+        entitySet: z.string().describe("Имя документа, напр. Document_РеализацияТоваровУслуг"),
+        ref: z.string().describe("Ref_Key документа (GUID)"),
+        line: lineObject.describe("Добавляемая позиция"),
         confirm: confirmField,
       },
     },
@@ -1796,8 +1796,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "НЕПРОВЕДЁННОГО документа. Нельзя удалить последнюю строку. dry-run/confirm.",
       inputSchema: {
         database: databaseField,
-        entitySet: z.string(),
-        ref: z.string(),
+        entitySet: z.string().describe("Имя документа, напр. Document_РеализацияТоваровУслуг"),
+        ref: z.string().describe("Ref_Key документа (GUID)"),
         lineNumber: z.number().int().positive().describe("Номер строки (с 1)"),
         confirm: confirmField,
       },
