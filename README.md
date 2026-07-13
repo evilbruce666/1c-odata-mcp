@@ -1,4 +1,4 @@
-# 1c-odata-mcp — подключение 1С:Предприятие к ИИ (Claude) через OData
+# 1c-odata-mcp — универсальный MCP-сервер для 1С:Предприятие через OData
 
 [![npm](https://img.shields.io/npm/v/1c-odata-mcp)](https://www.npmjs.com/package/1c-odata-mcp)
 [![CI](https://github.com/evilbruce666/1c-odata-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/evilbruce666/1c-odata-mcp/actions/workflows/ci.yml)
@@ -10,9 +10,9 @@
   <img src="docs/assets/demo-debtors.svg" alt="Диалог с Claude: на вопрос «кто из покупателей должен больше всего» приходит список должников и итог из 1С" width="720">
 </p>
 
-> 🇬🇧 **In short:** an MCP server that connects 1C:Enterprise to Claude over its standard OData interface. Ask your accounting database in plain language (debtors, sales, taxes, cash flow) and get the number back; opt-in, preview-gated write. Read-only by default. Run with `npx -y 1c-odata-mcp`. Works with any 1C where OData is published — cloud, SQL or local file base.
+> 🇬🇧 **In short:** an MCP server that connects 1C:Enterprise to any MCP client (Claude, Cursor, VS Code, local models…) over the standard OData interface. Ask your accounting database in plain language (debtors, sales, taxes, cash flow) and get the number back; opt-in, preview-gated write. Read-only by default. Run with `npx -y 1c-odata-mcp`. Works with any 1C where OData is published — cloud, SQL or local file base.
 
-**MCP-сервер (Model Context Protocol) для 1С:Предприятие через стандартный интерфейс OData.** Позволяет работать с данными 1С на естественном языке прямо из ИИ-ассистента **Claude** (и любого MCP-клиента): спрашивать про контрагентов, документы, остатки, дебиторку, продажи и движение денег — а при явном включении ещё и создавать/изменять справочники и документы, проводить, регистрировать оплаты.
+**MCP-сервер (Model Context Protocol) для 1С:Предприятие через стандартный интерфейс OData.** Позволяет работать с данными 1С на естественном языке из **любого MCP-клиента** — Claude, Cursor, VS Code, JetBrains, локальные модели (Ollama, LM Studio): спрашивать про контрагентов, документы, остатки, дебиторку, продажи и движение денег — а при явном включении ещё и создавать/изменять справочники и документы, проводить, регистрировать оплаты.
 
 Если вы искали, **как подключить 1С к нейросети / ИИ**, готовый **коннектор 1С OData** или **интеграцию 1С с Claude** без программирования на стороне 1С — это оно.
 
@@ -79,6 +79,8 @@
 ---
 
 ## Пример диалога
+
+Ниже — Claude Desktop, но диалог выглядит так же в любом MCP-клиенте.
 
 ```text
 Вы:     Кто из покупателей должен больше всего и на сколько?
@@ -250,13 +252,15 @@ src/
 - **`+` vs `%20` в OData 1С.** 1С не декодирует `+` в пробел внутри `$filter` (отвечает 400), поэтому query-string собирается через `encodeURIComponent` (пробел → `%20`), а не `URLSearchParams`.
 - **Счета учёта документов** не подставляются автоматически через OData (это делает форма 1С при выборе номенклатуры) — сервер берёт их из регистра «Счета учёта номенклатуры», с откатом на стандартные коды плана счетов.
 - **Логи и stderr.** `stdout` занят JSON-RPC, поэтому логи идут в `stderr` — но только в терминале. Под MCP-клиентом (когда `stdin` — pipe) логи пишутся в файл `<tmpdir>/1c-odata-mcp/server.log`, чтобы не сломать клиентов, трактующих любой вывод в `stderr` как фатальную ошибку. Вернуть логи в `stderr`: `MCP_LOG_STDERR=1`.
+- **Типизированные ответы.** У всех 55 инструментов объявлен `outputSchema` — клиенты, поддерживающие `structuredContent` (не только текстовый JSON), могут типизировать ответ, не парсить текст.
+- **Имена инструментов.** Трёхсегментный `dot-notation`: `<read|write>.<категория>.<имя>` (напр. `read.analytics.get_debtors`, `write.sales.create_shipment`) — группирует инструменты по категории и сразу видно, чтение это или запись.
 
 ---
 
 ## Частые вопросы (FAQ)
 
-**Claude «висит» / запрос отваливается по таймауту.**
-Если зависают даже мелкие вызовы (`read.system.health_check`, `read.system.list_databases`) — это почти всегда **залипший процесс MCP в Claude Desktop**, а не база. Полностью перезапустите приложение (Cmd+Q и заново). Здоровый `read.system.health_check` отвечает за секунду.
+**MCP-клиент «висит» / запрос отваливается по таймауту.**
+Если зависают даже мелкие вызовы (`read.system.health_check`, `read.system.list_databases`) — это почти всегда **залипший процесс MCP** (в Claude Desktop лечится полным перезапуском приложения, Cmd+Q и заново), а не база. Здоровый `read.system.health_check` отвечает за секунду.
 
 **Указываю другую базу, а она «недоступна» / отвечает только одна.**
 Параметр `database` — это **имя** из `read.system.list_databases` (поле `name`, напр. `ooo`), а не «человеческое» название (label, напр. «ООО Ромашка»). Обращайтесь по имени.
