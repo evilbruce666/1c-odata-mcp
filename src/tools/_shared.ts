@@ -41,10 +41,15 @@ export const DESTRUCTIVE_HINTS = {
   openWorldHint: true,
 } as const;
 
-/** Успешный результат инструмента: JSON-данные в текстовом блоке. */
+/**
+ * Успешный результат инструмента: JSON-данные в текстовом блоке + structuredContent
+ * для инструментов с outputSchema (SDK валидирует structuredContent против неё —
+ * см. src/schemas/output.ts). Все вызовы ok() в кодовой базе передают объект.
+ */
 export function ok(data: unknown): CallToolResult {
   return {
     content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    structuredContent: data as Record<string, unknown>,
   };
 }
 

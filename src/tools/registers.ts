@@ -7,6 +7,12 @@ import { ACCOUNT_PREFIX, CATALOGS, DOC_FIELDS, DOCUMENTS, resolveEntity } from "
 import { balanceByAccounts, resolveAccounts, resolveNames, num } from "../odata/accounting.js";
 import { resolveOrganization } from "../odata/orgs.js";
 import { collectDocuments, emptyMeta, addMeta, type ScanMeta } from "../odata/aggregate.js";
+import {
+  getSalesResultSchema,
+  getCashflowResultSchema,
+  getDebtorsResultSchema,
+  getInventoryResultSchema,
+} from "../schemas/output.js";
 
 // Деньги копим в целых копейках (float-сложение тысяч сумм даёт дрейф).
 const toCents = (v: unknown): number => Math.round(num(v) * 100);
@@ -74,6 +80,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         from: dateField("Дата начала периода"),
         to: dateField("Дата конца периода"),
       },
+      outputSchema: getSalesResultSchema,
     },
     ({ database, organization, from, to }) =>
       guard("read.analytics.get_sales", async () => {
@@ -109,6 +116,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         from: dateField("Дата начала периода"),
         to: dateField("Дата конца периода"),
       },
+      outputSchema: getCashflowResultSchema,
     },
     ({ database, organization, from, to }) =>
       guard("read.analytics.get_cashflow", async () => {
@@ -154,6 +162,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         asOf: dateField("Дата сальдо — на конец этой даты (без параметра — текущее)").optional(),
         limit: z.number().int().positive().max(1000).default(100).describe("Сколько контрагентов вернуть"),
       },
+      outputSchema: getDebtorsResultSchema,
     },
     ({ database, organization, asOf, limit }) =>
       guard("read.analytics.get_debtors", async () => {
@@ -219,6 +228,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         asOf: dateField("Дата остатков — на конец этой даты (без параметра — текущие)").optional(),
         limit: z.number().int().positive().max(1000).default(200).describe("Сколько позиций вернуть"),
       },
+      outputSchema: getInventoryResultSchema,
     },
     ({ database, organization, asOf, limit }) =>
       guard("read.analytics.get_inventory", async () => {

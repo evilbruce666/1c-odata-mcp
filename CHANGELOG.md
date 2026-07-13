@@ -20,6 +20,30 @@ lists and over-nested paths both reduce the score»). Алиасов на ста
 `annotationsFor()` в `src/mcp/server.ts`: вместо regex-подбора по префиксу имени
 теперь просто `name.startsWith("read.")`/`"write."`.
 
+### Добавлено
+- **`outputSchema` у всех 55 инструментов** — MCP-клиенты теперь могут типизировать
+  ответы (`structuredContent`), не только парсить текстовый JSON. Ещё один
+  критерий quality score Smithery: «Tools should declare an outputSchema so
+  callers can type-check responses». Схемы — в новом `src/schemas/output.ts`;
+  большинство write-инструментов сводится к 4 переиспользуемым формам
+  (`createResultSchema`/`patchResultSchema`/`mark_for_deletion`/`post_document` —
+  почти все `create_*`/`update_*` идут через общие хелперы `createOrPreview()`/
+  `patchOrPreview()` в `write.ts`), у read-инструментов — своя схема на каждый.
+  `src/tools/_shared.ts`: `ok(data)` теперь кладёт `structuredContent` централизованно
+  для всех инструментов разом. `src/types/domain.ts`: `Counterparty`/`DocumentSummary`
+  выводятся из Zod-схем (`z.infer`) вместо дублирования вручную — один источник
+  правды; заодно убраны 4 неиспользуемых нигде типа (`BalanceRow`/`DebtRow`/
+  `SalesSummary`/`CashflowSummary`), не совпадавших с реальной формой ответа.
+  **Важная находка при разработке:** `outputSchema` не может быть `z.union([...])`
+  или голым `z.record()` на верхнем уровне — MCP SDK падает с `Cannot read
+  properties of undefined (reading '_zod')` (протокол требует `type:"object"`
+  на верхнем уровне, а обе формы конвертируются иначе). Все схемы поэтому —
+  плоский `z.object({...}).passthrough()` с необязательными полями (разные
+  ветки dry-run/confirmed — просто разные подмножества одних и тех же полей).
+  Проверено вживую на реальной базе: все 55 инструментов (21 чтение реальными
+  вызовами, 34 записи через `confirm:false` dry-run — ничего не пишет) прошли
+  без единой ошибки валидации `structuredContent`.
+
 ### Исправлено
 - Пять параметров без описания (`limit` в `search_documents`/
   `get_customer_history`/`get_supplier_history`; `entitySet`/`ref`/`line` в

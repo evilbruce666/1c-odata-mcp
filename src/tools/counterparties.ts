@@ -15,6 +15,7 @@ import { resolveOrganization } from "../odata/orgs.js";
 import { requireEntity } from "../odata/publication.js";
 import type { Counterparty, DocumentSummary } from "../types/domain.js";
 import type { ODataEntity } from "../types/odata.js";
+import { truncatedList, counterpartySchema, counterpartyHistoryResultSchema } from "../schemas/output.js";
 
 function toCounterparty(r: ODataEntity): Counterparty {
   return {
@@ -45,6 +46,7 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
         query: z.string().min(1).describe("Часть названия или ИНН контрагента"),
         limit: z.number().int().positive().max(100).default(20).describe("Сколько вернуть"),
       },
+      outputSchema: truncatedList(counterpartySchema),
     },
     ({ database, query, limit }) =>
       guard("read.counterparty.find_counterparty", async () => {
@@ -77,6 +79,7 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
         database: databaseField,
         ref: z.string().describe("Ref_Key контрагента (GUID)"),
       },
+      outputSchema: counterpartySchema,
     },
     ({ database, ref }) =>
       guard("read.counterparty.get_counterparty", async () => {
@@ -158,6 +161,7 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
         "Документы реализации и счета по контрагенту-покупателю за период. " +
         "Показывает, что и на какие суммы продавали клиенту. Ref_Key — из find_counterparty.",
       inputSchema: historyInput,
+      outputSchema: counterpartyHistoryResultSchema,
     },
     ({ database, organization, ref, from, to, limit }) =>
       guard("read.counterparty.get_customer_history", async () => {
@@ -191,6 +195,7 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
         "Документы поступления по контрагенту-поставщику за период. " +
         "Показывает закупки у поставщика. Ref_Key — из find_counterparty.",
       inputSchema: historyInput,
+      outputSchema: counterpartyHistoryResultSchema,
     },
     ({ database, organization, ref, from, to, limit }) =>
       guard("read.counterparty.get_supplier_history", async () => {

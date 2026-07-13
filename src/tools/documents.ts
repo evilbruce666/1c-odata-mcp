@@ -9,6 +9,7 @@ import { resolveOrganization } from "../odata/orgs.js";
 import { ensurePublished } from "../odata/publication.js";
 import type { DocumentSummary } from "../types/domain.js";
 import type { ODataEntity } from "../types/odata.js";
+import { searchDocumentsResultSchema, odataEntitySchema } from "../schemas/output.js";
 
 function toSummary(r: ODataEntity, set: string): DocumentSummary {
   return {
@@ -44,6 +45,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
         minAmount: z.number().optional().describe("Минимальная сумма документа"),
         limit: z.number().int().positive().max(500).default(50).describe("Сколько документов вернуть"),
       },
+      outputSchema: searchDocumentsResultSchema,
     },
     ({ database, organization, entitySet, from, to, counterpartyRef, postedOnly, minAmount, limit }) =>
       guard("read.document.search_documents", async () => {
@@ -117,6 +119,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
         entitySet: z.string().describe("Имя документа, напр. Document_РеализацияТоваровУслуг"),
         ref: z.string().describe("Ref_Key документа (GUID)"),
       },
+      outputSchema: odataEntitySchema,
     },
     ({ database, entitySet, ref }) =>
       guard("read.document.get_document", async () => {

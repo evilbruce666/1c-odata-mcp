@@ -14,6 +14,11 @@ import {
   addMeta,
   type ScanMeta,
 } from "../odata/aggregate.js";
+import {
+  paymentsBreakdownResultSchema,
+  dealHistoryResultSchema,
+  taxesPaidResultSchema,
+} from "../schemas/output.js";
 
 /** Нормализует GUID-строку для сравнения: без скобок, нижний регистр. */
 function normGuid(v: unknown): string {
@@ -111,6 +116,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
               "cashflowItem (статья ДДС), total (без разбивки)",
           ),
       },
+      outputSchema: paymentsBreakdownResultSchema,
     },
     ({
       database,
@@ -327,6 +333,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
         to: dateField("Дата конца").optional(),
         limit: z.number().int().positive().max(1000).default(200).describe("Сколько событий вернуть"),
       },
+      outputSchema: dealHistoryResultSchema,
     },
     ({ database, organization, dealKey, contractRef, from, to, limit }) =>
       guard("read.analytics.get_deal_history", async () => {
@@ -485,6 +492,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           .default("cashflowItem")
           .describe("Разбивка: cashflowItem (по налогу) / month / counterparty / total"),
       },
+      outputSchema: taxesPaidResultSchema,
     },
     ({ database, organization, from, to, cashflowItem, groupBy }) =>
       guard("read.analytics.get_taxes_paid", async () => {

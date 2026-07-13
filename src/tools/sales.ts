@@ -8,6 +8,7 @@ import { resolveOrganization } from "../odata/orgs.js";
 import { resolveNames, num } from "../odata/accounting.js";
 import { counterpartyRefsByKind, type CounterpartyKind } from "../odata/refilters.js";
 import { collectDocuments } from "../odata/aggregate.js";
+import { salesBreakdownResultSchema } from "../schemas/output.js";
 
 /**
  * Агрегаторы продаж и закупок. У документов реализации/поступления контрагент
@@ -179,6 +180,7 @@ export function registerSalesTools(server: McpServer, ctx: ServerContext): void 
         "за год», «выручка по месяцам», «сколько продали ИП», «продажи по конкретному договору». " +
         "Период — даты YYYY-MM-DD.",
       inputSchema: commonInput,
+      outputSchema: salesBreakdownResultSchema,
     },
     (a) =>
       guard("read.analytics.get_sales_breakdown", async () =>
@@ -196,6 +198,7 @@ export function registerSalesTools(server: McpServer, ctx: ServerContext): void 
         "контрагента или договором. Отвечает на вопросы вроде «топ поставщиков за год», «закупки по " +
         "месяцам», «сколько закупили у ИП». Период — даты YYYY-MM-DD.",
       inputSchema: commonInput,
+      outputSchema: salesBreakdownResultSchema,
     },
     (a) =>
       guard("read.analytics.get_purchases_breakdown", async () =>

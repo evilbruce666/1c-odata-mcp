@@ -4,6 +4,13 @@ import type { ServerContext } from "../context.js";
 import { ok, fail, guard, databaseField } from "./_shared.js";
 import { listOrganizations } from "../odata/orgs.js";
 import type { EntityClass } from "../types/odata.js";
+import {
+  listDatabasesResultSchema,
+  healthCheckResultSchema,
+  listOrganizationsResultSchema,
+  listEntitiesResultSchema,
+  describeEntityResultSchema,
+} from "../schemas/output.js";
 
 const CLASS_LABEL: Record<EntityClass, string> = {
   catalog: "Справочники",
@@ -33,6 +40,7 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
         "Имя базы передаётся в параметр database остальных инструментов. " +
         "Вызывайте, если нужно понять, какие базы доступны или сравнить данные нескольких баз.",
       inputSchema: {},
+      outputSchema: listDatabasesResultSchema,
     },
     () =>
       guard("read.system.list_databases", async () =>
@@ -49,6 +57,7 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
         "Возвращает версию OData и число опубликованных объектов. " +
         "Вызывайте первым, если другие инструменты выдают ошибки.",
       inputSchema: { database: databaseField },
+      outputSchema: healthCheckResultSchema,
     },
     ({ database }) =>
       guard("read.system.health_check", async () => {
@@ -75,6 +84,7 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
         "Название организации передаётся в параметр organization аналитических инструментов " +
         "(get_sales, get_debtors, get_cashflow, get_inventory и др.), чтобы получить данные по одному юрлицу.",
       inputSchema: { database: databaseField },
+      outputSchema: listOrganizationsResultSchema,
     },
     ({ database }) =>
       guard("read.system.list_organizations", async () => {
@@ -108,6 +118,7 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
           .describe("Ограничить одним классом объектов"),
         search: z.string().optional().describe("Подстрока в имени объекта (без учёта регистра)"),
       },
+      outputSchema: listEntitiesResultSchema,
     },
     ({ database, class: cls, search }) =>
       guard("read.schema.list_entities", async () => {
@@ -138,6 +149,7 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
         database: databaseField,
         entitySet: z.string().describe("Техническое имя объекта, напр. Catalog_Контрагенты"),
       },
+      outputSchema: describeEntityResultSchema,
     },
     ({ database, entitySet }) =>
       guard("read.schema.describe_entity", async () => {

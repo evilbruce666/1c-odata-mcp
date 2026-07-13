@@ -15,6 +15,12 @@ import {
 import { fetchAll } from "../odata/pagination.js";
 import { and, buildQuery, cmp, contains, odataGuid, odataString } from "../odata/query.js";
 import type { ODataEntity } from "../types/odata.js";
+import {
+  createResultSchema,
+  patchResultSchema,
+  markForDeletionResultSchema,
+  postDocumentResultSchema,
+} from "../schemas/output.js";
 
 /** Тип ссылки на номенклатуру в табличной части (полиморфная ссылка 1С). */
 const NOMENCLATURE_TYPE = "StandardODATA.Catalog_Номенклатура";
@@ -677,6 +683,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         ogrn: z.string().optional().describe("ОГРН (пишется, если в базе настроен доп.реквизит «ОГРН»)"),
         confirm: confirmField,
       },
+      outputSchema: createResultSchema,
     },
     ({ database, name, inn, kpp, fullName, legalType, phone, email, address, ogrn, confirm }) =>
       guard("write.counterparty.create_counterparty", async () => {
@@ -710,6 +717,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         mark: z.boolean().default(true).describe("true — пометить на удаление, false — снять пометку"),
         confirm: confirmField,
       },
+      outputSchema: markForDeletionResultSchema,
     },
     ({ database, entitySet, ref, mark, confirm }) =>
       guard("write.entity.mark_for_deletion", async () => {
@@ -757,6 +765,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .describe("true — услуга (Услуга=true, вид «Услуга»), false — товар"),
         confirm: confirmField,
       },
+      outputSchema: createResultSchema,
     },
     ({ database, name, fullName, article, folder, isService, confirm }) =>
       guard("write.catalog.create_nomenclature", async () => {
@@ -812,6 +821,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .describe("Должность руководителя контрагента (напр. «Генеральный директор»)"),
         confirm: confirmField,
       },
+      outputSchema: createResultSchema,
     },
     ({
       database,
@@ -892,6 +902,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .describe("Позиции счёта"),
         confirm: confirmField,
       },
+      outputSchema: createResultSchema,
     },
     ({ database, organization, counterpartyRef, contractRef, date, sumIncludesVat, lines, confirm }) =>
       guard("write.sales.create_invoice", async () => {
@@ -931,6 +942,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         post: z.boolean().default(true).describe("true — провести, false — отменить проведение"),
         confirm: confirmField,
       },
+      outputSchema: postDocumentResultSchema,
     },
     ({ database, entitySet, ref, post, confirm }) =>
       guard("write.document.post_document", async () => {
@@ -969,6 +981,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .describe("Поля для изменения: { техническоеИмя: значение }"),
         confirm: confirmField,
       },
+      outputSchema: patchResultSchema,
     },
     ({ database, entitySet, ref, fields, confirm }) =>
       guard("write.entity.update_entity", async () => {
@@ -999,6 +1012,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         ogrn: z.string().optional().describe("ОГРН (если в базе настроен доп.реквизит)"),
         confirm: confirmField,
       },
+      outputSchema: patchResultSchema,
     },
     ({ database, ref, name, inn, kpp, fullName, phone, email, address, ogrn, confirm }) =>
       guard("write.counterparty.update_counterparty", async () => {
@@ -1057,6 +1071,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         article: z.string().optional().describe("Артикул"),
         confirm: confirmField,
       },
+      outputSchema: patchResultSchema,
     },
     ({ database, ref, name, fullName, article, confirm }) =>
       guard("write.catalog.update_nomenclature", async () => {
@@ -1100,6 +1115,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Документ НЕПРОВЕДЁННЫЙ; провести — вручную в 1С или post_document (тогда 1С сформирует проводки Дт 41/19 Кт 60). " +
         "По умолчанию dry-run; создание — при confirm=true. Контрагент — поставщик, договор — вида «СПоставщиком».",
       inputSchema: goodsDocInput,
+      outputSchema: createResultSchema,
     },
     ({
       database,
@@ -1178,6 +1194,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .describe("Позиции счёта (товары и услуги в одной таблице)"),
         confirm: confirmField,
       },
+      outputSchema: createResultSchema,
     },
     ({
       database,
@@ -1279,6 +1296,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         comment: z.string().optional().describe("Комментарий к документу"),
         confirm: confirmField,
       },
+      outputSchema: createResultSchema,
     },
     ({
       database,
@@ -1351,6 +1369,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Документ НЕПРОВЕДЁННЫЙ; провести — вручную в 1С или post_document (тогда 1С сформирует проводки Дт 62 Кт 90, Дт 90 Кт 41 и др.). " +
         "По умолчанию dry-run; создание — при confirm=true. Контрагент — покупатель, договор — вида «СПокупателем».",
       inputSchema: goodsDocInput,
+      outputSchema: createResultSchema,
     },
     ({
       database,
@@ -1413,6 +1432,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .describe("Новый полный набор строк (заменяет прежние)"),
         confirm: confirmField,
       },
+      outputSchema: patchResultSchema,
     },
     ({ database, entitySet, ref, lines, confirm }) =>
       guard("write.document.update_document_lines", async () => {
@@ -1467,6 +1487,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "провести — post_document (проводки сторнируют реализацию: Дт 90.02 Кт 41, Дт 62 Кт 90.01 со знаком минус). " +
         "dry-run/confirm. Контрагент — покупатель.",
       inputSchema: goodsDocInput,
+      outputSchema: createResultSchema,
     },
     ({ database, organization, counterpartyRef, contractRef, warehouse, date, lines, confirm }) =>
       guard("write.warehouse.create_return_from_customer", async () => {
@@ -1504,6 +1525,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "провести — post_document (проводки сторнируют поступление: Дт 60 Кт 41/19). dry-run/confirm. " +
         "Контрагент — поставщик.",
       inputSchema: goodsDocInput,
+      outputSchema: createResultSchema,
     },
     ({ database, organization, counterpartyRef, contractRef, warehouse, date, lines, confirm }) =>
       guard("write.warehouse.create_return_to_supplier", async () => {
@@ -1548,6 +1570,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         lines: whLines,
         confirm: confirmField,
       },
+      outputSchema: createResultSchema,
     },
     ({ database, organization, fromWarehouse, toWarehouse, date, lines, confirm }) =>
       guard("write.warehouse.create_transfer", async () => {
@@ -1596,6 +1619,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         lines: whLines,
         confirm: confirmField,
       },
+      outputSchema: createResultSchema,
     },
     ({ database, organization, warehouse, inventoryRef, date, lines, confirm }) =>
       guard("write.warehouse.create_surplus", async () => {
@@ -1643,6 +1667,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         lines: whLines,
         confirm: confirmField,
       },
+      outputSchema: createResultSchema,
     },
     ({ database, organization, warehouse, inventoryRef, date, lines, confirm }) =>
       guard("write.warehouse.create_writeoff", async () => {
@@ -1700,6 +1725,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .describe("Позиции инвентаризации"),
         confirm: confirmField,
       },
+      outputSchema: createResultSchema,
     },
     ({ database, organization, warehouse, date, lines, confirm }) =>
       guard("write.warehouse.create_inventory", async () => {
@@ -1765,6 +1791,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         line: lineObject.describe("Добавляемая позиция"),
         confirm: confirmField,
       },
+      outputSchema: patchResultSchema,
     },
     ({ database, entitySet, ref, line, confirm }) =>
       guard("write.document.add_document_line", async () => {
@@ -1801,6 +1828,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         lineNumber: z.number().int().positive().describe("Номер строки (с 1)"),
         confirm: confirmField,
       },
+      outputSchema: patchResultSchema,
     },
     ({ database, entitySet, ref, lineNumber, confirm }) =>
       guard("write.document.remove_document_line", async () => {
@@ -1845,6 +1873,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         lines: z.array(lineObject).min(1).describe("Позиции-услуги"),
         confirm: confirmField,
       },
+      outputSchema: createResultSchema,
     },
     ({ database, organization, counterpartyRef, contractRef, date, sumIncludesVat, lines, confirm }) =>
       guard("write.sales.create_act", async () => {
@@ -1893,6 +1922,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         lines: z.array(lineObject).min(1).describe("Позиции-услуги"),
         confirm: confirmField,
       },
+      outputSchema: createResultSchema,
     },
     ({
       database,
@@ -1968,6 +1998,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
         confirm: confirmField,
       },
+      outputSchema: createResultSchema,
     },
     ({ database, organization, counterpartyRef, contractRef, amount, bankAccount, date, confirm }) =>
       guard("write.money.create_payment", async () => {
@@ -2074,6 +2105,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         comment: z.string().optional().describe("Комментарий"),
         confirm: confirmField,
       },
+      outputSchema: createResultSchema,
     },
     ({
       database,
@@ -2171,6 +2203,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Вид операции ОБЯЗАТЕЛЕН (напр. «ПоступлениеОплатыОтПокупателя», «ПрочийПриход», «ПолучениеНаличныхВБанке»). " +
         "dry-run/confirm.",
       inputSchema: cashDocInput,
+      outputSchema: createResultSchema,
     },
     (a) =>
       guard("write.money.create_cash_receipt", async () => {
@@ -2191,6 +2224,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Вид операции ОБЯЗАТЕЛЕН (напр. «ОплатаПоставщику», «ВыдачаПодотчетномуЛицу», «ВзносНаличнымиВБанк», " +
         "«ВыплатаЗаработнойПлатыПоВедомостям»). dry-run/confirm.",
       inputSchema: cashDocInput,
+      outputSchema: createResultSchema,
     },
     (a) =>
       guard("write.money.create_cash_payment", async () => {
@@ -2223,6 +2257,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         date: z.string().optional().describe("Дата и дата выставления YYYY-MM-DD (по умолчанию сегодня)"),
         confirm: confirmField,
       },
+      outputSchema: createResultSchema,
     },
     ({ database, baseDocumentRef, baseDocumentEntity, operationCode, date, confirm }) =>
       guard("write.sales.create_issued_invoice", async () => {
@@ -2278,6 +2313,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         date: z.string().optional().describe("Дата регистрации YYYY-MM-DD (по умолчанию сегодня)"),
         confirm: confirmField,
       },
+      outputSchema: createResultSchema,
     },
     ({ database, baseDocumentRef, baseDocumentEntity, incomingDate, operationCode, date, confirm }) =>
       guard("write.purchase.create_received_invoice", async () => {
@@ -2339,6 +2375,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         makeMain: z.boolean().default(false).describe("Сделать основным банковским счётом контрагента"),
         confirm: confirmField,
       },
+      outputSchema: createResultSchema,
     },
     ({ database, ownerRef, accountNumber, bik, currency, label, makeMain, confirm }) =>
       guard("write.counterparty.create_bank_account", async () => {
@@ -2389,6 +2426,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         makeMain: z.boolean().default(false).describe("Сделать основным контактным лицом контрагента"),
         confirm: confirmField,
       },
+      outputSchema: createResultSchema,
     },
     ({ database, ownerRef, name, lastName, firstName, position, makeMain, confirm }) =>
       guard("write.counterparty.create_contact_person", async () => {
@@ -2436,6 +2474,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         parent: z.string().optional().describe("Родительская папка — имя или Ref_Key (для вложенности)"),
         confirm: confirmField,
       },
+      outputSchema: createResultSchema,
     },
     ({ database, entitySet, name, parent, confirm }) =>
       guard("write.entity.create_folder", async () => {
@@ -2464,6 +2503,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         folder: z.string().describe("Папка назначения — имя или Ref_Key"),
         confirm: confirmField,
       },
+      outputSchema: patchResultSchema,
     },
     ({ database, entitySet, ref, folder, confirm }) =>
       guard("write.entity.move_to_folder", async () => {

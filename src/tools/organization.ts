@@ -8,6 +8,7 @@ import { KI_KINDS } from "../odata/refdata.js";
 import { fetchAll } from "../odata/pagination.js";
 import { cmp, odataGuid, buildQuery } from "../odata/query.js";
 import type { ODataEntity } from "../types/odata.js";
+import { organizationCardResultSchema } from "../schemas/output.js";
 
 /**
  * Карточка организации (реквизиты) — читает Catalog_Организации целиком и
@@ -147,6 +148,7 @@ export function registerOrganizationTools(server: McpServer, ctx: ServerContext)
         database: databaseField,
         organization: organizationField,
       },
+      outputSchema: organizationCardResultSchema,
     },
     ({ database, organization }) =>
       guard("read.organization.get_organization_card", async () => {
