@@ -1,0 +1,89 @@
+{
+  "manifest_version": "0.3",
+  "name": "1c-odata-mcp",
+  "display_name": "1С:Предприятие через OData",
+  "version": "0.2.0",
+  "description": "MCP-сервер для 1С:Предприятие через OData: аналитика (дебиторка, остатки, продажи, деньги) и создание/изменение документов — на естественном языке.",
+  "long_description": "Подключает Claude (или любой MCP-клиент) к базе 1С:Предприятие через стандартный интерфейс OData. Ничего не устанавливается внутри 1С. По умолчанию только чтение — 55 инструментов: аналитика (дебиторка, остатки, продажи, движение денег, налоги), справочники и документы. Запись включается отдельно (readOnly=false) и всегда работает в режиме предпросмотра — сначала показывает, что будет создано/изменено, и пишет только после подтверждения.",
+  "author": {
+    "name": "evilbruce666",
+    "url": "https://github.com/evilbruce666"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/evilbruce666/1c-odata-mcp.git"
+  },
+  "homepage": "https://github.com/evilbruce666/1c-odata-mcp#readme",
+  "documentation": "https://github.com/evilbruce666/1c-odata-mcp/blob/main/docs/CONNECTING.md",
+  "support": "https://github.com/evilbruce666/1c-odata-mcp/issues",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "1c",
+    "1с",
+    "1c-enterprise",
+    "1с-предприятие",
+    "odata",
+    "коннектор",
+    "accounting",
+    "бухгалтерия",
+    "erp"
+  ],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/index.js"],
+      "env": {
+        "ODATA_BASE_URL": "${user_config.base_url}",
+        "ODATA_USERNAME": "${user_config.username}",
+        "ODATA_PASSWORD": "${user_config.password}",
+        "READ_ONLY": "${user_config.read_only}",
+        "ODATA_WRITABLE": "${user_config.writable}"
+      }
+    }
+  },
+  "user_config": {
+    "base_url": {
+      "type": "string",
+      "title": "Адрес OData 1С",
+      "description": "Адрес опубликованного интерфейса OData вашей базы 1С, напр. https://terminal.scloud.ru/01/<база>/odata/standard.odata/",
+      "required": true
+    },
+    "username": {
+      "type": "string",
+      "title": "Логин",
+      "description": "Логин Basic-авторизации (обычно облачная учётная запись).",
+      "required": true
+    },
+    "password": {
+      "type": "string",
+      "title": "Пароль",
+      "description": "Пароль Basic-авторизации.",
+      "sensitive": true,
+      "required": true
+    },
+    "read_only": {
+      "type": "boolean",
+      "title": "Только чтение",
+      "description": "Включено (по умолчанию) — сервер не пишет в 1С, доступны только аналитика и чтение. Выключите для разрешения записи.",
+      "default": true,
+      "required": false
+    },
+    "writable": {
+      "type": "boolean",
+      "title": "Разрешить запись в базу",
+      "description": "Разрешает создание/изменение документов и справочников. Действует только вместе с выключенным «Только чтение». Каждая операция записи по умолчанию требует подтверждения (dry-run → confirm).",
+      "default": false,
+      "required": false
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=20.0.0"
+    }
+  }
+}
