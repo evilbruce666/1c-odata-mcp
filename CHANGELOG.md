@@ -5,6 +5,8 @@
 
 ## [Не выпущено]
 
+## [0.3.0] — 2026-07-13
+
 **BREAKING:** все 55 инструментов переименованы с плоского `snake_case`
 (`get_debtors`) на трёхсегментный dot-notation `<read|write>.<категория>.<имя>`
 (`read.analytics.get_debtors`). Причина — критерий Naming в оценке качества
@@ -312,7 +314,8 @@ POST-тестом (create → read → mark) на реальной базе — 
   коды плана счетов); вежливый фоллбэк при отсутствии объекта в «Составе OData».
 - npm-пакет с запуском через `npx 1c-odata-mcp`.
 
-[Не выпущено]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.2.0...HEAD
+[Не выпущено]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.1.11...v0.2.0
 [0.1.11]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.1.9...v0.1.11
 [0.1.9]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.1.8...v0.1.9
