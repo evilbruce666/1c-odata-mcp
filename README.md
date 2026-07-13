@@ -2,6 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/1c-odata-mcp)](https://www.npmjs.com/package/1c-odata-mcp)
 [![CI](https://github.com/evilbruce666/1c-odata-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/evilbruce666/1c-odata-mcp/actions/workflows/ci.yml)
+[![smithery](https://smithery.ai/badge/@evilbruce666/1c-odata-mcp)](https://smithery.ai/server/@evilbruce666/1c-odata-mcp)
 [![license](https://img.shields.io/npm/l/1c-odata-mcp)](LICENSE)
 [![node](https://img.shields.io/node/v/1c-odata-mcp)](https://nodejs.org)
 
