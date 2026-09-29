@@ -902,7 +902,9 @@ const confirmField = z
   .default(false)
   .describe(
     "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. " +
-      "true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя.",
+      "true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя; " +
+      "при подтверждении передавайте operationId из результата предпросмотра и те же аргументы. После таймаута " +
+      "повторяйте подтверждение с тем же id, не создавая новый предпросмотр.",
   );
 
 const contentField = z
@@ -967,7 +969,7 @@ const resolveSet = (conn: Connection, candidates: readonly string[], human: stri
   requireEntity(conn, candidates, human);
 
 /**
- * Общий путь создания: при confirm=false возвращает предпросмотр (ничего не пишет),
+ * Общий путь создания: при confirm=false возвращает предпросмотр (не пишет в 1С),
  * при confirm=true выполняет POST. Гард записи (READ_ONLY + WRITABLE) — в клиенте.
  */
 async function createOrPreview(
@@ -979,6 +981,7 @@ async function createOrPreview(
 ) {
   const extra = notes?.length ? { notes } : {};
   if (!confirm) {
+    await conn.client.prepareCreate(entitySet, payload);
     return ok({
       dryRun: true,
       database: conn.cfg.name,
@@ -994,6 +997,12 @@ async function createOrPreview(
   const created = await conn.client.create<ODataEntity>(entitySet, payload);
   return ok({
     created: true,
+    ...(created["_operation_replayed"] === true
+      ? {
+          replayed: true,
+          note: "Эта запись уже была создана с данным operationId; повторный POST не выполнялся.",
+        }
+      : {}),
     database: conn.cfg.name,
     entitySet,
     ref: created["Ref_Key"],
@@ -1057,6 +1066,12 @@ async function createSubordinate(
   }
   return ok({
     created: true,
+    ...(created["_operation_replayed"] === true
+      ? {
+          replayed: true,
+          note: "Эта запись уже была создана с данным operationId; повторный POST не выполнялся.",
+        }
+      : {}),
     database: conn.cfg.name,
     entitySet: set,
     ref,
