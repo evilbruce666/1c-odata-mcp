@@ -126,6 +126,15 @@ export const postDocumentResultSchema = z
     done: z.boolean().optional(),
     ref: z.string().optional(),
     action: z.string().optional(),
+    postings: z
+      .object({
+        count: z.number(),
+        debitTotal: z.number(),
+        creditTotal: z.number(),
+        byCorrespondence: z.array(z.record(z.string(), z.unknown())),
+      })
+      .optional(),
+    postingsNote: z.string().optional(),
   })
   .passthrough();
 
@@ -302,6 +311,8 @@ export const getAccountTurnoverResultSchema = z
     creditTurnover: z.number(),
     closingDebit: z.number(),
     closingCredit: z.number(),
+    openingNet: z.number().optional(),
+    closingNet: z.number().optional(),
     consistent: z.boolean(),
     accounts: z.array(
       turnoverSumsSchema.extend({ code: z.string(), description: z.string(), ref: z.string() }).passthrough(),

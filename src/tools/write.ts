@@ -25,6 +25,7 @@ import {
 import { currentWriteOperationId } from "../odata/write-operation-context.js";
 import { InputError } from "../errors.js";
 import { ODataError } from "../odata/errors.js";
+import { getDocumentPostings } from "./registers.js";
 
 /** Тип ссылки на номенклатуру в табличной части (полиморфная ссылка 1С). */
 const NOMENCLATURE_TYPE = "StandardODATA.Catalog_Номенклатура";
@@ -1618,7 +1619,30 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           });
         }
         await conn.client.action(path);
-        return ok({ done: true, database: conn.cfg.name, ref: guid, action });
+        // Что провёл документ — сразу в ответе: проводки по регистру Хозрасчетный.
+        // Сбой чтения проводок не отменяет проведения, только поясняется.
+        let postings: Record<string, unknown> = {};
+        if (post) {
+          try {
+            const p = await getDocumentPostings(conn, entitySet, guid);
+            postings = {
+              postings: {
+                count: p.postingsCount,
+                debitTotal: p.debitTotal,
+                creditTotal: p.creditTotal,
+                byCorrespondence: p.byCorrespondence.slice(0, 20),
+              },
+              ...(p.postingsCount === 0
+                ? { postingsNote: "Документ проведён, но проводок по бухгалтерскому учёту не сформировал." }
+                : {}),
+            };
+          } catch (e) {
+            postings = {
+              postingsNote: `Проведено; проводки прочитать не удалось: ${e instanceof Error ? e.message : String(e)}`,
+            };
+          }
+        }
+        return ok({ done: true, database: conn.cfg.name, ref: guid, action, ...postings });
       }),
   );
 

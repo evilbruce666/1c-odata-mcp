@@ -1428,6 +1428,12 @@
           "closingCredit": {
             "type": "number"
           },
+          "openingNet": {
+            "type": "number"
+          },
+          "closingNet": {
+            "type": "number"
+          },
           "consistent": {
             "type": "boolean"
           },
@@ -4062,6 +4068,40 @@
             "type": "string"
           },
           "action": {
+            "type": "string"
+          },
+          "postings": {
+            "type": "object",
+            "properties": {
+              "count": {
+                "type": "number"
+              },
+              "debitTotal": {
+                "type": "number"
+              },
+              "creditTotal": {
+                "type": "number"
+              },
+              "byCorrespondence": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
+                }
+              }
+            },
+            "required": [
+              "count",
+              "debitTotal",
+              "creditTotal",
+              "byCorrespondence"
+            ],
+            "additionalProperties": false
+          },
+          "postingsNote": {
             "type": "string"
           }
         },

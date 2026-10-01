@@ -391,3 +391,19 @@ describe("read.accounting.get_account_turnover", () => {
     expect(s["note"]).toBeTypeOf("string");
   });
 });
+
+describe("redBalanceNote — пояснение «красного» сальдо", () => {
+  it("отрицательная сумма в Дт/Кт → пояснение с чистым сальдо; без отрицательных — пусто", async () => {
+    const { redBalanceNote } = await import("../src/tools/registers.js");
+    const t = {
+      openingDr: 0,
+      openingCr: 0,
+      turnoverDr: 0,
+      turnoverCr: 0,
+      closingDr: -36_007_292,
+      closingCr: 9_720_289,
+    };
+    expect(redBalanceNote(t).note).toContain("-457275.81");
+    expect(redBalanceNote({ ...t, closingDr: 100, closingCr: 0 })).toEqual({});
+  });
+});

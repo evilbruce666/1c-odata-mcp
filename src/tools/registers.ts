@@ -156,6 +156,23 @@ export function aggregateAccountTurnover(
   return { total, byAccount, consistent };
 }
 
+/**
+ * Отрицательная сумма в колонке Дт или Кт — не ошибка расчёта: 1С отдаёт развёрнутое сальдо по
+ * аналитике, и по отдельным субконто бывает «красное» (сторно) сальдо. Поясняем это в ответе и
+ * даём чистое сальдо (Дт − Кт), которое всегда сходится с оборотами.
+ */
+export function redBalanceNote(t: TurnoverCents): { note?: string } {
+  const negative = [t.openingDr, t.openingCr, t.closingDr, t.closingCr].some((c) => c < 0);
+  if (!negative) return {};
+  const net = (t.closingDr - t.closingCr) / 100;
+  return {
+    note:
+      "Отрицательное значение в колонке Дт/Кт — «красное» сальдо по отдельным аналитикам (1С отдаёт " +
+      `сальдо развёрнутым по субконто), а не ошибка. Чистое сальдо на конец (Дт − Кт): ${net.toFixed(2)} ` +
+      "(closingNet); с оборотами оно сходится (consistent).",
+  };
+}
+
 // ─── Проводки документа ───────────────────────────────────────────────────────
 
 /**
@@ -643,7 +660,11 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
             ref: a.key,
             ...turnoverToRub(sums),
           })),
-          ...(rows.length === 0 ? { note: "За период нет ни остатков, ни движений по счёту." } : {}),
+          openingNet: (agg.total.openingDr - agg.total.openingCr) / 100,
+          closingNet: (agg.total.closingDr - agg.total.closingCr) / 100,
+          ...(rows.length === 0
+            ? { note: "За период нет ни остатков, ни движений по счёту." }
+            : redBalanceNote(agg.total)),
           scan: { rowsScanned: meta.rowsScanned, windows: meta.chunks, elapsedMs: Date.now() - t0 },
         });
       }),
