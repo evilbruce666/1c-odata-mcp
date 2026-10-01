@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { InputError } from "../src/errors.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { createServer } from "../src/mcp/server.js";
 import { CATALOGS } from "../src/config/mapping.js";
@@ -16,7 +17,7 @@ describe("create tool operationId flow", () => {
       cfg: { name: "default", writable: true },
       behavior: { writeOperationMarker: false },
       available: async () => new Set(CATALOGS.counterparties),
-      client: { prepareCreate, create },
+      client: { prepareCreate, create, operationSettled: async () => undefined },
     };
     const server = createServer({ db: () => connection } as never) as unknown as {
       _registeredTools: Record<
@@ -140,5 +141,164 @@ describe("operation marker and write.operation.status", () => {
     expect(await status(mk(unknown, false, []))).toMatchObject({ status: "unverifiable" });
     expect(await status(mk(undefined, true, []))).toMatchObject({ status: "not_in_journal" });
     expect(reconcileOperation).not.toHaveBeenCalled();
+  });
+});
+
+describe("line operations (add/remove document line) and journal replay", () => {
+  const DOC = "Document_СчетНаОплатуПокупателю";
+  const ref = "44444444-4444-4444-8444-444444444444";
+  const nom = "55555555-5555-4555-8555-555555555555";
+  const row = (n: number) => ({ LineNumber: n, Номенклатура_Key: nom, Количество: 1, Цена: 10, Сумма: 10 });
+  const docWith = (lines: number) => ({
+    Ref_Key: ref,
+    Posted: false,
+    Организация_Key: "org",
+    Товары: Array.from({ length: lines }, (_, i) => row(i + 1)),
+  });
+
+  it("add_document_line: preview gives operationId, confirm goes through patchOnce with a line-count check", async () => {
+    const patchOnce = vi.fn(async () => ({ Ref_Key: ref }));
+    const prepareCreate = vi.fn(async () => undefined);
+    const connection = {
+      cfg: { name: "default", writable: true },
+      behavior: { writeOperationMarker: true },
+      available: async () => new Set([DOC]),
+      getMetadata: async () => ({ entities: new Map() }),
+      client: {
+        prepareCreate,
+        patchOnce,
+        operationSettled: async () => undefined,
+        getEntity: async () => docWith(2),
+        getCollection: async () => ({ value: [] }),
+      },
+    };
+    const tool = toolsOf(connection)["write.document.add_document_line"]!;
+    const args = {
+      database: "default",
+      entitySet: DOC,
+      ref,
+      line: { nomenclatureRef: nom, quantity: 1, price: 10, vatRate: "БезНДС" },
+    };
+    const preview = await tool.handler({ ...args, confirm: false }, {});
+    expect(preview.isError, JSON.stringify(preview.content)).toBeFalsy();
+    const operationId = (preview.structuredContent as { operationId: string }).operationId;
+    expect(operationId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(prepareCreate).toHaveBeenCalledWith(DOC, { ref });
+    const confirmed = await tool.handler({ ...args, confirm: true, operationId }, {});
+    expect(confirmed.isError).toBeFalsy();
+    expect(patchOnce).toHaveBeenCalledOnce();
+    const call = patchOnce.mock.calls[0] as unknown as [
+      string,
+      unknown,
+      string,
+      unknown,
+      Record<string, unknown>,
+    ];
+    expect(call[3]).toEqual({ ref });
+    expect(call[4]).toMatchObject({ kind: "lineCount", ref, before: 2, expected: 3 });
+  });
+
+  it("a confirmed operation is answered from the journal without re-reading 1C or calling the tool", async () => {
+    const getEntity = vi.fn();
+    const patchOnce = vi.fn();
+    const connection = {
+      cfg: { name: "default", writable: true },
+      behavior: { writeOperationMarker: true },
+      available: async () => new Set([DOC]),
+      client: {
+        operationSettled: async () => ({ entitySet: DOC, result: { Ref_Key: ref } }),
+        getEntity,
+        patchOnce,
+      },
+    };
+    const tool = toolsOf(connection)["write.document.remove_document_line"]!;
+    const res = await tool.handler(
+      {
+        database: "default",
+        entitySet: DOC,
+        ref,
+        lineNumber: 1,
+        confirm: true,
+        operationId: "66666666-6666-4666-8666-666666666666",
+      },
+      {},
+    );
+    expect(res.structuredContent).toMatchObject({ updated: true, replayed: true, ref, entitySet: DOC });
+    expect(getEntity).not.toHaveBeenCalled();
+    expect(patchOnce).not.toHaveBeenCalled();
+  });
+
+  it("an unknown outcome blocks the retry before the tool runs", async () => {
+    const getEntity = vi.fn();
+    const connection = {
+      cfg: { name: "default", writable: true },
+      client: {
+        operationSettled: async () => {
+          throw new InputError("Результат записи неизвестен");
+        },
+        getEntity,
+      },
+    };
+    const res = await toolsOf(connection)["write.document.remove_document_line"]!.handler(
+      {
+        database: "default",
+        entitySet: DOC,
+        ref,
+        lineNumber: 1,
+        confirm: true,
+        operationId: "77777777-7777-4777-8777-777777777777",
+      },
+      {},
+    );
+    expect(res.isError).toBe(true);
+    expect(getEntity).not.toHaveBeenCalled();
+  });
+
+  describe("write.operation.status by line count", () => {
+    const status = async (lines: number, ageMs: number) => {
+      const reconcileOperation = vi.fn(async () => undefined);
+      const markOperationNotApplied = vi.fn(async () => undefined);
+      const connection = {
+        cfg: { name: "default" },
+        client: {
+          operationEntry: async () => ({
+            state: "outcome_unknown",
+            entitySet: DOC,
+            updatedAt: new Date(Date.now() - ageMs).toISOString(),
+            check: { kind: "lineCount", ref, section: "Товары", before: 2, expected: 3 },
+          }),
+          getEntity: async () => docWith(lines),
+          reconcileOperation,
+          markOperationNotApplied,
+        },
+      };
+      const res = await toolsOf(connection)["write.operation.status"]!.handler(
+        { database: "default", operationId: "88888888-8888-4888-8888-888888888888" },
+        {},
+      );
+      return { sc: res.structuredContent as { status: string }, reconcileOperation, markOperationNotApplied };
+    };
+
+    it("expected count → found_reconciled", async () => {
+      const r = await status(3, 1000);
+      expect(r.sc.status).toBe("found_reconciled");
+      expect(r.reconcileOperation).toHaveBeenCalledOnce();
+    });
+    it("unchanged after 2+ minutes → not_applied (journal closed)", async () => {
+      const r = await status(2, 5 * 60_000);
+      expect(r.sc.status).toBe("not_applied");
+      expect(r.markOperationNotApplied).toHaveBeenCalledOnce();
+    });
+    it("unchanged right after the attempt → not_found, journal untouched", async () => {
+      const r = await status(2, 10_000);
+      expect(r.sc.status).toBe("not_found");
+      expect(r.markOperationNotApplied).not.toHaveBeenCalled();
+    });
+    it("some other count → unverifiable", async () => {
+      const r = await status(5, 5 * 60_000);
+      expect(r.sc.status).toBe("unverifiable");
+      expect(r.reconcileOperation).not.toHaveBeenCalled();
+      expect(r.markOperationNotApplied).not.toHaveBeenCalled();
+    });
   });
 });

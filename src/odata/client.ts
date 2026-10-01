@@ -3,14 +3,14 @@ import { logger } from "../logger.js";
 import { ODataError, fromHttpStatus } from "./errors.js";
 import type { ODataCollection, ODataEntity } from "../types/odata.js";
 import { currentWriteOperationId, currentWriteRequestHash } from "./write-operation-context.js";
-import { WriteOperationJournal } from "./write-journal.js";
+import { WriteOperationJournal, type OperationCheck } from "./write-journal.js";
 
 /** HTTP-методы только для чтения; остальные (POST/PATCH) считаются записью и гейтуются. */
 const READ_METHODS = new Set(["GET", "HEAD"]);
 
 export class ODataClient {
   private readonly authHeader: string;
-  private readonly writeJournal: WriteOperationJournal;
+  private journal: WriteOperationJournal | undefined;
 
   constructor(
     private readonly conn: ConnectionConfig,
@@ -18,7 +18,16 @@ export class ODataClient {
   ) {
     const token = Buffer.from(`${conn.username}:${conn.password}`).toString("base64");
     this.authHeader = `Basic ${token}`;
-    this.writeJournal = new WriteOperationJournal(behavior.writeJournalDir, conn.name, conn.baseUrl);
+  }
+
+  /** Журнал операций записи создаётся при первом обращении: чтению и read-only он не нужен. */
+  private get writeJournal(): WriteOperationJournal {
+    this.journal ??= new WriteOperationJournal(
+      this.behavior.writeJournalDir,
+      this.conn.name,
+      this.conn.baseUrl,
+    );
+    return this.journal;
   }
 
   /**
@@ -166,6 +175,41 @@ export class ODataClient {
   /** Фиксирует найденный сверкой результат неизвестной операции. */
   reconcileOperation(operationId: string, result: ODataEntity): Promise<void> {
     return this.writeJournal.reconcile(operationId, result);
+  }
+
+  /**
+   * PATCH, который нельзя слепо повторять (добавление/удаление строки документа): при
+   * подтверждении с operationId идёт через журнал. key — стабильная часть операции
+   * (одинаковая в предпросмотре и подтверждении), check — как сверить результат с 1С.
+   */
+  async patchOnce<T extends ODataEntity = ODataEntity>(
+    path: string,
+    payload: object,
+    entitySet: string,
+    key: Record<string, unknown>,
+    check: OperationCheck,
+  ): Promise<T> {
+    this.assertWritable("PATCH");
+    const send = () => this.request<T>(path, "PATCH", payload);
+    const operationId = currentWriteOperationId();
+    if (!operationId) return send();
+    const requestHash = currentWriteRequestHash();
+    if (!requestHash) throw new Error("Для подтверждённой записи отсутствует отпечаток предпросмотра.");
+    return this.writeJournal.execute(operationId, entitySet, key, requestHash, send, check);
+  }
+
+  /** Итог уже подтверждённой операции (для повтора до повторного чтения 1С); undefined — не подтверждалась. */
+  async operationSettled(
+    operationId: string,
+    requestHash: string,
+  ): Promise<{ entitySet: string; result: Record<string, string> } | undefined> {
+    if (this.behavior.readOnly || !this.conn.writable) return undefined;
+    return this.writeJournal.settled(operationId, requestHash);
+  }
+
+  /** Сверка показала, что операция до 1С не дошла. */
+  markOperationNotApplied(operationId: string): Promise<void> {
+    return this.writeJournal.markNotApplied(operationId);
   }
 
   /** Изменяет объект (PATCH) по полному пути с ключом. */

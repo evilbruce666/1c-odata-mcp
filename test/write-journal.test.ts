@@ -286,3 +286,36 @@ describe("journal pruning", () => {
     expect(left.has(`${ids[5]}.json.tmp`)).toBe(false);
   });
 });
+
+describe("journal: line-count check, not-applied and settled()", () => {
+  it("stores the check, replays success via settled(), closes not-applied operations", async () => {
+    const root = await mkdtemp(join(tmpdir(), "journal-lines-"));
+    const j = new WriteOperationJournal(root, "db", "http://x/");
+    const check = { kind: "lineCount" as const, ref: "r", section: "Товары", before: 2, expected: 3 };
+    const ok = randomUUID();
+    await j.prepare(ok, "Document_X", { ref: "r" }, "h");
+    expect(await j.settled(ok, "h")).toBeUndefined(); // ещё не подтверждалась
+    await j.execute(ok, "Document_X", { ref: "r" }, "h", async () => ({ Ref_Key: "r" }), check);
+    expect(await j.settled(ok, "h")).toEqual({ entitySet: "Document_X", result: { Ref_Key: "r" } });
+    await expect(j.settled(ok, "other")).rejects.toThrow(/не совпадают/);
+
+    const lost = randomUUID();
+    await j.prepare(lost, "Document_X", { ref: "r" }, "h");
+    await expect(
+      j.execute(
+        lost,
+        "Document_X",
+        { ref: "r" },
+        "h",
+        async () => {
+          throw new Error("socket hang up");
+        },
+        check,
+      ),
+    ).rejects.toThrow(/неизвестен/);
+    expect((await j.lookup(lost))?.check).toEqual(check);
+    await expect(j.settled(lost, "h")).rejects.toThrow(/неизвестен/);
+    await j.markNotApplied(lost);
+    await expect(j.settled(lost, "h")).rejects.toThrow(/не была применена/);
+  });
+});
