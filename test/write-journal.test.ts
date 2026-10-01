@@ -187,3 +187,30 @@ describe("WriteOperationJournal", () => {
     expect(created.Ref_Key).toBe("ref-1");
   });
 });
+
+describe("ODataClient write guard vs journal", () => {
+  it("does not touch the journal on preview or create when writes are disabled", async () => {
+    const { mkdtemp, readdir } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { ODataClient } = await import("../src/odata/client.js");
+    const { withWriteOperation } = await import("../src/odata/write-operation-context.js");
+    const dir = await mkdtemp(join(tmpdir(), "journal-ro-"));
+    const client = new ODataClient(
+      {
+        name: "ro",
+        baseUrl: "http://localhost/odata/",
+        username: "u",
+        password: "p",
+        writable: false,
+      } as never,
+      { readOnly: true, writeJournalDir: dir, retries: 0, timeoutMs: 1000 } as never,
+    );
+    const id = "11111111-1111-4111-8111-111111111111";
+    await withWriteOperation(id, "h", async () => {
+      await client.prepareCreate("Catalog_X", { a: 1 });
+      await expect(client.create("Catalog_X", { a: 1 })).rejects.toThrow();
+    });
+    expect(await readdir(dir)).toEqual([]);
+  });
+});

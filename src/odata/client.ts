@@ -120,6 +120,8 @@ export class ODataClient {
 
   /** Создаёт объект (POST). Возвращает созданную сущность с Ref_Key. */
   async create<T extends ODataEntity = ODataEntity>(entitySet: string, payload: object): Promise<T> {
+    // Гард — до резервирования в журнале: в режиме только-чтение операция не должна оставлять следов.
+    this.assertWritable("POST");
     const send = async () => {
       const created = await this.request<T>(`${entitySet}?$format=json`, "POST", payload);
       if (!created || typeof created !== "object" || Array.isArray(created)) {
@@ -147,6 +149,8 @@ export class ODataClient {
 
   /** Persists the payload fingerprint associated with a write tool's dry-run token. */
   async prepareCreate(entitySet: string, payload: Record<string, unknown>): Promise<void> {
+    // Предпросмотр при выключенной записи ничего не пишет на диск (READ_ONLY по умолчанию).
+    if (this.behavior.readOnly || !this.conn.writable) return;
     const operationId = currentWriteOperationId();
     const requestHash = currentWriteRequestHash();
     if (!operationId || !requestHash)
