@@ -13,7 +13,7 @@ import {
   type ContactKinds,
 } from "../odata/refdata.js";
 import { fetchAll } from "../odata/pagination.js";
-import { and, buildQuery, cmp, contains, odataString } from "../odata/query.js";
+import { and, buildQuery, cmp, contains, odataGuid, odataString } from "../odata/query.js";
 import type { ODataEntity } from "../types/odata.js";
 import {
   createResultSchema,
@@ -998,6 +998,126 @@ async function entityHasComment(conn: Connection, entitySet: string): Promise<bo
 }
 
 /**
+ * Вид договора, который 1С подставляет в документ при выборе контрагента — по направлению
+ * документа. Денежные документы сюда не входят: там вид зависит от вида операции.
+ */
+const CONTRACT_KIND_BY_DOC: ReadonlyMap<string, "СПокупателем" | "СПоставщиком"> = new Map([
+  ...[
+    ...DOCUMENTS.sales,
+    ...DOCUMENTS.customerInvoice,
+    ...DOCUMENTS.servicesAct,
+    ...DOCUMENTS.returnFromCustomer,
+  ].map((set) => [set, "СПокупателем"] as const),
+  ...[...DOCUMENTS.purchases, ...DOCUMENTS.supplierInvoice, ...DOCUMENTS.returnToSupplier].map(
+    (set) => [set, "СПоставщиком"] as const,
+  ),
+]);
+
+const EMPTY_REF = "00000000-0000-0000-0000-000000000000";
+
+/**
+ * Договор не указан — поступаем как форма 1С при выборе контрагента: если у контрагента ровно один
+ * договор нужного вида с этой организацией, подставляем его. Несколько или ни одного — не угадываем,
+ * а предупреждаем: без договора 1С документ не проведёт (в БП 3.0 падает невнятной ошибкой модуля
+ * прослеживаемости «Преобразование значения к типу Булево»).
+ */
+export async function withDefaultContract(
+  conn: Connection,
+  entitySet: string,
+  payload: Record<string, unknown>,
+): Promise<{ payload: Record<string, unknown>; notes: string[] }> {
+  const kind = CONTRACT_KIND_BY_DOC.get(entitySet);
+  const counterparty = payload["Контрагент_Key"];
+  if (!kind || typeof counterparty !== "string" || !counterparty || payload["ДоговорКонтрагента_Key"]) {
+    return { payload, notes: [] };
+  }
+  const available = await conn.available();
+  const set = CATALOGS.contracts.find((c) => available.has(c));
+  if (!set) return { payload, notes: [] };
+  const org = typeof payload["Организация_Key"] === "string" ? payload["Организация_Key"] : undefined;
+  const found = await conn.client.getCollection<ODataEntity>(
+    `${set}${buildQuery({
+      select: ["Ref_Key", "Description"],
+      filter: and(
+        cmp("Owner_Key", "eq", odataGuid(counterparty)),
+        cmp("ВидДоговора", "eq", odataString(kind)),
+        cmp("DeletionMark", "eq", "false"),
+        org ? cmp("Организация_Key", "eq", odataGuid(org)) : undefined,
+      ),
+      top: 3,
+    })}`,
+  );
+  const kindText = kind === "СПокупателем" ? "с покупателем" : "с поставщиком";
+  if (found.value.length === 1) {
+    const ctr = found.value[0]!;
+    return {
+      payload: { ...payload, ДоговорКонтрагента_Key: ctr["Ref_Key"] },
+      notes: [
+        `Договор не указан — подставлен единственный договор ${kindText}: «${String(ctr["Description"] ?? "")}».`,
+      ],
+    };
+  }
+  return {
+    payload,
+    notes: [
+      found.value.length === 0
+        ? `У контрагента нет договора ${kindText} — документ создастся, но 1С его не проведёт. ` +
+          "Создайте договор (write.catalog.create_contract; вид уточните у пользователя) и передайте contractRef."
+        : `У контрагента несколько договоров ${kindText} — укажите нужный в contractRef, ` +
+          "иначе 1С документ не проведёт.",
+    ],
+  };
+}
+
+/**
+ * Перед проведением: документ с контрагентом, но без договора 1С (БП 3.0) не проводит, причём падает
+ * невнятной ошибкой модуля прослеживаемости. Говорим причину заранее, понятным текстом.
+ */
+async function missingContract(
+  conn: Connection,
+  entitySet: string,
+  guid: string,
+): Promise<string | undefined> {
+  const em = (await conn.getMetadata()).entities.get(entitySet);
+  const props = new Set(em?.properties.map((p) => p.name) ?? []);
+  if (!props.has("ДоговорКонтрагента_Key") || !props.has("Контрагент_Key")) return undefined;
+  const doc = await conn.client.getEntity(
+    `${entitySet}(guid'${guid}')${buildQuery({ select: ["Контрагент_Key", "ДоговорКонтрагента_Key"] })}`,
+  );
+  const empty = (v: unknown) => !v || v === EMPTY_REF;
+  if (empty(doc["Контрагент_Key"]) || !empty(doc["ДоговорКонтрагента_Key"])) return undefined;
+  return (
+    "В документе не заполнен договор с контрагентом — 1С его не проведёт. Укажите договор " +
+    '(write.entity.update_entity с {"ДоговорКонтрагента_Key": "<Ref_Key договора>"}) и проведите снова; ' +
+    "если договора нет — создайте его (write.catalog.create_contract, вид уточните у пользователя)."
+  );
+}
+
+/**
+ * 1С отвергла значение перечисления («Перечисление 'X' не содержит элемент 'Y'») — дописываем к
+ * ошибке допустимые значения из $metadata, чтобы вызывающий мог выбрать верное, а не угадывать.
+ */
+export async function withEnumValues(conn: Connection, e: unknown): Promise<unknown> {
+  if (!(e instanceof ODataError)) return e;
+  const m = /Перечисление '([^']+)' не содержит элемент/.exec(e.message);
+  if (!m) return e;
+  try {
+    const xml = await conn.client.getText("$metadata");
+    const name = m[1]!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const body = new RegExp(`<EnumType Name="${name}"[^>]*>([\\s\\S]*?)</EnumType>`).exec(xml)?.[1];
+    const values = body ? [...body.matchAll(/Member Name="([^"]+)"/g)].map((x) => x[1]) : [];
+    if (!values.length) return e;
+    return new ODataError({
+      kind: e.kind,
+      message: `${e.message} Допустимые значения ${m[1]}: ${values.join(", ")}.`,
+      cause: e,
+    });
+  } catch {
+    return e;
+  }
+}
+
+/**
  * Общий путь создания: при confirm=false возвращает предпросмотр (не пишет в 1С),
  * при confirm=true выполняет POST. Гард записи (READ_ONLY + WRITABLE) — в клиенте.
  */
@@ -1008,8 +1128,10 @@ async function createOrPreview(
   confirm: boolean,
   notes?: string[],
 ) {
-  const extra = notes?.length ? { notes } : {};
-  payload = await withOperationMarker(conn, entitySet, payload);
+  const contract = await withDefaultContract(conn, entitySet, payload);
+  payload = await withOperationMarker(conn, entitySet, contract.payload);
+  const allNotes = [...(notes ?? []), ...contract.notes];
+  const extra = allNotes.length ? { notes: allNotes } : {};
   if (!confirm) {
     await conn.client.prepareCreate(entitySet, payload);
     return ok({
@@ -1024,7 +1146,12 @@ async function createOrPreview(
         : `Предпросмотр. ВНИМАНИЕ: запись в базу "${conn.cfg.name}" сейчас запрещена — включите ODATA_DB_${conn.cfg.name.toUpperCase()}_WRITABLE=true (и READ_ONLY=false).`,
     });
   }
-  const created = await conn.client.create<ODataEntity>(entitySet, payload);
+  let created: ODataEntity;
+  try {
+    created = await conn.client.create<ODataEntity>(entitySet, payload);
+  } catch (e) {
+    throw await withEnumValues(conn, e);
+  }
   return ok({
     created: true,
     ...(created["_operation_replayed"] === true
@@ -1616,6 +1743,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
             willCall: `${entitySet}(${guid})/${action}`,
             note: "Предпросмотр. Чтобы применить, повторите с confirm=true.",
           });
+        }
+        if (post) {
+          const missing = await missingContract(conn, entitySet, guid);
+          if (missing) return fail(missing);
         }
         await conn.client.action(path);
         return ok({ done: true, database: conn.cfg.name, ref: guid, action });
@@ -2879,7 +3010,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       description:
         "Создаёт документ «Списание с расчётного счёта» (исходящий платёж с банка). НЕПРОВЕДЁННЫЙ; " +
         "провести — post_document. Вид операции ОБЯЗАТЕЛЕН и не угадывается (напр. «ОплатаПоставщику», " +
-        "«ПеречислениеНалога», «ПеречислениеЗаработнойПлаты», «ПереводНаДругойСчет», «ПрочееСписание»). " +
+        "«ПеречислениеНалога», «ПеречислениеЗП», «ПереводНаДругойСчет», «ПрочееСписание»). " +
         "Для оплаты поставщику с договором заполняется расшифровка (сч. 60). dry-run/confirm.",
       inputSchema: {
         database: databaseField,
@@ -2887,7 +3018,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         operationKind: z
           .string()
           .describe(
-            "Вид операции (ОБЯЗАТЕЛЬНО, не угадывать): ОплатаПоставщику / ПеречислениеНалога / ПеречислениеЗаработнойПлаты / ПереводНаДругойСчет / ПрочееСписание …",
+            "Вид операции (ОБЯЗАТЕЛЬНО, не угадывать): ОплатаПоставщику / ПеречислениеНалога / ПеречислениеЗП / ПереводНаДругойСчет / ПрочееСписание …",
           ),
         amount: z.number().positive().describe("Сумма списания"),
         counterpartyRef: z.string().optional().describe("Ref_Key контрагента (для расчётов)"),
@@ -2994,7 +3125,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       title: "Создать приходный кассовый ордер (ПКО)",
       description:
         "Создаёт «Приходный кассовый ордер» (приём наличных в кассу). НЕПРОВЕДЁННЫЙ; провести — post_document. " +
-        "Вид операции ОБЯЗАТЕЛЕН (напр. «ПоступлениеОплатыОтПокупателя», «ПрочийПриход», «ПолучениеНаличныхВБанке»). " +
+        "Вид операции ОБЯЗАТЕЛЕН (напр. «ОплатаПокупателя», «ПрочийПриход», «ПолучениеНаличныхВБанке», " +
+        "«ВозвратОтПодотчетногоЛица»). " +
         "dry-run/confirm.",
       inputSchema: cashDocInput,
       outputSchema: createResultSchema,
