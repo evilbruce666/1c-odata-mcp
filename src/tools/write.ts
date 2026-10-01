@@ -1523,7 +1523,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         entitySet: z.string().describe("Имя объекта, напр. Catalog_Контрагенты"),
         ref: z.string().describe("Ref_Key объекта (GUID)"),
         fields: z
-          .record(z.union([z.string(), z.number(), z.boolean(), z.null()]))
+          .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))
           .describe("Поля для изменения: { техническоеИмя: значение }"),
         confirm: confirmField,
       },
@@ -2400,7 +2400,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         ref: z.string().describe("Ref_Key документа-образца (GUID)"),
         date: z.string().optional().describe("Дата копии YYYY-MM-DD (по умолчанию сегодня)"),
         fields: z
-          .record(z.union([z.string(), z.number(), z.boolean(), z.null()]))
+          .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))
           .optional()
           .describe(
             'Реквизиты шапки, которые надо изменить: { техническоеИмя: значение }, напр. {"Комментарий":"..."}',
@@ -2410,7 +2410,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
             z.object({
               lineNumber: z.number().int().positive().describe("Номер строки (с 1)"),
               fields: z
-                .record(z.union([z.string(), z.number(), z.boolean(), z.null()]))
+                .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))
                 .describe(
                   'Поля строки: { техническоеИмя: значение }, напр. {"Количество":4.3,"Сумма":10750,"Содержание":"..."}',
                 ),
