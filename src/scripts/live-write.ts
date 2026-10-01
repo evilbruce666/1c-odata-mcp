@@ -220,6 +220,58 @@ async function main(): Promise<number> {
       );
     }
 
+    // --- договор по умолчанию и проведение (без договора БП 3.0 не проводит реализацию)
+    {
+      const postAndUnpost = async (entitySet: string, ref: string) => {
+        const p = await run("write.document.post_document", { entitySet, ref, post: true, confirm: true });
+        if (!p.err) await run("write.document.post_document", { entitySet, ref, post: false, confirm: true });
+        return p;
+      };
+      const svcLine = [
+        { nomenclatureRef: gRef, quantity: 1, price: 100, vatRate: "БезНДС", content: "Тест" },
+      ];
+      const withOne = await flow("write.counterparty.create_counterparty", { name: `${tag} один договор` });
+      if (withOne) {
+        await flow("write.catalog.create_contract", {
+          counterpartyRef: String(withOne["ref"]),
+          kind: "СПокупателем",
+        });
+        const preview = await run("write.sales.create_act", {
+          counterpartyRef: String(withOne["ref"]),
+          lines: svcLine,
+          confirm: false,
+        });
+        const notes = JSON.stringify(preview.sc["notes"] ?? []);
+        const act = await flow(
+          "write.sales.create_act",
+          { counterpartyRef: String(withOne["ref"]), lines: svcLine },
+          "акт без contractRef (договор подставлен)",
+        );
+        const posted = act ? await postAndUnpost(String(act["entitySet"]), String(act["ref"])) : undefined;
+        check(
+          "договор подставлен → акт проводится",
+          notes.includes("подставлен единственный договор") && posted?.err === false,
+          posted?.err ? posted.text.slice(0, 120) : "",
+        );
+      }
+      const noContract = await flow("write.counterparty.create_counterparty", {
+        name: `${tag} без договора`,
+      });
+      if (noContract) {
+        const act = await flow(
+          "write.sales.create_act",
+          { counterpartyRef: String(noContract["ref"]), lines: svcLine },
+          "акт без договора (создаётся)",
+        );
+        const posted = act ? await postAndUnpost(String(act["entitySet"]), String(act["ref"])) : undefined;
+        check(
+          "без договора → понятная ошибка проведения",
+          posted?.err === true && posted.text.includes("не заполнен договор"),
+          posted?.text.slice(0, 80) ?? "",
+        );
+      }
+    }
+
     // --- строки документа
     if (inv) {
       const DOC = String(inv["entitySet"]);
