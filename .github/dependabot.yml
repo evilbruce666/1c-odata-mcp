@@ -13,9 +13,6 @@ updates:
         dependency-type: "production"
         update-types: ["minor", "patch"]
     ignore:
-      # zod 4 — мажор с ломающим API; миграция — отдельной задачей, не авто-PR.
-      - dependency-name: "zod"
-        update-types: ["version-update:semver-major"]
       # typescript 7 — мажор, который тянут в группу dev-зависимостей: он выходит
       # за peer-диапазон typescript-eslint (>=4.8.4 <6.1.0), и весь PR становится
       # неустановимым (npm ci падает на ERESOLVE). Мажор — отдельной задачей,

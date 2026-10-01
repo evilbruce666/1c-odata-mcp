@@ -20,7 +20,9 @@ import {
   patchResultSchema,
   markForDeletionResultSchema,
   postDocumentResultSchema,
+  operationStatusSchema,
 } from "../schemas/output.js";
+import { currentWriteOperationId } from "../odata/write-operation-context.js";
 import { InputError } from "../errors.js";
 
 /** Тип ссылки на номенклатуру в табличной части (полиморфная ссылка 1С). */
@@ -902,7 +904,9 @@ const confirmField = z
   .default(false)
   .describe(
     "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. " +
-      "true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя.",
+      "true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя; " +
+      "при подтверждении передавайте operationId из результата предпросмотра и те же аргументы. После таймаута " +
+      "повторяйте подтверждение с тем же id, не создавая новый предпросмотр.",
   );
 
 const contentField = z
@@ -966,8 +970,34 @@ function clean(obj: Record<string, unknown>): Record<string, unknown> {
 const resolveSet = (conn: Connection, candidates: readonly string[], human: string): Promise<string> =>
   requireEntity(conn, candidates, human);
 
+const OPERATION_MARKER_RE = /\s*\[op:[0-9a-f-]{36}\]/gi;
+const operationMarker = (operationId: string) => `[op:${operationId}]`;
+
 /**
- * Общий путь создания: при confirm=false возвращает предпросмотр (ничего не пишет),
+ * Дописывает в «Комментарий» метку операции — по ней write.operation.status находит
+ * созданный объект после таймаута. Только для сущностей, у которых есть «Комментарий».
+ * Метки чужих операций (напр. из копируемого документа) вырезаются.
+ */
+async function withOperationMarker(
+  conn: Connection,
+  entitySet: string,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const operationId = currentWriteOperationId();
+  if (!operationId || !conn.behavior.writeOperationMarker) return payload;
+  if (!(await entityHasComment(conn, entitySet))) return payload;
+  const prev = typeof payload["Комментарий"] === "string" ? payload["Комментарий"] : "";
+  const base = prev.replace(OPERATION_MARKER_RE, "").trim();
+  return { ...payload, Комментарий: `${base}${base ? " " : ""}${operationMarker(operationId)}` };
+}
+
+async function entityHasComment(conn: Connection, entitySet: string): Promise<boolean> {
+  const meta = (await conn.getMetadata()).entities.get(entitySet);
+  return !!meta?.properties.some((p) => p.name === "Комментарий");
+}
+
+/**
+ * Общий путь создания: при confirm=false возвращает предпросмотр (не пишет в 1С),
  * при confirm=true выполняет POST. Гард записи (READ_ONLY + WRITABLE) — в клиенте.
  */
 async function createOrPreview(
@@ -978,7 +1008,9 @@ async function createOrPreview(
   notes?: string[],
 ) {
   const extra = notes?.length ? { notes } : {};
+  payload = await withOperationMarker(conn, entitySet, payload);
   if (!confirm) {
+    await conn.client.prepareCreate(entitySet, payload);
     return ok({
       dryRun: true,
       database: conn.cfg.name,
@@ -994,6 +1026,12 @@ async function createOrPreview(
   const created = await conn.client.create<ODataEntity>(entitySet, payload);
   return ok({
     created: true,
+    ...(created["_operation_replayed"] === true
+      ? {
+          replayed: true,
+          note: "Эта запись уже была создана с данным operationId; повторный POST не выполнялся.",
+        }
+      : {}),
     database: conn.cfg.name,
     entitySet,
     ref: created["Ref_Key"],
@@ -1057,6 +1095,12 @@ async function createSubordinate(
   }
   return ok({
     created: true,
+    ...(created["_operation_replayed"] === true
+      ? {
+          replayed: true,
+          note: "Эта запись уже была создана с данным operationId; повторный POST не выполнялся.",
+        }
+      : {}),
     database: conn.cfg.name,
     entitySet: set,
     ref,
@@ -1066,6 +1110,95 @@ async function createSubordinate(
 }
 
 export function registerWriteTools(server: McpServer, ctx: ServerContext): void {
+  server.registerTool(
+    "write.operation.status",
+    {
+      title: "Статус операции создания",
+      description:
+        "Состояние операции создания по operationId из предпросмотра. Если результат записи неизвестен " +
+        "(таймаут, сбой сети, 5xx), ищет созданный объект в 1С по метке «[op:…]» в комментарии и, если " +
+        "нашёл, фиксирует успех — тогда повторное подтверждение вернёт ссылку без второго POST. " +
+        "Ничего не создаёт в 1С. Если объект не найден — безопасно сделать новый предпросмотр с новым id " +
+        "(но дайте 1С время: запрос мог ещё выполняться).",
+      inputSchema: {
+        database: databaseField,
+        operationId: z.string().uuid().describe("operationId из предпросмотра создания"),
+      },
+      outputSchema: operationStatusSchema,
+    },
+    ({ database, operationId }) =>
+      guard("write.operation.status", async () => {
+        const conn = ctx.db(database);
+        const base = { operationId, database: conn.cfg.name };
+        const entry = await conn.client.operationEntry(operationId);
+        if (!entry) {
+          return ok({
+            ...base,
+            status: "not_in_journal",
+            note: "Операция не найдена в локальном журнале этой базы: подтверждение не выполнялось.",
+          });
+        }
+        const common = { ...base, entitySet: entry.entitySet };
+        if (entry.state === "succeeded") {
+          return ok({
+            ...common,
+            status: "succeeded",
+            ref: entry.result?.["Ref_Key"],
+            number: entry.result?.["Number"],
+          });
+        }
+        if (entry.state === "prepared") {
+          return ok({
+            ...common,
+            status: "prepared",
+            note: "Предпросмотр был, подтверждение не отправлялось.",
+          });
+        }
+        if (entry.state === "rejected") {
+          return ok({
+            ...common,
+            status: "rejected",
+            note: "1С отклонила запись; объект не создан. Нужен новый предпросмотр.",
+          });
+        }
+        // executing | outcome_unknown — сверяем с 1С по метке
+        if (!(await entityHasComment(conn, entry.entitySet))) {
+          return ok({
+            ...common,
+            status: "unverifiable",
+            note: "У этого объекта нет «Комментария», метку не поставить. Проверьте в 1С вручную (по наименованию/номеру).",
+          });
+        }
+        // 1С превращает substringof в регулярное выражение — скобки метки «[op:…]» ломают запрос (500),
+        // поэтому ищем по «op:<id>» без них (UUID — только hex и «-»).
+        const found = await conn.client.getCollection<ODataEntity>(
+          `${entry.entitySet}?$format=json&$top=2&$select=Ref_Key,Number&$filter=${encodeURIComponent(
+            `substringof('op:${operationId}',Комментарий)`,
+          )}`,
+        );
+        const hit = found.value[0];
+        if (hit) {
+          await conn.client.reconcileOperation(operationId, hit);
+          return ok({
+            ...common,
+            status: "found_reconciled",
+            ref: hit["Ref_Key"],
+            number: hit["Number"],
+            note: "Объект найден по метке; операция зафиксирована как успешная. Повторное подтверждение вернёт эту ссылку.",
+          });
+        }
+        const ageSec = Math.round((Date.now() - Date.parse(entry.updatedAt)) / 1000);
+        return ok({
+          ...common,
+          status: "not_found",
+          note:
+            `По метке объект не найден (с последней попытки ${ageSec} с). ` +
+            (ageSec < 120 ? "Запрос мог ещё выполняться в 1С — повторите проверку позже. " : "") +
+            "Если прошло достаточно времени, объекта нет: выполните новый предпросмотр с новым operationId.",
+        });
+      }),
+  );
+
   server.registerTool(
     "write.counterparty.create_counterparty",
     {
@@ -1390,7 +1523,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         entitySet: z.string().describe("Имя объекта, напр. Catalog_Контрагенты"),
         ref: z.string().describe("Ref_Key объекта (GUID)"),
         fields: z
-          .record(z.union([z.string(), z.number(), z.boolean(), z.null()]))
+          .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))
           .describe("Поля для изменения: { техническоеИмя: значение }"),
         confirm: confirmField,
       },
@@ -2267,7 +2400,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         ref: z.string().describe("Ref_Key документа-образца (GUID)"),
         date: z.string().optional().describe("Дата копии YYYY-MM-DD (по умолчанию сегодня)"),
         fields: z
-          .record(z.union([z.string(), z.number(), z.boolean(), z.null()]))
+          .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))
           .optional()
           .describe(
             'Реквизиты шапки, которые надо изменить: { техническоеИмя: значение }, напр. {"Комментарий":"..."}',
@@ -2277,7 +2410,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
             z.object({
               lineNumber: z.number().int().positive().describe("Номер строки (с 1)"),
               fields: z
-                .record(z.union([z.string(), z.number(), z.boolean(), z.null()]))
+                .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))
                 .describe(
                   'Поля строки: { техническоеИмя: значение }, напр. {"Количество":4.3,"Сумма":10750,"Содержание":"..."}',
                 ),

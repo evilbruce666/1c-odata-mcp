@@ -73,6 +73,8 @@ export const createResultSchema = z
     willCreate: z.string().optional(),
     payload: z.record(z.string(), z.unknown()).optional(),
     created: z.boolean().optional(),
+    operationId: z.string().uuid().optional(),
+    replayed: z.boolean().optional(),
     entitySet: z.string().optional(),
     ref: z.string().optional(),
     code: z.string().optional(),
@@ -383,5 +385,26 @@ export const organizationCardResultSchema = z
     director: z.object({ fullName: z.string() }).passthrough().optional(),
     accountant: z.object({ fullName: z.string() }).passthrough().optional(),
     notes: z.array(z.string()).optional(),
+  })
+  .passthrough();
+
+/** write.operation.status: состояние операции создания и результат сверки с 1С. */
+export const operationStatusSchema = z
+  .object({
+    operationId: z.string().uuid(),
+    database: z.string().optional(),
+    status: z.enum([
+      "not_in_journal",
+      "prepared",
+      "succeeded",
+      "rejected",
+      "found_reconciled",
+      "not_found",
+      "unverifiable",
+    ]),
+    entitySet: z.string().optional(),
+    ref: z.string().optional(),
+    number: z.string().optional(),
+    note: z.string().optional(),
   })
   .passthrough();

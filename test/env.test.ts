@@ -23,6 +23,16 @@ describe("parseConfig — одна база (обратная совместим
     });
     expect(c.connections[0]!.baseUrl.endsWith("/")).toBe(true);
   });
+
+  it("принимает отдельный локальный каталог журнала подтверждённых записей", () => {
+    const c = parseConfig({
+      ODATA_BASE_URL: "https://host/db/odata/standard.odata/",
+      ODATA_USERNAME: "u",
+      ODATA_PASSWORD: "p",
+      ODATA_WRITE_JOURNAL_DIR: "/var/tmp/1c-write-journal",
+    });
+    expect(c.behavior.writeJournalDir).toBe("/var/tmp/1c-write-journal");
+  });
 });
 
 describe("parseConfig — несколько баз", () => {

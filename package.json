@@ -1,7 +1,7 @@
 {
   "name": "1c-odata-mcp",
-  "version": "0.4.0",
-  "description": "MCP server for 1C:Enterprise (1С) over OData. Ask your accounting database in natural language — debtors, sales, taxes, cash flow — from any MCP client (Claude, Cursor, VS Code, local models…). 56 tools, run with npx, nothing installed inside 1C; read-only by default with opt-in (gated) write.",
+  "version": "0.5.0",
+  "description": "MCP server for 1C:Enterprise (1С) over OData. Ask your accounting database in natural language — debtors, sales, taxes, cash flow — from any MCP client (Claude, Cursor, VS Code, local models…). 57 tools, run with npx, nothing installed inside 1C; read-only by default with opt-in (gated) write.",
   "type": "module",
   "bin": {
     "1c-odata-mcp": "dist/index.js"
@@ -62,10 +62,10 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.1",
-    "fast-xml-parser": "^5.11.1",
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "fast-xml-parser": "^5.11.2",
     "pino": "^10.3.1",
-    "zod": "^3.24.0"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -74,7 +74,7 @@
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.9.9",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.70.1",
-    "vitest": "^5.0.2"
+    "typescript-eslint": "^8.71.0",
+    "vitest": "^5.0.3"
   }
 }
