@@ -9,9 +9,9 @@ const OPERATION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f
 const TERMINAL_RETENTION_MS = 90 * 24 * 60 * 60 * 1_000;
 const PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
 
-type OperationState = "prepared" | "executing" | "succeeded" | "rejected" | "outcome_unknown";
+export type OperationState = "prepared" | "executing" | "succeeded" | "rejected" | "outcome_unknown";
 
-interface JournalEntry {
+export interface JournalEntry {
   version: 1;
   operationId: string;
   database: string;
@@ -152,6 +152,34 @@ export class WriteOperationJournal {
     } finally {
       await lock.close().catch(() => undefined);
     }
+  }
+
+  /** Запись журнала по id (undefined — такой операции нет); для инструмента статуса. */
+  async lookup(operationId: string): Promise<JournalEntry | undefined> {
+    this.validateOperationId(operationId);
+    try {
+      return await this.read(operationId);
+    } catch (error) {
+      if (error instanceof InputError && error.message.includes("не найден в локальном журнале"))
+        return undefined;
+      throw error;
+    }
+  }
+
+  /**
+   * Результат неизвестной операции выяснен сверкой с 1С (объект найден по метке):
+   * фиксируем успех, чтобы повторное подтверждение вернуло ссылку, а не блокировалось.
+   */
+  async reconcile(operationId: string, result: ODataEntity): Promise<void> {
+    const entry = await this.read(operationId);
+    if (entry.state === "succeeded") return;
+    await this.replace({
+      ...entry,
+      state: "succeeded",
+      updatedAt: new Date().toISOString(),
+      result: resultSummary(result),
+    });
+    await rm(this.lockPath(operationId), { force: true }).catch(() => undefined);
   }
 
   private resultForExisting<T extends ODataEntity>(entry: JournalEntry): T | undefined {

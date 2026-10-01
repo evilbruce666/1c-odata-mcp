@@ -158,6 +158,16 @@ export class ODataClient {
     await this.writeJournal.prepare(operationId, entitySet, payload, requestHash);
   }
 
+  /** Запись журнала операции записи (для write.operation.status). */
+  operationEntry(operationId: string) {
+    return this.writeJournal.lookup(operationId);
+  }
+
+  /** Фиксирует найденный сверкой результат неизвестной операции. */
+  reconcileOperation(operationId: string, result: ODataEntity): Promise<void> {
+    return this.writeJournal.reconcile(operationId, result);
+  }
+
   /** Изменяет объект (PATCH) по полному пути с ключом. */
   async patch<T extends ODataEntity = ODataEntity>(path: string, payload: object): Promise<T> {
     return this.request<T>(path, "PATCH", payload);

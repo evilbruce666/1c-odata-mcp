@@ -387,3 +387,24 @@ export const organizationCardResultSchema = z
     notes: z.array(z.string()).optional(),
   })
   .passthrough();
+
+/** write.operation.status: состояние операции создания и результат сверки с 1С. */
+export const operationStatusSchema = z
+  .object({
+    operationId: z.string().uuid(),
+    database: z.string().optional(),
+    status: z.enum([
+      "not_in_journal",
+      "prepared",
+      "succeeded",
+      "rejected",
+      "found_reconciled",
+      "not_found",
+      "unverifiable",
+    ]),
+    entitySet: z.string().optional(),
+    ref: z.string().optional(),
+    number: z.string().optional(),
+    note: z.string().optional(),
+  })
+  .passthrough();

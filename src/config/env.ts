@@ -35,6 +35,8 @@ export interface Behavior {
   readOnly: boolean;
   /** Durable local state for idempotent confirmed document creates. */
   writeJournalDir: string;
+  /** Дописывать «[op:<operationId>]» в «Комментарий» создаваемых документов — для сверки после таймаута. */
+  writeOperationMarker: boolean;
 }
 
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
@@ -55,6 +57,7 @@ const BehaviorSchema = z.object({
   ODATA_MAX_ROWS: z.coerce.number().int().positive().max(100_000).default(1_000),
   ODATA_ANALYTICS_MAX_ROWS: z.coerce.number().int().positive().max(1_000_000).default(200_000),
   ODATA_WRITE_JOURNAL_DIR: z.string().min(1).optional(),
+  ODATA_WRITE_OPERATION_MARKER: z.enum(["true", "false"]).default("true"),
   LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"),
   READ_ONLY: z.enum(["true", "false"]).default("true"),
 });
@@ -165,6 +168,7 @@ export function parseConfig(env: Env): RuntimeConfig {
       maxRows: b.ODATA_MAX_ROWS,
       analyticsMaxRows: b.ODATA_ANALYTICS_MAX_ROWS,
       readOnly: b.READ_ONLY === "true",
+      writeOperationMarker: b.ODATA_WRITE_OPERATION_MARKER === "true",
       writeJournalDir: resolve(
         b.ODATA_WRITE_JOURNAL_DIR ?? join(homedir(), ".1c-odata-mcp", "write-journal"),
       ),

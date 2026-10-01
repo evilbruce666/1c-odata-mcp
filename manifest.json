@@ -2614,6 +2614,32 @@
       }
     },
     {
+      "name": "write.operation.status",
+      "title": "Статус операции создания",
+      "description": "Состояние операции создания по operationId из предпросмотра. Если результат записи неизвестен (таймаут, сбой сети, 5xx), ищет созданный объект в 1С по метке «[op:…]» в комментарии и, если нашёл, фиксирует успех — повторное подтверждение вернёт ссылку без второго POST. Ничего не создаёт в 1С.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string"
+          },
+          "operationId": {
+            "type": "string",
+            "description": "operationId из предпросмотра создания"
+          }
+        },
+        "required": [
+          "operationId"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
       "name": "write.entity.mark_for_deletion",
       "title": "Пометить на удаление",
       "description": "Ставит/снимает пометку на удаление у объекта (как в 1С) — мягкое удаление, физически данные не стираются. По умолчанию предпросмотр (dry-run); для применения повторите с confirm=true. Полезно, чтобы убрать ошибочно созданную запись.",
