@@ -73,6 +73,8 @@ export const createResultSchema = z
     willCreate: z.string().optional(),
     payload: z.record(z.string(), z.unknown()).optional(),
     created: z.boolean().optional(),
+    operationId: z.string().uuid().optional(),
+    replayed: z.boolean().optional(),
     entitySet: z.string().optional(),
     ref: z.string().optional(),
     code: z.string().optional(),

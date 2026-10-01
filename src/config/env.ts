@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { homedir } from "node:os";
+import { resolve, join } from "node:path";
 
 /**
  * Конфигурация сервера. Поддерживает несколько баз 1С одновременно.
@@ -31,6 +33,8 @@ export interface Behavior {
   /** Потолок строк для агрегаторов (они только суммируют, строки наружу не отдают). */
   analyticsMaxRows: number;
   readOnly: boolean;
+  /** Durable local state for idempotent confirmed document creates. */
+  writeJournalDir: string;
 }
 
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
@@ -50,6 +54,7 @@ const BehaviorSchema = z.object({
   ODATA_PAGE_SIZE: z.coerce.number().int().positive().max(5_000).default(100),
   ODATA_MAX_ROWS: z.coerce.number().int().positive().max(100_000).default(1_000),
   ODATA_ANALYTICS_MAX_ROWS: z.coerce.number().int().positive().max(1_000_000).default(200_000),
+  ODATA_WRITE_JOURNAL_DIR: z.string().min(1).optional(),
   LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"),
   READ_ONLY: z.enum(["true", "false"]).default("true"),
 });
@@ -160,6 +165,9 @@ export function parseConfig(env: Env): RuntimeConfig {
       maxRows: b.ODATA_MAX_ROWS,
       analyticsMaxRows: b.ODATA_ANALYTICS_MAX_ROWS,
       readOnly: b.READ_ONLY === "true",
+      writeJournalDir: resolve(
+        b.ODATA_WRITE_JOURNAL_DIR ?? join(homedir(), ".1c-odata-mcp", "write-journal"),
+      ),
     },
   };
 }
