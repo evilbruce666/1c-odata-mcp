@@ -23,33 +23,23 @@ MCPB, где элементы массива `tools` — это только `{n
 
 ## Как обновить
 
-1. Собрать проект и вытащить актуальный список инструментов из живого сервера
-   (имя, описание, `inputSchema`) — самый надёжный источник, совпадает с тем,
-   что видит MCP-клиент:
+1. Пересобрать список инструментов в `manifest.json` из живого сервера (имя, описание,
+   `inputSchema`, `outputSchema`, аннотации — ровно то, что видит MCP-клиент) и
+   синхронизировать `version` с `package.json`. Реальная база не нужна — сервер
+   поднимается с фиктивным подключением в режиме только-чтения:
 
    ```bash
-   npm run build
-   node --input-type=module -e '
-   import("@modelcontextprotocol/sdk/client/index.js").then(async ({Client}) => {
-     const {StdioClientTransport} = await import("@modelcontextprotocol/sdk/client/stdio.js");
-     const env = {...process.env, ODATA_BASE_URL:"https://example.com/odata/standard.odata/",
-       ODATA_USERNAME:"user", ODATA_PASSWORD:"pass", READ_ONLY:"true"};
-     const transport = new StdioClientTransport({command:"node", args:["dist/index.js"], env});
-     const client = new Client({name:"tool-lister", version:"0.1.0"});
-     await client.connect(transport);
-     const {tools} = await client.listTools();
-     console.log(JSON.stringify(tools.map(t=>({name:t.name, description:t.description, inputSchema:t.inputSchema})), null, 1));
-     await client.close();
-   })'
+   npm run manifest
    ```
 
-2. Обновить поле `tools` в `manifest.json` этим списком (и `version`, если
-   меняли — держите в синхроне с `package.json`). Проверить схему (без `tools`,
-   т.к. официальный валидатор его не примет с `inputSchema` — проверяйте
-   вручную/JSON.parse, `mcpb validate` тут не поможет):
+2. Прогнать тесты: `test/docs-consistency.test.ts` сверяет состав и схемы инструментов в
+   манифесте с кодом, версию в `package.json`/`manifest.json`/CHANGELOG и число
+   инструментов в README, `package.json` и `long_description` манифеста. Упал — поправить
+   числа в текстах (`mcpb validate` тут не поможет: официальный валидатор не принимает
+   `inputSchema` в `tools[]`):
 
    ```bash
-   node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8')); console.log('ok')"
+   npm test
    ```
 
 3. Собрать staging-папку (build + **чистый** `npm ci --omit=dev`, чтобы не

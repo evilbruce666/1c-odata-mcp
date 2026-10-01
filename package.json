@@ -33,7 +33,8 @@
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
-    "prepublishOnly": "npm run build && node --eval \"require('fs').rmSync('dist/scripts',{recursive:true,force:true})\""
+    "prepublishOnly": "npm run build && node --eval \"require('fs').rmSync('dist/scripts',{recursive:true,force:true})\"",
+    "manifest": "npm run build && node dist/scripts/gen-manifest.js"
   },
   "keywords": [
     "mcp",

@@ -2502,8 +2502,8 @@
     },
     {
       "name": "write.operation.status",
-      "title": "Статус операции создания",
-      "description": "Состояние операции создания по operationId из предпросмотра. Если результат записи неизвестен (таймаут, сбой сети, 5xx), ищет созданный объект в 1С по метке «[op:…]» в комментарии и, если нашёл, фиксирует успех — тогда повторное подтверждение вернёт ссылку без второго POST. Ничего не создаёт в 1С. Если объект не найден — безопасно сделать новый предпросмотр с новым id (но дайте 1С время: запрос мог ещё выполняться).",
+      "title": "Статус операции записи",
+      "description": "Состояние операции записи по operationId из предпросмотра (создание, добавление/удаление строки документа). Если результат неизвестен (таймаут, сбой сети, 5xx), сверяет с 1С: созданный объект ищет по метке «[op:…]» в комментарии, правку строк — по числу строк документа. Нашёл — фиксирует успех, и повторное подтверждение вернёт результат без второго запроса; правка не дошла — закрывает операцию, нужен новый предпросмотр. Ничего не создаёт в 1С. Если объект не найден — безопасно сделать новый предпросмотр с новым id (но дайте 1С время: запрос мог ещё выполняться).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2543,6 +2543,7 @@
               "rejected",
               "found_reconciled",
               "not_found",
+              "not_applied",
               "unverifiable"
             ]
           },
@@ -3340,6 +3341,14 @@
           "updated": {
             "type": "boolean"
           },
+          "operationId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
           "entitySet": {
             "type": "string"
           },
@@ -3448,6 +3457,14 @@
           "updated": {
             "type": "boolean"
           },
+          "operationId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
           "entitySet": {
             "type": "string"
           },
@@ -3534,6 +3551,14 @@
             "additionalProperties": {}
           },
           "updated": {
+            "type": "boolean"
+          },
+          "operationId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "replayed": {
             "type": "boolean"
           },
           "entitySet": {
@@ -4393,6 +4418,14 @@
             "additionalProperties": {}
           },
           "updated": {
+            "type": "boolean"
+          },
+          "operationId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "replayed": {
             "type": "boolean"
           },
           "entitySet": {
@@ -5395,6 +5428,12 @@
             "default": false,
             "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя; при подтверждении передавайте operationId из результата предпросмотра и те же аргументы. После таймаута повторяйте подтверждение с тем же id, не создавая новый предпросмотр.",
             "type": "boolean"
+          },
+          "operationId": {
+            "description": "UUID из предпросмотра. Передайте его при confirm=true, чтобы повтор не создал дубликат.",
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
           }
         },
         "required": [
@@ -5424,6 +5463,14 @@
             "additionalProperties": {}
           },
           "updated": {
+            "type": "boolean"
+          },
+          "operationId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "replayed": {
             "type": "boolean"
           },
           "entitySet": {
@@ -5637,6 +5684,12 @@
             "default": false,
             "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя; при подтверждении передавайте operationId из результата предпросмотра и те же аргументы. После таймаута повторяйте подтверждение с тем же id, не создавая новый предпросмотр.",
             "type": "boolean"
+          },
+          "operationId": {
+            "description": "UUID из предпросмотра. Передайте его при confirm=true, чтобы повтор не создал дубликат.",
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
           }
         },
         "required": [
@@ -5666,6 +5719,14 @@
             "additionalProperties": {}
           },
           "updated": {
+            "type": "boolean"
+          },
+          "operationId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "replayed": {
             "type": "boolean"
           },
           "entitySet": {
@@ -7202,6 +7263,14 @@
             "additionalProperties": {}
           },
           "updated": {
+            "type": "boolean"
+          },
+          "operationId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "replayed": {
             "type": "boolean"
           },
           "entitySet": {
