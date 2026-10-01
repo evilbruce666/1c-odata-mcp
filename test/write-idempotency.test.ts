@@ -183,7 +183,7 @@ describe("line operations (add/remove document line) and journal replay", () => 
     expect(preview.isError, JSON.stringify(preview.content)).toBeFalsy();
     const operationId = (preview.structuredContent as { operationId: string }).operationId;
     expect(operationId).toMatch(/^[0-9a-f-]{36}$/);
-    expect(prepareCreate).toHaveBeenCalledWith(DOC, { ref });
+    expect(prepareCreate).toHaveBeenCalledWith(DOC, { ref }, { withRefKey: false });
     const confirmed = await tool.handler({ ...args, confirm: true, operationId }, {});
     expect(confirmed.isError).toBeFalsy();
     expect(patchOnce).toHaveBeenCalledOnce();
@@ -300,5 +300,55 @@ describe("line operations (add/remove document line) and journal replay", () => 
       expect(r.reconcileOperation).not.toHaveBeenCalled();
       expect(r.markOperationNotApplied).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("write.operation.status по назначенному Ref_Key", () => {
+  const refKey = "aaaaaaaa-bbbb-1ccc-8ddd-eeeeeeeeeeee";
+  const status = async (exists: boolean, ageMs: number) => {
+    const reconcileOperation = vi.fn(async () => undefined);
+    const markOperationNotApplied = vi.fn(async () => undefined);
+    const { ODataError } = await import("../src/odata/errors.js");
+    const connection = {
+      cfg: { name: "default" },
+      client: {
+        operationEntry: async () => ({
+          state: "outcome_unknown",
+          entitySet: "Catalog_Контрагенты",
+          refKey,
+          updatedAt: new Date(Date.now() - ageMs).toISOString(),
+        }),
+        getEntity: async () => {
+          if (exists) return { Ref_Key: refKey };
+          throw new ODataError({ kind: "not_found", message: "нет" });
+        },
+        reconcileOperation,
+        markOperationNotApplied,
+      },
+    };
+    const res = await toolsOf(connection)["write.operation.status"]!.handler(
+      { database: "default", operationId: "99999999-9999-4999-8999-999999999999" },
+      {},
+    );
+    return {
+      sc: res.structuredContent as { status: string; ref?: string },
+      reconcileOperation,
+      markOperationNotApplied,
+    };
+  };
+  it("объект есть → found_reconciled (справочник тоже, без «Комментария»)", async () => {
+    const r = await status(true, 1000);
+    expect(r.sc).toMatchObject({ status: "found_reconciled", ref: refKey });
+    expect(r.reconcileOperation).toHaveBeenCalledOnce();
+  });
+  it("объекта нет 2+ минуты → not_applied", async () => {
+    const r = await status(false, 5 * 60_000);
+    expect(r.sc.status).toBe("not_applied");
+    expect(r.markOperationNotApplied).toHaveBeenCalledOnce();
+  });
+  it("объекта нет сразу после попытки → not_found без закрытия", async () => {
+    const r = await status(false, 5_000);
+    expect(r.sc.status).toBe("not_found");
+    expect(r.markOperationNotApplied).not.toHaveBeenCalled();
   });
 });

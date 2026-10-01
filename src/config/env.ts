@@ -35,7 +35,10 @@ export interface Behavior {
   readOnly: boolean;
   /** Durable local state for idempotent confirmed document creates. */
   writeJournalDir: string;
-  /** Дописывать «[op:<operationId>]» в «Комментарий» создаваемых документов — для сверки после таймаута. */
+  /**
+   * Дописывать «[op:<operationId>]» в «Комментарий» создаваемых документов. По умолчанию выключено:
+   * сверка идёт по назначенному Ref_Key; метка — только для тех, кому нужна видимая в 1С привязка.
+   */
   writeOperationMarker: boolean;
 }
 
@@ -57,7 +60,7 @@ const BehaviorSchema = z.object({
   ODATA_MAX_ROWS: z.coerce.number().int().positive().max(100_000).default(1_000),
   ODATA_ANALYTICS_MAX_ROWS: z.coerce.number().int().positive().max(1_000_000).default(200_000),
   ODATA_WRITE_JOURNAL_DIR: z.string().min(1).optional(),
-  ODATA_WRITE_OPERATION_MARKER: z.enum(["true", "false"]).default("true"),
+  ODATA_WRITE_OPERATION_MARKER: z.enum(["true", "false"]).default("false"),
   LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"),
   READ_ONLY: z.enum(["true", "false"]).default("true"),
 });

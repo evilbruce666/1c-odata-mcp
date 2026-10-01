@@ -38,6 +38,8 @@ export interface JournalEntry {
   result?: Record<string, string>;
   errorKind?: string;
   check?: OperationCheck;
+  /** Ref_Key, который MCP задаёт создаваемому объекту: по нему сверка — простым GET. */
+  refKey?: string;
 }
 
 /**
@@ -61,6 +63,7 @@ export class WriteOperationJournal {
     entitySet: string,
     payload: Record<string, unknown>,
     requestHash: string,
+    refKey?: string,
   ): Promise<void> {
     this.validateOperationId(operationId);
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
@@ -77,6 +80,7 @@ export class WriteOperationJournal {
       state: "prepared",
       createdAt: now,
       updatedAt: now,
+      ...(refKey ? { refKey } : {}),
     };
 
     try {
@@ -173,6 +177,11 @@ export class WriteOperationJournal {
     } finally {
       await lock.close().catch(() => undefined);
     }
+  }
+
+  /** Ref_Key, назначенный операции при предпросмотре (у старых записей и правок строк — нет). */
+  async refKeyOf(operationId: string): Promise<string | undefined> {
+    return (await this.lookup(operationId))?.refKey;
   }
 
   /** Запись журнала по id (undefined — такой операции нет); для инструмента статуса. */

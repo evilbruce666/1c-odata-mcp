@@ -24,6 +24,7 @@ import {
 } from "../schemas/output.js";
 import { currentWriteOperationId } from "../odata/write-operation-context.js";
 import { InputError } from "../errors.js";
+import { ODataError } from "../odata/errors.js";
 
 /** Тип ссылки на номенклатуру в табличной части (полиморфная ссылка 1С). */
 const NOMENCLATURE_TYPE = "StandardODATA.Catalog_Номенклатура";
@@ -1092,7 +1093,7 @@ async function patchLinesOrPreview(
   const guid = ref.replace(/[{}']/g, "");
   const key = { ref: guid };
   if (!confirm) {
-    await conn.client.prepareCreate(entitySet, key);
+    await conn.client.prepareCreate(entitySet, key, { withRefKey: false });
     return patchOrPreview(conn, entitySet, ref, fields, false);
   }
   const updated = await conn.client.patchOnce<ODataEntity>(
@@ -1238,7 +1239,42 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
                 : `Число строк ${count} не совпадает ни с исходным (${before}), ни с ожидаемым (${expected}): документ меняли. Проверьте его в 1С вручную.`,
           });
         }
-        // executing | outcome_unknown — сверяем с 1С по метке
+        // Создание с назначенным Ref_Key — сверка простым GET по ссылке (справочники тоже).
+        if (entry.refKey) {
+          let exists: boolean;
+          try {
+            await conn.client.getEntity(
+              `${entry.entitySet}(guid'${entry.refKey}')?$format=json&$select=Ref_Key`,
+            );
+            exists = true;
+          } catch (e) {
+            if (!(e instanceof ODataError && e.kind === "not_found")) throw e;
+            exists = false;
+          }
+          if (exists) {
+            await conn.client.reconcileOperation(operationId, { Ref_Key: entry.refKey });
+            return ok({
+              ...common,
+              status: "found_reconciled",
+              ref: entry.refKey,
+              note: "Объект с назначенной ссылкой есть в 1С; операция зафиксирована как успешная. Повторное подтверждение вернёт эту ссылку.",
+            });
+          }
+          if (ageSec >= 120) {
+            await conn.client.markOperationNotApplied(operationId);
+            return ok({
+              ...common,
+              status: "not_applied",
+              note: "Объекта с назначенной ссылкой в 1С нет: запись не дошла. Выполните новый предпросмотр.",
+            });
+          }
+          return ok({
+            ...common,
+            status: "not_found",
+            note: `Объекта пока нет (с последней попытки ${ageSec} с): запрос мог ещё выполняться — повторите проверку позже.`,
+          });
+        }
+        // executing | outcome_unknown, старые операции без Ref_Key — сверяем с 1С по метке
         if (!(await entityHasComment(conn, entry.entitySet))) {
           return ok({
             ...common,

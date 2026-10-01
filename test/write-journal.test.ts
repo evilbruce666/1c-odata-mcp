@@ -319,3 +319,60 @@ describe("journal: line-count check, not-applied and settled()", () => {
     await expect(j.settled(lost, "h")).rejects.toThrow(/не была применена/);
   });
 });
+
+describe("uuidV1 и назначенный Ref_Key", () => {
+  it("uuidV1: версия 1, вариант RFC 4122, multicast-бит node, метка времени = now", async () => {
+    const { uuidV1 } = await import("../src/odata/uuid-v1.js");
+    const now = Date.UTC(2026, 9, 1, 8, 4, 36, 123);
+    const id = uuidV1(now);
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    const [lo, mid, hi, , node] = id.split("-") as [string, string, string, string, string];
+    const ts = BigInt(`0x${hi.slice(1)}${mid}${lo}`);
+    expect(Number((ts - 122_192_928_000_000_000n) / 10_000n)).toBe(now);
+    expect(parseInt(node.slice(0, 2), 16) & 1).toBe(1);
+    expect(uuidV1(now)).not.toBe(uuidV1(now)); // монотонно и уникально в одну миллисекунду
+  });
+
+  it("prepare сохраняет refKey, refKeyOf его возвращает; без refKey — undefined", async () => {
+    const root = await mkdtemp(join(tmpdir(), "journal-refkey-"));
+    const j = new WriteOperationJournal(root, "db", "http://x/");
+    const a = randomUUID();
+    const b = randomUUID();
+    await j.prepare(a, "Catalog_X", { n: 1 }, "h", "11111111-2222-1333-8444-555555555555");
+    await j.prepare(b, "Catalog_X", { n: 1 }, "h");
+    expect(await j.refKeyOf(a)).toBe("11111111-2222-1333-8444-555555555555");
+    expect(await j.refKeyOf(b)).toBeUndefined();
+    // повторный предпросмотр с тем же id не меняет назначенную ссылку
+    await j.prepare(a, "Catalog_X", { n: 1 }, "h", "99999999-2222-1333-8444-555555555555");
+    expect(await j.refKeyOf(a)).toBe("11111111-2222-1333-8444-555555555555");
+  });
+
+  it("ODataClient.create отправляет назначенный Ref_Key, отпечаток — без него", async () => {
+    const { ODataClient } = await import("../src/odata/client.js");
+    const { withWriteOperation } = await import("../src/odata/write-operation-context.js");
+    const dir = await mkdtemp(join(tmpdir(), "journal-create-"));
+    const client = new ODataClient(
+      {
+        name: "w",
+        baseUrl: "http://localhost/odata/",
+        username: "u",
+        password: "p",
+        writable: true,
+      } as never,
+      { readOnly: false, writeJournalDir: dir, retries: 0, timeoutMs: 1000 } as never,
+    );
+    const sent: unknown[] = [];
+    (client as unknown as { request: (p: string, m: string, b: unknown) => Promise<unknown> }).request =
+      async (_p, _m, b) => {
+        sent.push(b);
+        return { Ref_Key: (b as { Ref_Key: string }).Ref_Key };
+      };
+    const id = randomUUID();
+    await withWriteOperation(id, "h", () => client.prepareCreate("Catalog_X", { Description: "A" }));
+    const res = await withWriteOperation(id, "h", () => client.create("Catalog_X", { Description: "A" }));
+    const body = sent[0] as { Ref_Key: string; Description: string };
+    expect(body.Description).toBe("A");
+    expect(body.Ref_Key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-/);
+    expect(res.Ref_Key).toBe(body.Ref_Key);
+  });
+});
