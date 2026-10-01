@@ -376,3 +376,32 @@ describe("uuidV1 и назначенный Ref_Key", () => {
     expect(res.Ref_Key).toBe(body.Ref_Key);
   });
 });
+
+describe("journal summary (health_check)", () => {
+  it("каталог доступен, неизвестные операции перечислены; недоступный каталог — writable=false", async () => {
+    const { writeFile, chmod, readdir } = await import("node:fs/promises");
+    const root = await mkdtemp(join(tmpdir(), "journal-summary-"));
+    const j = new WriteOperationJournal(root, "db", "http://x/");
+    const id = randomUUID();
+    await j.prepare(id, "Catalog_X", { a: 1 }, "h");
+    await expect(
+      j.execute(id, "Catalog_X", { a: 1 }, "h", async () => {
+        throw new Error("socket hang up");
+      }),
+    ).rejects.toThrow();
+    const dir = join(root, (await readdir(root))[0]!);
+    await writeFile(join(dir, "broken.json"), "{");
+    const s = await j.summary();
+    expect(s.writable).toBe(true);
+    expect(s.uncertain.sort()).toEqual([id, "broken"].sort());
+
+    const locked = await mkdtemp(join(tmpdir(), "journal-ro-"));
+    await chmod(locked, 0o500);
+    try {
+      const r = await new WriteOperationJournal(locked, "db", "http://x/").summary();
+      expect(r.writable).toBe(false);
+    } finally {
+      await chmod(locked, 0o700);
+    }
+  });
+});

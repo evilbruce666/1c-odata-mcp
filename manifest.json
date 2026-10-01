@@ -179,6 +179,39 @@
           },
           "readOnly": {
             "type": "boolean"
+          },
+          "writeJournal": {
+            "type": "object",
+            "properties": {
+              "dir": {
+                "type": "string"
+              },
+              "writable": {
+                "type": "boolean"
+              },
+              "uncertainOperations": {
+                "type": "number"
+              },
+              "uncertainIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "error": {
+                "type": "string"
+              },
+              "note": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "dir",
+              "writable",
+              "uncertainOperations",
+              "note"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [

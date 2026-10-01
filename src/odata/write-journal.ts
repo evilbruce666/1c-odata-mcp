@@ -179,6 +179,38 @@ export class WriteOperationJournal {
     }
   }
 
+  /**
+   * Сводка для health_check: доступен ли каталог журнала для записи и какие операции ждут
+   * сверки (исход неизвестен) — чтобы они не терялись. Каталог создаётся, если его нет.
+   */
+  async summary(): Promise<{ dir: string; writable: boolean; uncertain: string[]; error?: string }> {
+    try {
+      await mkdir(this.directory, { recursive: true, mode: 0o700 });
+      const probe = join(this.directory, `.probe-${randomUUID()}`);
+      await (await open(probe, "wx", 0o600)).close();
+      await rm(probe, { force: true });
+    } catch (error) {
+      return {
+        dir: this.directory,
+        writable: false,
+        uncertain: [],
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+    const uncertain: string[] = [];
+    for (const file of await readdir(this.directory)) {
+      if (!file.endsWith(".json")) continue;
+      try {
+        const entry = JSON.parse(await readFile(join(this.directory, file), "utf8")) as JournalEntry;
+        if (entry.state === "executing" || entry.state === "outcome_unknown")
+          uncertain.push(entry.operationId);
+      } catch {
+        uncertain.push(file.slice(0, -".json".length));
+      }
+    }
+    return { dir: this.directory, writable: true, uncertain };
+  }
+
   /** Ref_Key, назначенный операции при предпросмотре (у старых записей и правок строк — нет). */
   async refKeyOf(operationId: string): Promise<string | undefined> {
     return (await this.lookup(operationId))?.refKey;

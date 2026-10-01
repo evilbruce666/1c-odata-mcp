@@ -149,6 +149,16 @@ export const healthCheckResultSchema = z
     entityCount: z.number(),
     baseUrl: z.string(),
     readOnly: z.boolean(),
+    writeJournal: z
+      .object({
+        dir: z.string(),
+        writable: z.boolean(),
+        uncertainOperations: z.number(),
+        uncertainIds: z.array(z.string()).optional(),
+        error: z.string().optional(),
+        note: z.string(),
+      })
+      .optional(),
   })
   .passthrough();
 

@@ -225,6 +225,12 @@ export class ODataClient {
     return this.writeJournal.settled(operationId, requestHash);
   }
 
+  /** Состояние журнала для health_check (только когда запись в базу включена). */
+  async journalSummary() {
+    if (this.behavior.readOnly || !this.conn.writable) return undefined;
+    return this.writeJournal.summary();
+  }
+
   /** Сверка показала, что операция до 1С не дошла. */
   markOperationNotApplied(operationId: string): Promise<void> {
     return this.writeJournal.markNotApplied(operationId);

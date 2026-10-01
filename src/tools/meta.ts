@@ -63,6 +63,7 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
       guard("read.system.health_check", async () => {
         const conn = ctx.db(database);
         const meta = await conn.getMetadata();
+        const journal = await conn.client.journalSummary();
         return ok({
           status: "ok",
           database: conn.cfg.name,
@@ -71,6 +72,22 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
           entityCount: meta.entities.size,
           baseUrl: conn.cfg.baseUrl,
           readOnly: conn.behavior.readOnly,
+          ...(journal
+            ? {
+                writeJournal: {
+                  dir: journal.dir,
+                  writable: journal.writable,
+                  uncertainOperations: journal.uncertain.length,
+                  ...(journal.uncertain.length ? { uncertainIds: journal.uncertain.slice(0, 20) } : {}),
+                  ...(journal.error ? { error: journal.error } : {}),
+                  note: !journal.writable
+                    ? "Каталог журнала недоступен для записи — подтверждение создания и правки строк не пройдёт. Проверьте ODATA_WRITE_JOURNAL_DIR (в Docker — том)."
+                    : journal.uncertain.length
+                      ? "Есть операции с неизвестным исходом: проверьте их write.operation.status — повтор по ним заблокирован до сверки."
+                      : "Журнал в порядке.",
+                },
+              }
+            : {}),
         });
       }),
   );
