@@ -10,7 +10,7 @@ const READ_METHODS = new Set(["GET", "HEAD"]);
 
 export class ODataClient {
   private readonly authHeader: string;
-  private readonly writeJournal: WriteOperationJournal;
+  private journal: WriteOperationJournal | undefined;
 
   constructor(
     private readonly conn: ConnectionConfig,
@@ -18,7 +18,16 @@ export class ODataClient {
   ) {
     const token = Buffer.from(`${conn.username}:${conn.password}`).toString("base64");
     this.authHeader = `Basic ${token}`;
-    this.writeJournal = new WriteOperationJournal(behavior.writeJournalDir, conn.name, conn.baseUrl);
+  }
+
+  /** Журнал операций записи создаётся при первом обращении: чтению и read-only он не нужен. */
+  private get writeJournal(): WriteOperationJournal {
+    this.journal ??= new WriteOperationJournal(
+      this.behavior.writeJournalDir,
+      this.conn.name,
+      this.conn.baseUrl,
+    );
+    return this.journal;
   }
 
   /**
