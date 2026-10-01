@@ -26,6 +26,12 @@
   а записи с неизвестным исходом — только через год (раньше нельзя, иначе повтор станет
   небезопасным). В README добавлено про том для журнала в Docker.
 
+### Безопасность
+
+- Закрыты все открытые алерты Dependabot (`npm audit` — 0 уязвимостей): `hono`, `@hono/node-server`,
+  `fast-uri`, `ip-address`, `qs`, `brace-expansion` (транзитивные, через MCP SDK и eslint);
+  обновлены `@modelcontextprotocol/sdk` 1.31, `fast-xml-parser`, `typescript-eslint`, `vitest`.
+
 ### Изменено
 
 - **Подтверждение создания без `operationId` отклоняется** — сначала выполните предпросмотр.
