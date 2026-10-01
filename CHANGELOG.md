@@ -5,6 +5,13 @@
 
 ## [Не выпущено]
 
+## [0.5.0] — 2026-10-01
+
+Защита записи от дублей при потерянном ответе 1С. Идею и первую реализацию журнала операций
+предложил **[@alexpostnik](https://github.com/alexpostnik)** (issue #29, PR #30); мы довели её и
+проверили на живой базе по всем 26 инструментам создания. **Ломающее изменение:** подтверждение
+создания (`confirm=true`) теперь требует `operationId` из предпросмотра.
+
 ### Добавлено
 
 - **Защита создания от дублей при потерянном ответе.** Предпросмотр `write.*.create_*`
@@ -434,7 +441,8 @@ POST-тестом (create → read → mark) на реальной базе — 
   коды плана счетов); вежливый фоллбэк при отсутствии объекта в «Составе OData».
 - npm-пакет с запуском через `npx 1c-odata-mcp`.
 
-[Не выпущено]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.4.0...HEAD
+[Не выпущено]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.1.11...v0.2.0
