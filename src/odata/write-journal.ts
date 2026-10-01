@@ -323,18 +323,19 @@ function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoExcepti
   return error instanceof Error && "code" in error && error.code === code;
 }
 
-function canonicalize(value: unknown, key?: string): unknown {
+function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map((item) => canonicalize(item));
   if (value && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
         .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-        .map(([key, nested]) => [key, canonicalize(nested, key)]),
+        .map(([key, nested]) => [key, canonicalize(nested)]),
     );
   }
-  // Default document times are recalculated between preview and confirmation. The
-  // request fingerprint still binds explicit user inputs; compare the business date here.
-  if (key === "Date" && typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
+  // Время суток по умолчанию («сейчас») пересчитывается между предпросмотром и подтверждением
+  // (поля Date / Дата / ДатаНачала … — по-разному в разных документах). Явный ввод вызывающего
+  // всё равно связан отпечатком аргументов (requestHash), поэтому здесь сравниваем только день.
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)) {
     return value.slice(0, 10);
   }
   return value;

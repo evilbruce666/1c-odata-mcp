@@ -214,3 +214,24 @@ describe("ODataClient write guard vs journal", () => {
     expect(await readdir(dir)).toEqual([]);
   });
 });
+
+describe("journal payload hash", () => {
+  it("ignores time-of-day drift in any date field (Date and Дата)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "journal-date-"));
+    const j = new WriteOperationJournal(dir, "db", "http://x/");
+    const id = randomUUID();
+    await j.prepare(id, "Catalog_Договоры", { Дата: "2026-10-01T10:00:00", Номер: "1" }, "h");
+    // тот же день, другое время — не должно считаться расхождением
+    await expect(
+      j.execute(id, "Catalog_Договоры", { Дата: "2026-10-01T10:05:09", Номер: "1" }, "h", async () => ({
+        Ref_Key: "r",
+      })),
+    ).resolves.toMatchObject({ Ref_Key: "r" });
+    // другой день — расхождение
+    const id2 = randomUUID();
+    await j.prepare(id2, "Catalog_Договоры", { Дата: "2026-10-01T10:00:00" }, "h");
+    await expect(
+      j.execute(id2, "Catalog_Договоры", { Дата: "2026-10-02T10:00:00" }, "h", async () => ({})),
+    ).rejects.toThrow(/не совпадают/);
+  });
+});
