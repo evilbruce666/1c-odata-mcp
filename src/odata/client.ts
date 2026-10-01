@@ -3,7 +3,8 @@ import { logger } from "../logger.js";
 import { ODataError, fromHttpStatus } from "./errors.js";
 import type { ODataCollection, ODataEntity } from "../types/odata.js";
 import { currentWriteOperationId, currentWriteRequestHash } from "./write-operation-context.js";
-import { WriteOperationJournal } from "./write-journal.js";
+import { WriteOperationJournal, type OperationCheck } from "./write-journal.js";
+import { uuidV1 } from "./uuid-v1.js";
 
 /** HTTP-методы только для чтения; остальные (POST/PATCH) считаются записью и гейтуются. */
 const READ_METHODS = new Set(["GET", "HEAD"]);
@@ -131,8 +132,8 @@ export class ODataClient {
   async create<T extends ODataEntity = ODataEntity>(entitySet: string, payload: object): Promise<T> {
     // Гард — до резервирования в журнале: в режиме только-чтение операция не должна оставлять следов.
     this.assertWritable("POST");
-    const send = async () => {
-      const created = await this.request<T>(`${entitySet}?$format=json`, "POST", payload);
+    const send = async (body: object) => {
+      const created = await this.request<T>(`${entitySet}?$format=json`, "POST", body);
       if (!created || typeof created !== "object" || Array.isArray(created)) {
         throw new ODataError({
           kind: "unknown",
@@ -145,26 +146,43 @@ export class ODataClient {
     if (operationId) {
       const requestHash = currentWriteRequestHash();
       if (!requestHash) throw new Error("Для подтверждённой записи отсутствует отпечаток предпросмотра.");
+      // Ref_Key, назначенный при предпросмотре: повтор с ним 1С отвергнет (уникальный индекс),
+      // а сверка после таймаута — простой GET. В отпечаток payload не входит.
+      const refKey = await this.writeJournal.refKeyOf(operationId);
+      const body = refKey ? { Ref_Key: refKey, ...payload } : payload;
       return this.writeJournal.execute(
         operationId,
         entitySet,
         payload as Record<string, unknown>,
         requestHash,
-        send,
+        () => send(body),
       );
     }
-    return send();
+    return send(payload);
   }
 
-  /** Persists the payload fingerprint associated with a write tool's dry-run token. */
-  async prepareCreate(entitySet: string, payload: Record<string, unknown>): Promise<void> {
+  /**
+   * Предпросмотр операции записи: отпечаток в журнал. Для создания (withRefKey) назначается и
+   * Ref_Key будущего объекта (UUIDv1) — подтверждение отправит именно его.
+   */
+  async prepareCreate(
+    entitySet: string,
+    payload: Record<string, unknown>,
+    { withRefKey = true }: { withRefKey?: boolean } = {},
+  ): Promise<void> {
     // Предпросмотр при выключенной записи ничего не пишет на диск (READ_ONLY по умолчанию).
     if (this.behavior.readOnly || !this.conn.writable) return;
     const operationId = currentWriteOperationId();
     const requestHash = currentWriteRequestHash();
     if (!operationId || !requestHash)
       throw new Error("Для предпросмотра записи отсутствуют operationId и отпечаток запроса.");
-    await this.writeJournal.prepare(operationId, entitySet, payload, requestHash);
+    await this.writeJournal.prepare(
+      operationId,
+      entitySet,
+      payload,
+      requestHash,
+      withRefKey ? uuidV1() : undefined,
+    );
   }
 
   /** Запись журнала операции записи (для write.operation.status). */
@@ -175,6 +193,47 @@ export class ODataClient {
   /** Фиксирует найденный сверкой результат неизвестной операции. */
   reconcileOperation(operationId: string, result: ODataEntity): Promise<void> {
     return this.writeJournal.reconcile(operationId, result);
+  }
+
+  /**
+   * PATCH, который нельзя слепо повторять (добавление/удаление строки документа): при
+   * подтверждении с operationId идёт через журнал. key — стабильная часть операции
+   * (одинаковая в предпросмотре и подтверждении), check — как сверить результат с 1С.
+   */
+  async patchOnce<T extends ODataEntity = ODataEntity>(
+    path: string,
+    payload: object,
+    entitySet: string,
+    key: Record<string, unknown>,
+    check: OperationCheck,
+  ): Promise<T> {
+    this.assertWritable("PATCH");
+    const send = () => this.request<T>(path, "PATCH", payload);
+    const operationId = currentWriteOperationId();
+    if (!operationId) return send();
+    const requestHash = currentWriteRequestHash();
+    if (!requestHash) throw new Error("Для подтверждённой записи отсутствует отпечаток предпросмотра.");
+    return this.writeJournal.execute(operationId, entitySet, key, requestHash, send, check);
+  }
+
+  /** Итог уже подтверждённой операции (для повтора до повторного чтения 1С); undefined — не подтверждалась. */
+  async operationSettled(
+    operationId: string,
+    requestHash: string,
+  ): Promise<{ entitySet: string; result: Record<string, string> } | undefined> {
+    if (this.behavior.readOnly || !this.conn.writable) return undefined;
+    return this.writeJournal.settled(operationId, requestHash);
+  }
+
+  /** Состояние журнала для health_check (только когда запись в базу включена). */
+  async journalSummary() {
+    if (this.behavior.readOnly || !this.conn.writable) return undefined;
+    return this.writeJournal.summary();
+  }
+
+  /** Сверка показала, что операция до 1С не дошла. */
+  markOperationNotApplied(operationId: string): Promise<void> {
+    return this.writeJournal.markNotApplied(operationId);
   }
 
   /** Изменяет объект (PATCH) по полному пути с ключом. */

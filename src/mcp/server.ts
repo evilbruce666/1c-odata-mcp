@@ -15,7 +15,7 @@ import { registerSalesTools } from "../tools/sales.js";
 import { registerOrganizationTools } from "../tools/organization.js";
 import { registerWriteTools } from "../tools/write.js";
 import { registerAuditTools } from "../tools/audit.js";
-import { READ_HINTS, WRITE_HINTS, DESTRUCTIVE_HINTS, fail } from "../tools/_shared.js";
+import { READ_HINTS, WRITE_HINTS, DESTRUCTIVE_HINTS, fail, guard, ok } from "../tools/_shared.js";
 
 /** Версия берётся из package.json (в собранном пакете он на два уровня выше dist/mcp/). */
 function readVersion(): string {
@@ -38,6 +38,15 @@ const INSTRUCTIONS =
   "Для создания объекта при подтверждении передавайте operationId из предпросмотра; " +
   "при таймауте повторяйте подтверждение с тем же id и теми же аргументами, а не с новым предпросмотром. " +
   "Это защищает от дубликата, если ответ 1С потерялся.";
+
+/**
+ * Правки документа, которые нельзя слепо повторять: инструмент перечитывает документ, и повтор
+ * добавил бы ещё строку или удалил соседнюю. Как и создание, защищены operationId и журналом.
+ */
+const LINE_OPERATION_TOOLS = new Set([
+  "write.document.add_document_line",
+  "write.document.remove_document_line",
+]);
 
 /** Подсказки клиенту о характере инструмента — по имени (одна точка вместо правок 55 конфигов). */
 function annotationsFor(name: string) {
@@ -73,7 +82,7 @@ export function createServer(ctx: ServerContext): McpServer {
       },
     };
     const isCreateTool = name.startsWith("write.") && config.outputSchema === createResultSchema;
-    if (!isCreateTool) return original(name, annotatedConfig, cb);
+    if (!isCreateTool && !LINE_OPERATION_TOOLS.has(name)) return original(name, annotatedConfig, cb);
 
     const inputSchema = {
       ...(config.inputSchema as Record<string, unknown>),
@@ -90,6 +99,30 @@ export function createServer(ctx: ServerContext): McpServer {
       }
       const token = operationId ?? randomUUID();
       const requestHash = fingerprintWriteInput(name, args as Record<string, unknown>);
+      // Повтор уже подтверждённой операции: ответ из журнала — до того, как инструмент заново
+      // прочитает 1С (иначе правка строк применилась бы к уже изменённому документу).
+      if (args.confirm === true && operationId) {
+        let replay: CallToolResult | undefined;
+        const checked = await guard(name, async () => {
+          const conn = ctx.db(typeof args.database === "string" ? args.database : undefined);
+          const settled = await conn.client.operationSettled(operationId, requestHash);
+          if (settled) {
+            replay = ok({
+              ...(isCreateTool ? { created: true } : { updated: true }),
+              replayed: true,
+              note: "Операция с этим operationId уже выполнена; повторный запрос в 1С не отправлялся.",
+              database: conn.cfg.name,
+              entitySet: settled.entitySet,
+              ref: settled.result["Ref_Key"],
+              ...(settled.result["Code"] ? { code: settled.result["Code"] } : {}),
+              operationId,
+            });
+          }
+          return ok({});
+        });
+        if (checked.isError) return checked;
+        if (replay) return replay;
+      }
       return withWriteOperation(token, requestHash, async () => {
         const result = await cb(args, extra);
         if (result?.isError || !result?.structuredContent || typeof result.structuredContent !== "object")

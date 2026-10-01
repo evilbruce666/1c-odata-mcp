@@ -13,6 +13,18 @@ const PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
 
 export type OperationState = "prepared" | "executing" | "succeeded" | "rejected" | "outcome_unknown";
 
+/**
+ * Как сверить операцию, у которой нет «следа» в 1С (правка строк документа): число строк
+ * табличной части до записи и ожидаемое после. Пишется в журнал перед отправкой PATCH.
+ */
+export interface OperationCheck {
+  kind: "lineCount";
+  ref: string;
+  section: string;
+  before: number;
+  expected: number;
+}
+
 export interface JournalEntry {
   version: 1;
   operationId: string;
@@ -25,10 +37,13 @@ export interface JournalEntry {
   updatedAt: string;
   result?: Record<string, string>;
   errorKind?: string;
+  check?: OperationCheck;
+  /** Ref_Key, который MCP задаёт создаваемому объекту: по нему сверка — простым GET. */
+  refKey?: string;
 }
 
 /**
- * Durable, local idempotency journal for confirmed OData creates.
+ * Durable, local idempotency journal for confirmed OData creates and non-idempotent document edits.
  * Only a payload hash and a small result reference are persisted, never the payload itself.
  */
 export class WriteOperationJournal {
@@ -48,6 +63,7 @@ export class WriteOperationJournal {
     entitySet: string,
     payload: Record<string, unknown>,
     requestHash: string,
+    refKey?: string,
   ): Promise<void> {
     this.validateOperationId(operationId);
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
@@ -64,6 +80,7 @@ export class WriteOperationJournal {
       state: "prepared",
       createdAt: now,
       updatedAt: now,
+      ...(refKey ? { refKey } : {}),
     };
 
     try {
@@ -81,6 +98,7 @@ export class WriteOperationJournal {
     payload: Record<string, unknown>,
     requestHash: string,
     send: () => Promise<T>,
+    check?: OperationCheck,
   ): Promise<T> {
     this.validateOperationId(operationId);
     let entry = await this.read(operationId);
@@ -109,7 +127,12 @@ export class WriteOperationJournal {
       if (racedResult !== undefined) return racedResult;
       if (entry.state !== "prepared") throw this.unknownResult(operationId);
 
-      entry = { ...entry, state: "executing", updatedAt: new Date().toISOString() };
+      entry = {
+        ...entry,
+        state: "executing",
+        updatedAt: new Date().toISOString(),
+        ...(check ? { check } : {}),
+      };
       await this.replace(entry);
       requestStarted = true;
 
@@ -156,6 +179,43 @@ export class WriteOperationJournal {
     }
   }
 
+  /**
+   * Сводка для health_check: доступен ли каталог журнала для записи и какие операции ждут
+   * сверки (исход неизвестен) — чтобы они не терялись. Каталог создаётся, если его нет.
+   */
+  async summary(): Promise<{ dir: string; writable: boolean; uncertain: string[]; error?: string }> {
+    try {
+      await mkdir(this.directory, { recursive: true, mode: 0o700 });
+      const probe = join(this.directory, `.probe-${randomUUID()}`);
+      await (await open(probe, "wx", 0o600)).close();
+      await rm(probe, { force: true });
+    } catch (error) {
+      return {
+        dir: this.directory,
+        writable: false,
+        uncertain: [],
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+    const uncertain: string[] = [];
+    for (const file of await readdir(this.directory)) {
+      if (!file.endsWith(".json")) continue;
+      try {
+        const entry = JSON.parse(await readFile(join(this.directory, file), "utf8")) as JournalEntry;
+        if (entry.state === "executing" || entry.state === "outcome_unknown")
+          uncertain.push(entry.operationId);
+      } catch {
+        uncertain.push(file.slice(0, -".json".length));
+      }
+    }
+    return { dir: this.directory, writable: true, uncertain };
+  }
+
+  /** Ref_Key, назначенный операции при предпросмотре (у старых записей и правок строк — нет). */
+  async refKeyOf(operationId: string): Promise<string | undefined> {
+    return (await this.lookup(operationId))?.refKey;
+  }
+
   /** Запись журнала по id (undefined — такой операции нет); для инструмента статуса. */
   async lookup(operationId: string): Promise<JournalEntry | undefined> {
     this.validateOperationId(operationId);
@@ -184,9 +244,50 @@ export class WriteOperationJournal {
     await rm(this.lockPath(operationId), { force: true }).catch(() => undefined);
   }
 
+  /**
+   * Сверка показала, что запись до 1С не дошла (документ в исходном состоянии):
+   * операция закрывается как неприменённая, повтор по этому id запрещён — нужен новый предпросмотр.
+   */
+  async markNotApplied(operationId: string): Promise<void> {
+    const entry = await this.read(operationId);
+    if (entry.state === "succeeded" || entry.state === "rejected") return;
+    await this.replace({
+      ...entry,
+      state: "rejected",
+      errorKind: "not_applied",
+      updatedAt: new Date().toISOString(),
+    });
+    await rm(this.lockPath(operationId), { force: true }).catch(() => undefined);
+  }
+
+  /**
+   * Состояние операции для подтверждения с этим operationId — до того, как инструмент
+   * заново прочитает 1С: успешную возвращает сразу, неизвестную/отклонённую — ошибкой.
+   * undefined — подтверждение ещё не выполнялось (или операции нет в журнале).
+   */
+  async settled(
+    operationId: string,
+    requestHash: string,
+  ): Promise<{ entitySet: string; result: Record<string, string> } | undefined> {
+    const entry = await this.lookup(operationId);
+    if (!entry || entry.state === "prepared") return undefined;
+    if (entry.database !== this.database || entry.requestHash !== requestHash) {
+      throw new InputError(
+        `Данные, объект или база не совпадают с dry-run для operationId ${operationId}. Выполните новый предпросмотр.`,
+      );
+    }
+    this.resultForExisting(entry); // неизвестный/отклонённый исход — ошибкой
+    return { entitySet: entry.entitySet, result: entry.result ?? {} };
+  }
+
   private resultForExisting<T extends ODataEntity>(entry: JournalEntry): T | undefined {
     if (entry.state === "succeeded") {
       return { ...(entry.result ?? {}), _operation_replayed: true } as unknown as T;
+    }
+    if (entry.state === "rejected" && entry.errorKind === "not_applied") {
+      throw new InputError(
+        `Операция operationId ${entry.operationId} не была применена (сверено с документом в 1С). Выполните новый предпросмотр с новым operationId.`,
+      );
     }
     if (entry.state === "rejected") {
       throw new InputError(

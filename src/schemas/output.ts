@@ -92,6 +92,8 @@ export const patchResultSchema = z
     willPatch: z.string().optional(),
     fields: z.record(z.string(), z.unknown()).optional(),
     updated: z.boolean().optional(),
+    operationId: z.string().uuid().optional(),
+    replayed: z.boolean().optional(),
     entitySet: z.string().optional(),
     ref: z.string().optional(),
     description: z.string().optional(),
@@ -147,6 +149,16 @@ export const healthCheckResultSchema = z
     entityCount: z.number(),
     baseUrl: z.string(),
     readOnly: z.boolean(),
+    writeJournal: z
+      .object({
+        dir: z.string(),
+        writable: z.boolean(),
+        uncertainOperations: z.number(),
+        uncertainIds: z.array(z.string()).optional(),
+        error: z.string().optional(),
+        note: z.string(),
+      })
+      .optional(),
   })
   .passthrough();
 
@@ -580,6 +592,7 @@ export const operationStatusSchema = z
       "rejected",
       "found_reconciled",
       "not_found",
+      "not_applied",
       "unverifiable",
     ]),
     entitySet: z.string().optional(),

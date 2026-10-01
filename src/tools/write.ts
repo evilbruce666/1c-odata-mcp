@@ -24,6 +24,7 @@ import {
 } from "../schemas/output.js";
 import { currentWriteOperationId } from "../odata/write-operation-context.js";
 import { InputError } from "../errors.js";
+import { ODataError } from "../odata/errors.js";
 
 /** Тип ссылки на номенклатуру в табличной части (полиморфная ссылка 1С). */
 const NOMENCLATURE_TYPE = "StandardODATA.Catalog_Номенклатура";
@@ -1076,6 +1077,48 @@ async function patchOrPreview(
 }
 
 /**
+ * Правка строк документа, которую нельзя слепо повторять (добавление/удаление строки:
+ * инструмент заново читает документ, и повтор добавил бы ещё одну строку или удалил соседнюю).
+ * Подтверждение идёт через журнал операций; для сверки после таймаута в журнал пишется число
+ * строк до записи и ожидаемое после.
+ */
+async function patchLinesOrPreview(
+  conn: Connection,
+  entitySet: string,
+  ref: string,
+  fields: Record<string, unknown>,
+  confirm: boolean,
+  check: { section: string; before: number; expected: number },
+) {
+  const guid = ref.replace(/[{}']/g, "");
+  const key = { ref: guid };
+  if (!confirm) {
+    await conn.client.prepareCreate(entitySet, key, { withRefKey: false });
+    return patchOrPreview(conn, entitySet, ref, fields, false);
+  }
+  const updated = await conn.client.patchOnce<ODataEntity>(
+    `${entitySet}(guid'${guid}')?$format=json`,
+    fields,
+    entitySet,
+    key,
+    { kind: "lineCount", ref: guid, ...check },
+  );
+  return ok({
+    updated: true,
+    ...(updated["_operation_replayed"] === true
+      ? {
+          replayed: true,
+          note: "Эта правка уже была применена с данным operationId; повторный PATCH не выполнялся.",
+        }
+      : {}),
+    database: conn.cfg.name,
+    entitySet,
+    ref: updated["Ref_Key"] ?? guid,
+    description: updated["Description"],
+  });
+}
+
+/**
  * Создаёт подчинённый объект (банковский счёт / контактное лицо) и, при makeMain,
  * проставляет его основным у владельца. dry-run при confirm=false.
  */
@@ -1113,11 +1156,13 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   server.registerTool(
     "write.operation.status",
     {
-      title: "Статус операции создания",
+      title: "Статус операции записи",
       description:
-        "Состояние операции создания по operationId из предпросмотра. Если результат записи неизвестен " +
-        "(таймаут, сбой сети, 5xx), ищет созданный объект в 1С по метке «[op:…]» в комментарии и, если " +
-        "нашёл, фиксирует успех — тогда повторное подтверждение вернёт ссылку без второго POST. " +
+        "Состояние операции записи по operationId из предпросмотра (создание, добавление/удаление строки " +
+        "документа). Если результат неизвестен (таймаут, сбой сети, 5xx), сверяет с 1С: созданный объект " +
+        "ищет по метке «[op:…]» в комментарии, правку строк — по числу строк документа. Нашёл — фиксирует " +
+        "успех, и повторное подтверждение вернёт результат без второго запроса; правка не дошла — закрывает " +
+        "операцию, нужен новый предпросмотр. " +
         "Ничего не создаёт в 1С. Если объект не найден — безопасно сделать новый предпросмотр с новым id " +
         "(но дайте 1С время: запрос мог ещё выполняться).",
       inputSchema: {
@@ -1161,7 +1206,75 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
             note: "1С отклонила запись; объект не создан. Нужен новый предпросмотр.",
           });
         }
-        // executing | outcome_unknown — сверяем с 1С по метке
+        const ageSec = Math.round((Date.now() - Date.parse(entry.updatedAt)) / 1000);
+        // Правка строк документа — сверяем по числу строк до/после записи.
+        if (entry.check?.kind === "lineCount") {
+          const { ref, before, expected } = entry.check;
+          const count = (await getDocInfo(conn, entry.entitySet, ref)).lines.length;
+          if (count === expected && count !== before) {
+            await conn.client.reconcileOperation(operationId, { Ref_Key: ref });
+            return ok({
+              ...common,
+              status: "found_reconciled",
+              ref,
+              note: `В документе ${count} строк(и), как и ожидалось после правки: операция зафиксирована как успешная.`,
+            });
+          }
+          if (count === before && ageSec >= 120) {
+            await conn.client.markOperationNotApplied(operationId);
+            return ok({
+              ...common,
+              status: "not_applied",
+              ref,
+              note: `В документе по-прежнему ${count} строк(и): правка до 1С не дошла. Выполните новый предпросмотр.`,
+            });
+          }
+          return ok({
+            ...common,
+            status: count === before ? "not_found" : "unverifiable",
+            ref,
+            note:
+              count === before
+                ? `Правка пока не видна (строк ${count}, с последней попытки ${ageSec} с): запрос мог ещё выполняться — повторите проверку позже.`
+                : `Число строк ${count} не совпадает ни с исходным (${before}), ни с ожидаемым (${expected}): документ меняли. Проверьте его в 1С вручную.`,
+          });
+        }
+        // Создание с назначенным Ref_Key — сверка простым GET по ссылке (справочники тоже).
+        if (entry.refKey) {
+          let exists: boolean;
+          try {
+            await conn.client.getEntity(
+              `${entry.entitySet}(guid'${entry.refKey}')?$format=json&$select=Ref_Key`,
+            );
+            exists = true;
+          } catch (e) {
+            if (!(e instanceof ODataError && e.kind === "not_found")) throw e;
+            exists = false;
+          }
+          if (exists) {
+            await conn.client.reconcileOperation(operationId, { Ref_Key: entry.refKey });
+            return ok({
+              ...common,
+              status: "found_reconciled",
+              ref: entry.refKey,
+              note: "Объект с назначенной ссылкой есть в 1С; операция зафиксирована как успешная. Повторное подтверждение вернёт эту ссылку.",
+            });
+          }
+          if (ageSec >= 120) {
+            await conn.client.markOperationNotApplied(operationId);
+            return ok({
+              ...common,
+              status: "not_applied",
+              note: "Объекта с назначенной ссылкой в 1С нет: запись не дошла. Выполните новый предпросмотр.",
+            });
+          }
+          return ok({
+            ...common,
+            status: "not_found",
+            note: `Объекта пока нет (с последней попытки ${ageSec} с): запрос мог ещё выполняться — повторите проверку позже.`,
+          });
+        }
+        // executing | outcome_unknown, старые операции без Ref_Key — сверяем с 1С по метке
         if (!(await entityHasComment(conn, entry.entitySet))) {
           return ok({
             ...common,
@@ -1187,7 +1300,6 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
             note: "Объект найден по метке; операция зафиксирована как успешная. Повторное подтверждение вернёт эту ссылку.",
           });
         }
-        const ageSec = Math.round((Date.now() - Date.parse(entry.updatedAt)) / 1000);
         return ok({
           ...common,
           status: "not_found",
@@ -2370,13 +2482,14 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           return fail(
             "Поддерживаются: счёт, поступление/реализация, акт услуг, возвраты, перемещение, оприходование, списание.",
           );
-        return patchOrPreview(
+        return patchLinesOrPreview(
           conn,
           entitySet,
           ref,
           // Вторая ТЧ остаётся как есть, но в сумму документа входит.
           { [info.section]: built.rows, СуммаДокумента: roundMoney(built.total + info.otherTotal) },
           confirm,
+          { section: info.section, before: info.lines.length, expected: info.lines.length + 1 },
         );
       }),
   );
@@ -2491,13 +2604,14 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           return fail(
             "Поддерживаются: счёт, поступление/реализация, акт услуг, возвраты, перемещение, оприходование, списание.",
           );
-        return patchOrPreview(
+        return patchLinesOrPreview(
           conn,
           entitySet,
           ref,
           // Вторая ТЧ остаётся как есть, но в сумму документа входит.
           { [info.section]: built.rows, СуммаДокумента: roundMoney(built.total + info.otherTotal) },
           confirm,
+          { section: info.section, before: info.lines.length, expected: kept.length },
         );
       }),
   );
