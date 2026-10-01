@@ -235,3 +235,54 @@ describe("journal payload hash", () => {
     ).rejects.toThrow(/не совпадают/);
   });
 });
+
+describe("journal pruning", () => {
+  it("removes stale tmp/lock files and ancient records, keeps recent and uncertain ones", async () => {
+    const { writeFile, readdir, utimes } = await import("node:fs/promises");
+    const root = await mkdtemp(join(tmpdir(), "journal-prune-"));
+    const j = new WriteOperationJournal(root, "db", "http://x/");
+    // Первый prepare создаёт каталог журнала и запускает чистку.
+    await j.prepare(randomUUID(), "Catalog_X", { a: 0 }, "h");
+    const dir = join(root, (await readdir(root))[0]!);
+    const day = 24 * 60 * 60 * 1000;
+    const old = (ms: number) => new Date(Date.now() - ms).toISOString();
+    const entry = (id: string, state: string, updatedAt: string) =>
+      JSON.stringify({
+        version: 1,
+        operationId: id,
+        database: "db",
+        entitySet: "Catalog_X",
+        state,
+        updatedAt,
+      });
+    const age = async (name: string, ms: number) => {
+      const t = new Date(Date.now() - ms);
+      await utimes(join(dir, name), t, t);
+    };
+    const ids = Array.from({ length: 6 }, () => randomUUID());
+    await writeFile(join(dir, `${ids[0]}.json`), entry(ids[0]!, "succeeded", old(100 * day))); // старая → удалить
+    await writeFile(join(dir, `${ids[1]}.json`), entry(ids[1]!, "outcome_unknown", old(100 * day))); // неизвестная 100д → оставить
+    await writeFile(join(dir, `${ids[2]}.json`), entry(ids[2]!, "outcome_unknown", old(400 * day))); // неизвестная >года → удалить
+    await writeFile(join(dir, `${ids[3]}.json`), entry(ids[3]!, "executing", old(1000))); // свежая → оставить
+    await writeFile(join(dir, `${ids[3]}.lock`), "");
+    await writeFile(join(dir, `${ids[4]}.lock`), ""); // сирота без записи
+    await age(`${ids[4]}.lock`, 2 * 60 * 60 * 1000);
+    await writeFile(join(dir, `${ids[5]}.json.tmp`), "");
+    await age(`${ids[5]}.json.tmp`, 2 * day); // зависший tmp
+    // Новый экземпляр журнала → чистка запустится снова.
+    await new WriteOperationJournal(root, "db", "http://x/").prepare(
+      randomUUID(),
+      "Catalog_X",
+      { a: 1 },
+      "h",
+    );
+    const left = new Set(await readdir(dir));
+    expect(left.has(`${ids[0]}.json`)).toBe(false);
+    expect(left.has(`${ids[1]}.json`)).toBe(true);
+    expect(left.has(`${ids[2]}.json`)).toBe(false);
+    expect(left.has(`${ids[3]}.json`)).toBe(true);
+    expect(left.has(`${ids[3]}.lock`)).toBe(true);
+    expect(left.has(`${ids[4]}.lock`)).toBe(false);
+    expect(left.has(`${ids[5]}.json.tmp`)).toBe(false);
+  });
+});

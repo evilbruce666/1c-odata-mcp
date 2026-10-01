@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { InputError } from "../errors.js";
 import type { ODataEntity } from "../types/odata.js";
@@ -7,6 +7,8 @@ import { ODataError } from "./errors.js";
 
 const OPERATION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TERMINAL_RETENTION_MS = 90 * 24 * 60 * 60 * 1_000;
+const UNCERTAIN_RETENTION_MS = 365 * 24 * 60 * 60 * 1_000;
+const STALE_FILE_MS = 24 * 60 * 60 * 1_000;
 const PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
 
 export type OperationState = "prepared" | "executing" | "succeeded" | "rejected" | "outcome_unknown";
@@ -280,6 +282,13 @@ export class WriteOperationJournal {
     }
   }
 
+  /**
+   * Раз в час чистит каталог журнала:
+   *  - завершённые/отклонённые/непотверждённые записи старше 90 дней;
+   *  - записи с неизвестным исходом — только через год (раньше нельзя: удаление разрешило бы опасный повтор);
+   *  - «осиротевшие» .lock (записи нет, она завершена, либо подтверждение так и не отправлялось > суток);
+   *  - зависшие .tmp старше суток.
+   */
   private async pruneExpired(): Promise<void> {
     const now = Date.now();
     if (now - this.lastPrunedAt < PRUNE_INTERVAL_MS) return;
@@ -291,24 +300,50 @@ export class WriteOperationJournal {
       if (isNodeError(error, "ENOENT")) return;
       throw error;
     }
-    const cutoff = now - TERMINAL_RETENTION_MS;
+    const remove = (name: string) => rm(join(this.directory, name), { force: true }).catch(() => undefined);
+    const ageOf = async (name: string): Promise<number> => {
+      try {
+        return now - (await stat(join(this.directory, name))).mtimeMs;
+      } catch {
+        return 0;
+      }
+    };
+    const states = new Map<string, OperationState | undefined>();
     await Promise.all(
       files
         .filter((file) => file.endsWith(".json"))
         .map(async (file) => {
-          const path = join(this.directory, file);
+          const id = file.slice(0, -".json".length);
           try {
-            const entry = JSON.parse(await readFile(path, "utf8")) as JournalEntry;
-            if (
-              (entry.state === "prepared" || entry.state === "succeeded" || entry.state === "rejected") &&
-              Date.parse(entry.updatedAt) < cutoff
-            ) {
-              await rm(path, { force: true });
+            const entry = JSON.parse(await readFile(join(this.directory, file), "utf8")) as JournalEntry;
+            const age = now - Date.parse(entry.updatedAt);
+            const uncertain = entry.state === "executing" || entry.state === "outcome_unknown";
+            if (age > (uncertain ? UNCERTAIN_RETENTION_MS : TERMINAL_RETENTION_MS)) {
+              await remove(file);
+              await remove(`${id}.lock`);
+              return;
             }
+            states.set(id, entry.state);
           } catch {
-            // Keep unreadable and uncertain entries; deleting one could make a retry unsafe.
+            // Нечитаемые записи не трогаем: удаление могло бы сделать повтор небезопасным.
+            states.set(id, "outcome_unknown");
           }
         }),
+    );
+    await Promise.all(
+      files.map(async (file) => {
+        if (file.endsWith(".tmp")) {
+          if ((await ageOf(file)) > STALE_FILE_MS) await remove(file);
+        } else if (file.endsWith(".lock")) {
+          const state = states.get(file.slice(0, -".lock".length));
+          const age = await ageOf(file);
+          const done = state === undefined || state === "succeeded" || state === "rejected";
+          // prepared + старый lock: процесс упал до отправки (состояние «executing» пишется до POST).
+          if ((done && age > PRUNE_INTERVAL_MS) || (state === "prepared" && age > STALE_FILE_MS)) {
+            await remove(file);
+          }
+        }
+      }),
     );
   }
 
