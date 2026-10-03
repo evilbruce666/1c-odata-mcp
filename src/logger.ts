@@ -19,7 +19,13 @@ function makeDestination(): pino.DestinationStream {
   const underClient = !process.stdin.isTTY;
   if (!forceStderr && underClient) {
     try {
-      return pino.destination({ dest: join(tmpdir(), "1c-odata-mcp", "server.log"), mkdir: true });
+      // sync: файл открывается сразу. Асинхронный пишет только после открытия — ошибка старта,
+      // записанная перед process.exit(1), терялась, а pino падал с «sonic boom is not ready yet».
+      return pino.destination({
+        dest: join(tmpdir(), "1c-odata-mcp", "server.log"),
+        mkdir: true,
+        sync: true,
+      });
     } catch {
       // Не удалось открыть файл — падать из-за логов нельзя, откатываемся на stderr.
     }

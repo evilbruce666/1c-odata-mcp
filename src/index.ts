@@ -25,6 +25,10 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  logger.error({ err: err instanceof Error ? err.message : String(err) }, "Фатальная ошибка старта");
+  const message = err instanceof Error ? err.message : String(err);
+  logger.error({ err: message }, "Фатальная ошибка старта");
+  // Под MCP-клиентом лог идёт в файл — причину отказа дублируем в stderr: клиент показывает её
+  // пользователю (процесс всё равно завершается, «чистый stderr» здесь уже не нужен).
+  process.stderr.write(`1c-odata-mcp: ${message}\n`);
   process.exit(1);
 });
