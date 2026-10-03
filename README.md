@@ -10,9 +10,9 @@
   <img src="docs/assets/demo-debtors.svg" alt="Диалог с Claude: на вопрос «кто из покупателей должен больше всего» приходит список должников и итог из 1С" width="720">
 </p>
 
-> 🇬🇧 **In short:** an MCP server that connects 1C:Enterprise to any MCP client (Claude, Cursor, VS Code, local models…) over the standard OData interface. Ask your accounting database in plain language (debtors, sales, taxes, cash flow) and get the number back; opt-in, preview-gated write. Read-only by default. Run with `npx -y 1c-odata-mcp`. Works with any 1C where OData is published — cloud, SQL or local file base.
+> 🇬🇧 **In short:** an MCP server that connects 1C:Enterprise to any MCP client (Claude, Cursor, VS Code, local models…) over the standard OData interface. Ask your accounting database in plain language (debtors, sales, taxes, cash flow, account turnover, document postings) and get the number back; opt-in, preview-gated write. Read-only by default. Run with `npx -y 1c-odata-mcp`. Works with any 1C where OData is published — cloud, SQL or local file base.
 
-**MCP-сервер (Model Context Protocol) для 1С:Предприятие через стандартный интерфейс OData.** Позволяет работать с данными 1С на естественном языке из **любого MCP-клиента** — Claude, Cursor, VS Code, JetBrains, локальные модели (Ollama, LM Studio): спрашивать про контрагентов, документы, остатки, дебиторку, продажи и движение денег — а при явном включении ещё и создавать/изменять справочники и документы, проводить, регистрировать оплаты.
+**MCP-сервер (Model Context Protocol) для 1С:Предприятие через стандартный интерфейс OData.** Позволяет работать с данными 1С на естественном языке из **любого MCP-клиента** — Claude, Cursor, VS Code, JetBrains, локальные модели (Ollama, LM Studio): спрашивать про контрагентов, документы, остатки, дебиторку, продажи, движение денег, ОСВ и проводки — а при явном включении ещё и создавать/изменять справочники и документы, проводить, регистрировать оплаты.
 
 Если вы искали, **как подключить 1С к нейросети / ИИ**, готовый **коннектор 1С OData** или **интеграцию 1С с Claude** без программирования на стороне 1С — это оно.
 
@@ -60,6 +60,8 @@
 - «История по контрагенту Ромашка» → все документы и взаиморасчёты
 - «Остатки на складе» → количество и сумма по номенклатуре
 - «Продажи за май», «движение денег за квартал» → обороты за период
+- «ОСВ по 51 счёту за квартал», «какие проводки сделал этот документ» → оборотно-сальдовая ведомость и проводки из регистра бухгалтерии
+- «Когда и кем заведён документ» → хронология документа для аудита
 - поиск контрагентов и документов, карточки объектов, карта базы
 
 **Действия (при включённой записи, всегда с предпросмотром и подтверждением):**
@@ -181,7 +183,7 @@ Claude: Готово: контрагент 00-000123, счёт № … (черн
 | `write.document.copy_document` | Документ по образцу существующего — со всеми реквизитами |
 | `write.document.update_document_lines` / `write.document.add_document_line` / `write.document.remove_document_line` | Редактирование строк документа |
 | `write.document.post_document` | Провести / отменить проведение (1С формирует проводки) |
-| `write.operation.status` | Статус операции записи по `operationId`; после таймаута сверяет с 1С (созданный объект — по метке, правку строк — по числу строк) и снимает блокировку повтора |
+| `write.operation.status` | Статус операции записи по `operationId`; после таймаута сверяет с 1С (созданный объект — по назначенному `Ref_Key`, правку строк — по числу строк) и снимает блокировку повтора |
 | `write.entity.mark_for_deletion` | Пометить на удаление / снять пометку (мягкое удаление) |
 
 Все инструменты проверены на живой базе **1С:Бухгалтерия предприятия 3.0**.
