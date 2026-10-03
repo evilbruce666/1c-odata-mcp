@@ -2,9 +2,9 @@
   "manifest_version": "0.3",
   "name": "1c-odata-mcp",
   "display_name": "1С:Предприятие через OData",
-  "version": "0.5.0",
-  "description": "MCP-сервер для 1С:Предприятие через OData: аналитика (дебиторка, остатки, продажи, деньги) и создание/изменение документов — на естественном языке.",
-  "long_description": "Подключает любой MCP-клиент (Claude, Cursor, VS Code и др.) к базе 1С:Предприятие через стандартный интерфейс OData. Ничего не устанавливается внутри 1С. По умолчанию только чтение — 57 инструментов: аналитика (дебиторка, остатки, продажи, движение денег, налоги), справочники и документы. Запись включается отдельно (readOnly=false) и всегда работает в режиме предпросмотра — сначала показывает, что будет создано/изменено, и пишет только после подтверждения.",
+  "version": "0.6.0",
+  "description": "MCP-сервер для 1С:Предприятие через OData: аналитика (дебиторка, остатки, продажи, деньги, ОСВ, проводки) и создание/изменение документов — на естественном языке.",
+  "long_description": "Подключает любой MCP-клиент (Claude, Cursor, VS Code и др.) к базе 1С:Предприятие через стандартный интерфейс OData. Ничего не устанавливается внутри 1С. По умолчанию только чтение — 60 инструментов: аналитика (дебиторка, остатки, продажи, движение денег, налоги, ОСВ по счёту, проводки документа, хронология для аудита), справочники и документы. Запись включается отдельно (readOnly=false) и всегда работает в режиме предпросмотра — сначала показывает, что будет создано/изменено, и пишет только после подтверждения.",
   "author": {
     "name": "evilbruce666",
     "url": "https://github.com/evilbruce666"
@@ -1343,6 +1343,527 @@
       }
     },
     {
+      "name": "read.accounting.get_account_turnover",
+      "title": "ОСВ по счёту",
+      "description": "Оборотно-сальдовая ведомость по бухгалтерскому счёту (регистр бухгалтерии Хозрасчетный, виртуальная таблица «Остатки и обороты») за период: сальдо на начало Дт/Кт, обороты Дт/Кт, сальдо на конец Дт/Кт — итогом и по субсчетам. account — код счёта или префикс («51», «60», «62», «90.01»): берутся все субсчета, код которых начинается с него. Сальдо развёрнутое по аналитике (измерения и субконто), как в стандартной ОСВ по счёту. Можно ограничить организацией. Период — даты YYYY-MM-DD включительно.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "type": "string"
+          },
+          "organization": {
+            "description": "Название организации (юрлица) для фильтра. Без указания — все организации базы.",
+            "type": "string"
+          },
+          "account": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20,
+            "pattern": "^[0-9A-Za-zА-Яа-яЁё]+(\\.[0-9A-Za-zА-Яа-яЁё]+)*$",
+            "description": "Код счёта или префикс субсчетов, напр. 51, 60, 62, 90.01"
+          },
+          "from": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+            "description": "Дата начала периода (YYYY-MM-DD)"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+            "description": "Дата конца периода (YYYY-MM-DD)"
+          }
+        },
+        "required": [
+          "account",
+          "from",
+          "to"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "account": {
+            "type": "string"
+          },
+          "period": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ],
+            "additionalProperties": false
+          },
+          "openingDebit": {
+            "type": "number"
+          },
+          "openingCredit": {
+            "type": "number"
+          },
+          "debitTurnover": {
+            "type": "number"
+          },
+          "creditTurnover": {
+            "type": "number"
+          },
+          "closingDebit": {
+            "type": "number"
+          },
+          "closingCredit": {
+            "type": "number"
+          },
+          "openingNet": {
+            "type": "number"
+          },
+          "closingNet": {
+            "type": "number"
+          },
+          "consistent": {
+            "type": "boolean"
+          },
+          "accounts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "openingDebit": {
+                  "type": "number"
+                },
+                "openingCredit": {
+                  "type": "number"
+                },
+                "debitTurnover": {
+                  "type": "number"
+                },
+                "creditTurnover": {
+                  "type": "number"
+                },
+                "closingDebit": {
+                  "type": "number"
+                },
+                "closingCredit": {
+                  "type": "number"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "ref": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "openingDebit",
+                "openingCredit",
+                "debitTurnover",
+                "creditTurnover",
+                "closingDebit",
+                "closingCredit",
+                "code",
+                "description",
+                "ref"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "note": {
+            "type": "string"
+          },
+          "scan": {
+            "type": "object",
+            "properties": {
+              "documentsScanned": {
+                "type": "number"
+              },
+              "rowsScanned": {
+                "type": "number"
+              },
+              "windows": {
+                "type": "number"
+              },
+              "elapsedMs": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "elapsedMs"
+            ],
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "database",
+          "account",
+          "period",
+          "openingDebit",
+          "openingCredit",
+          "debitTurnover",
+          "creditTurnover",
+          "closingDebit",
+          "closingCredit",
+          "consistent",
+          "accounts",
+          "scan"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "read.accounting.get_document_postings",
+      "title": "Проводки документа",
+      "description": "Бухгалтерские проводки, сформированные одним документом (регистратором), из регистра бухгалтерии Хозрасчетный: Дт/Кт (код, наименование, Ref_Key счёта, субконто), сумма, количество/валютная сумма, итоги Дт/Кт и свод по корреспонденциям счетов. Подходит для любого вида документа (Document_*). Только чтение. documentEntity — имя документа из list_entities (class=document), documentRef — его Ref_Key (из search_documents).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "type": "string"
+          },
+          "documentEntity": {
+            "type": "string",
+            "pattern": "^Document_[^\\s()'/?#&]+$",
+            "description": "Имя документа, напр. Document_РегламентнаяОперация"
+          },
+          "documentRef": {
+            "type": "string",
+            "pattern": "^\\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}?$",
+            "description": "Ref_Key документа (GUID)"
+          }
+        },
+        "required": [
+          "documentEntity",
+          "documentRef"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string"
+          },
+          "document": {
+            "type": "object",
+            "properties": {
+              "entitySet": {
+                "type": "string"
+              },
+              "ref": {
+                "type": "string"
+              },
+              "number": {
+                "type": "string"
+              },
+              "date": {
+                "type": "string"
+              },
+              "posted": {
+                "type": "boolean"
+              },
+              "deletionMark": {
+                "type": "boolean"
+              },
+              "organization": {
+                "type": "string"
+              },
+              "organizationRef": {
+                "type": "string"
+              },
+              "operation": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "comment": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entitySet",
+              "ref"
+            ],
+            "additionalProperties": {}
+          },
+          "postingsCount": {
+            "type": "number"
+          },
+          "debitTotal": {
+            "type": "number"
+          },
+          "creditTotal": {
+            "type": "number"
+          },
+          "postings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "period": {
+                  "type": "string"
+                },
+                "lineNumber": {
+                  "type": "number"
+                },
+                "active": {
+                  "type": "boolean"
+                },
+                "debit": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "accountCode": {
+                          "type": "string"
+                        },
+                        "accountName": {
+                          "type": "string"
+                        },
+                        "accountRef": {
+                          "type": "string"
+                        },
+                        "dimensions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "index": {
+                                "type": "number"
+                              },
+                              "type": {
+                                "type": "string"
+                              },
+                              "ref": {
+                                "type": "string"
+                              },
+                              "value": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "index"
+                            ],
+                            "additionalProperties": {}
+                          }
+                        },
+                        "divisionRef": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "accountCode",
+                        "accountName",
+                        "accountRef"
+                      ],
+                      "additionalProperties": {}
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "credit": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "accountCode": {
+                          "type": "string"
+                        },
+                        "accountName": {
+                          "type": "string"
+                        },
+                        "accountRef": {
+                          "type": "string"
+                        },
+                        "dimensions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "index": {
+                                "type": "number"
+                              },
+                              "type": {
+                                "type": "string"
+                              },
+                              "ref": {
+                                "type": "string"
+                              },
+                              "value": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "index"
+                            ],
+                            "additionalProperties": {}
+                          }
+                        },
+                        "divisionRef": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "accountCode",
+                        "accountName",
+                        "accountRef"
+                      ],
+                      "additionalProperties": {}
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "amount": {
+                  "type": "number"
+                },
+                "quantityDebit": {
+                  "type": "number"
+                },
+                "quantityCredit": {
+                  "type": "number"
+                },
+                "currencyAmountDebit": {
+                  "type": "number"
+                },
+                "currencyAmountCredit": {
+                  "type": "number"
+                },
+                "organizationRef": {
+                  "type": "string"
+                },
+                "content": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "period",
+                "debit",
+                "credit",
+                "amount"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "byCorrespondence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "debitAccount": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "creditAccount": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "amount": {
+                  "type": "number"
+                },
+                "entries": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "debitAccount",
+                "creditAccount",
+                "amount",
+                "entries"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "note": {
+            "type": "string"
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "entitySet": {
+                "type": "string"
+              },
+              "filter": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entitySet",
+              "filter"
+            ],
+            "additionalProperties": {}
+          },
+          "scan": {
+            "type": "object",
+            "properties": {
+              "documentsScanned": {
+                "type": "number"
+              },
+              "rowsScanned": {
+                "type": "number"
+              },
+              "windows": {
+                "type": "number"
+              },
+              "elapsedMs": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "elapsedMs"
+            ],
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "database",
+          "document",
+          "postingsCount",
+          "debitTotal",
+          "creditTotal",
+          "postings",
+          "byCorrespondence",
+          "source",
+          "scan"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
       "name": "read.analytics.get_inventory",
       "title": "Остатки товаров",
       "description": "Остатки товаров/материалов на складах: сальдо счетов 41/10/43 регистра Хозрасчетный, сгруппированное по номенклатуре. Возвращает количество и сумму остатка. Можно ограничить организацией. По умолчанию — текущие остатки; параметром asOf=YYYY-MM-DD можно получить остатки на конец указанной даты (для инвентаризации/аудита). (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
@@ -2534,9 +3055,263 @@
       }
     },
     {
+      "name": "read.audit.get_document_history",
+      "title": "Хронология документа (аудит)",
+      "description": "Что можно доказуемо сказать о времени документа по данным стандартного OData. Возвращает раздельно: documentDate (Document.Date — учётная дата, не время действия) и refCreatedAt (метка генерации Ref_Key, выведенная из UUIDv1; confidence=derived — НЕ проверенное время создания/выполнения/проведения). Фактическое время выполнения и последнего изменения через стандартный OData недоступны и не возвращаются. Также: ответственный (реквизит документа, не автор), DataVersion как есть (не интерпретируется), наличие движений в регистре Хозрасчетный (только факт наличия), evidence и limitations. Только чтение. documentEntity — Document_* из list_entities, documentRef — Ref_Key.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "type": "string"
+          },
+          "documentEntity": {
+            "type": "string",
+            "pattern": "^Document_[^\\s()'/?#&]+$",
+            "description": "Имя документа, напр. Document_РегламентнаяОперация"
+          },
+          "documentRef": {
+            "type": "string",
+            "pattern": "^\\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}?$",
+            "description": "Ref_Key документа (GUID)"
+          }
+        },
+        "required": [
+          "documentEntity",
+          "documentRef"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string"
+          },
+          "document": {
+            "type": "object",
+            "properties": {
+              "entitySet": {
+                "type": "string"
+              },
+              "ref": {
+                "type": "string"
+              },
+              "number": {
+                "type": "string"
+              },
+              "posted": {
+                "type": "boolean"
+              },
+              "deletionMark": {
+                "type": "boolean"
+              },
+              "organization": {
+                "type": "string"
+              },
+              "organizationRef": {
+                "type": "string"
+              },
+              "operation": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "dataVersion": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entitySet",
+              "ref"
+            ],
+            "additionalProperties": {}
+          },
+          "timestamps": {
+            "type": "object",
+            "properties": {
+              "documentDate": {
+                "type": "string"
+              },
+              "refCreatedAt": {
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "string"
+                  },
+                  "confidence": {
+                    "type": "string",
+                    "enum": [
+                      "verified",
+                      "derived",
+                      "uncertain"
+                    ]
+                  },
+                  "description": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "value",
+                  "source",
+                  "confidence"
+                ],
+                "additionalProperties": {}
+              }
+            },
+            "additionalProperties": {}
+          },
+          "responsible": {
+            "type": "object",
+            "properties": {
+              "ref": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "resolution": {
+                "type": "string",
+                "enum": [
+                  "resolved",
+                  "not_found",
+                  "catalog_not_published",
+                  "lookup_failed"
+                ]
+              },
+              "source": {
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "ref",
+              "resolution",
+              "source"
+            ],
+            "additionalProperties": {}
+          },
+          "accountingMovements": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "exists",
+                  "none",
+                  "unsupported",
+                  "error"
+                ]
+              },
+              "exists": {
+                "type": "boolean"
+              },
+              "source": {
+                "type": "string"
+              },
+              "filter": {
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "additionalProperties": {}
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "sourceEntity": {
+                  "type": "string"
+                },
+                "sourceRef": {
+                  "type": "string"
+                },
+                "sourceField": {
+                  "type": "string"
+                },
+                "timestamp": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "details": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
+                }
+              },
+              "required": [
+                "sourceEntity",
+                "sourceField",
+                "description"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "limitations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scan": {
+            "type": "object",
+            "properties": {
+              "documentsScanned": {
+                "type": "number"
+              },
+              "rowsScanned": {
+                "type": "number"
+              },
+              "windows": {
+                "type": "number"
+              },
+              "elapsedMs": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "elapsedMs"
+            ],
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "database",
+          "document",
+          "timestamps",
+          "accountingMovements",
+          "evidence",
+          "limitations",
+          "scan"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
       "name": "write.operation.status",
       "title": "Статус операции записи",
-      "description": "Состояние операции записи по operationId из предпросмотра (создание, добавление/удаление строки документа). Если результат неизвестен (таймаут, сбой сети, 5xx), сверяет с 1С: созданный объект ищет по метке «[op:…]» в комментарии, правку строк — по числу строк документа. Нашёл — фиксирует успех, и повторное подтверждение вернёт результат без второго запроса; правка не дошла — закрывает операцию, нужен новый предпросмотр. Ничего не создаёт в 1С. Если объект не найден — безопасно сделать новый предпросмотр с новым id (но дайте 1С время: запрос мог ещё выполняться).",
+      "description": "Состояние операции записи по operationId из предпросмотра (создание, добавление/удаление строки документа). Если результат неизвестен (таймаут, сбой сети, 5xx), сверяет с 1С: созданный объект ищет по назначенному Ref_Key (операции 0.5.0 — по метке «[op:…]» в комментарии), правку строк — по числу строк документа. Нашёл — фиксирует успех, и повторное подтверждение вернёт результат без второго запроса; правка не дошла — закрывает операцию, нужен новый предпросмотр. Ничего не создаёт в 1С. Если объект не найден — безопасно сделать новый предпросмотр с новым id (но дайте 1С время: запрос мог ещё выполняться).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3293,6 +4068,40 @@
             "type": "string"
           },
           "action": {
+            "type": "string"
+          },
+          "postings": {
+            "type": "object",
+            "properties": {
+              "count": {
+                "type": "number"
+              },
+              "debitTotal": {
+                "type": "number"
+              },
+              "creditTotal": {
+                "type": "number"
+              },
+              "byCorrespondence": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
+                }
+              }
+            },
+            "required": [
+              "count",
+              "debitTotal",
+              "creditTotal",
+              "byCorrespondence"
+            ],
+            "additionalProperties": false
+          },
+          "postingsNote": {
             "type": "string"
           }
         },

@@ -126,6 +126,15 @@ export const postDocumentResultSchema = z
     done: z.boolean().optional(),
     ref: z.string().optional(),
     action: z.string().optional(),
+    postings: z
+      .object({
+        count: z.number(),
+        debitTotal: z.number(),
+        creditTotal: z.number(),
+        byCorrespondence: z.array(z.record(z.string(), z.unknown())),
+      })
+      .optional(),
+    postingsNote: z.string().optional(),
   })
   .passthrough();
 
@@ -274,6 +283,188 @@ export const getInventoryResultSchema = z
     items: z.array(
       z.object({ item: z.string(), ref: z.string(), quantity: z.number(), amount: z.number() }).passthrough(),
     ),
+    scan: scanSchema,
+  })
+  .passthrough();
+
+/** Сальдо/обороты ОСВ в рублях (Dr/Cr раздельно, развёрнуто по аналитике). */
+const turnoverSumsSchema = z
+  .object({
+    openingDebit: z.number(),
+    openingCredit: z.number(),
+    debitTurnover: z.number(),
+    creditTurnover: z.number(),
+    closingDebit: z.number(),
+    closingCredit: z.number(),
+  })
+  .passthrough();
+
+export const getAccountTurnoverResultSchema = z
+  .object({
+    database: z.string(),
+    organization: z.string().optional(),
+    account: z.string(),
+    period: z.object({ from: z.string(), to: z.string() }),
+    openingDebit: z.number(),
+    openingCredit: z.number(),
+    debitTurnover: z.number(),
+    creditTurnover: z.number(),
+    closingDebit: z.number(),
+    closingCredit: z.number(),
+    openingNet: z.number().optional(),
+    closingNet: z.number().optional(),
+    consistent: z.boolean(),
+    accounts: z.array(
+      turnoverSumsSchema.extend({ code: z.string(), description: z.string(), ref: z.string() }).passthrough(),
+    ),
+    note: z.string().optional(),
+    scan: scanSchema,
+  })
+  .passthrough();
+
+const postingDimensionSchema = z
+  .object({
+    index: z.number(),
+    type: z.string().optional(),
+    ref: z.string().optional(),
+    value: z.string().optional(),
+  })
+  .passthrough();
+
+/** Сторона проводки (Дт или Кт); null — у стороны нет счёта (забалансовая проводка). */
+const postingSideSchema = z
+  .object({
+    accountCode: z.string(),
+    accountName: z.string(),
+    accountRef: z.string(),
+    dimensions: z.array(postingDimensionSchema).optional(),
+    divisionRef: z.string().optional(),
+  })
+  .passthrough()
+  .nullable();
+
+/** get_document_postings: проводки одного регистратора из регистра Хозрасчетный. */
+export const getDocumentPostingsResultSchema = z
+  .object({
+    database: z.string(),
+    document: z
+      .object({
+        entitySet: z.string(),
+        ref: z.string(),
+        number: z.string().optional(),
+        date: z.string().optional(),
+        posted: z.boolean().optional(),
+        deletionMark: z.boolean().optional(),
+        organization: z.string().optional(),
+        organizationRef: z.string().optional(),
+        operation: z.string().optional(),
+        state: z.string().optional(),
+        comment: z.string().optional(),
+      })
+      .passthrough(),
+    postingsCount: z.number(),
+    debitTotal: z.number(),
+    creditTotal: z.number(),
+    postings: z.array(
+      z
+        .object({
+          period: z.string(),
+          lineNumber: z.number().optional(),
+          active: z.boolean().optional(),
+          debit: postingSideSchema,
+          credit: postingSideSchema,
+          amount: z.number(),
+          quantityDebit: z.number().optional(),
+          quantityCredit: z.number().optional(),
+          currencyAmountDebit: z.number().optional(),
+          currencyAmountCredit: z.number().optional(),
+          organizationRef: z.string().optional(),
+          content: z.string().optional(),
+        })
+        .passthrough(),
+    ),
+    byCorrespondence: z.array(
+      z
+        .object({
+          debitAccount: z.string().nullable(),
+          creditAccount: z.string().nullable(),
+          amount: z.number(),
+          entries: z.number(),
+        })
+        .passthrough(),
+    ),
+    note: z.string().optional(),
+    source: z.object({ entitySet: z.string(), filter: z.string() }).passthrough(),
+    scan: scanSchema,
+  })
+  .passthrough();
+
+/** read.audit.get_document_history — хронология документа (только доказуемое). */
+const derivedTimestampSchema = z
+  .object({
+    value: z.string(),
+    source: z.string(),
+    confidence: z.enum(["verified", "derived", "uncertain"]),
+    description: z.string().optional(),
+  })
+  .passthrough();
+
+export const getDocumentHistoryResultSchema = z
+  .object({
+    database: z.string(),
+    document: z
+      .object({
+        entitySet: z.string(),
+        ref: z.string(),
+        number: z.string().optional(),
+        posted: z.boolean().optional(),
+        deletionMark: z.boolean().optional(),
+        organization: z.string().optional(),
+        organizationRef: z.string().optional(),
+        operation: z.string().optional(),
+        state: z.string().optional(),
+        dataVersion: z.string().optional(),
+      })
+      .passthrough(),
+    timestamps: z
+      .object({
+        documentDate: z.string().optional(),
+        refCreatedAt: derivedTimestampSchema.optional(),
+        // executedAt / modifiedAt через стандартный OData недоступны — в ответе их нет.
+      })
+      .passthrough(),
+    responsible: z
+      .object({
+        ref: z.string(),
+        name: z.string().optional(),
+        resolution: z.enum(["resolved", "not_found", "catalog_not_published", "lookup_failed"]),
+        source: z.string(),
+        detail: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+    accountingMovements: z
+      .object({
+        status: z.enum(["exists", "none", "unsupported", "error"]),
+        exists: z.boolean().optional(),
+        source: z.string().optional(),
+        filter: z.string().optional(),
+        detail: z.string().optional(),
+      })
+      .passthrough(),
+    evidence: z.array(
+      z
+        .object({
+          sourceEntity: z.string(),
+          sourceRef: z.string().optional(),
+          sourceField: z.string(),
+          timestamp: z.string().optional(),
+          description: z.string(),
+          details: z.record(z.string(), z.unknown()).optional(),
+        })
+        .passthrough(),
+    ),
+    limitations: z.array(z.string()),
     scan: scanSchema,
   })
   .passthrough();

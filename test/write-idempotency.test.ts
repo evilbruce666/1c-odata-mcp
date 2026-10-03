@@ -92,7 +92,7 @@ describe("operation marker and write.operation.status", () => {
   it("reconciles an unknown operation when the marked object is found, searching without brackets", async () => {
     const id = "22222222-2222-4222-8222-222222222222";
     const reconcileOperation = vi.fn(async () => undefined);
-    const getCollection = vi.fn(async () => ({ value: [{ Ref_Key: "ref-9", Number: "0000-000009" }] }));
+    const getCollection = vi.fn(async () => ({ value: [{ Ref_Key: "ref-9", Code: "00-000009" }] }));
     const connection = {
       cfg: { name: "default" },
       getMetadata: async () => meta(true),
@@ -110,11 +110,49 @@ describe("operation marker and write.operation.status", () => {
       { database: "default", operationId: id },
       {},
     );
-    expect(res.structuredContent).toMatchObject({ status: "found_reconciled", ref: "ref-9" });
+    expect(res.structuredContent).toMatchObject({
+      status: "found_reconciled",
+      ref: "ref-9",
+      number: "00-000009",
+    });
     expect(reconcileOperation).toHaveBeenCalledWith(id, expect.objectContaining({ Ref_Key: "ref-9" }));
     const url = decodeURIComponent((getCollection.mock.calls[0] as unknown as [string])[0]);
     expect(url).toContain(`substringof('op:${id}',Комментарий)`);
     expect(url).not.toContain("[");
+    // у справочника нет Number: 1С на $select=Number отвечает 400 (найдено на живой базе)
+    expect(url).toContain("$select=Ref_Key,Code&");
+    expect(url).not.toContain("Number");
+  });
+
+  it("marker search on a document selects Number", async () => {
+    const id = "33333333-3333-4333-8333-333333333333";
+    const getCollection = vi.fn(async () => ({ value: [{ Ref_Key: "ref-7", Number: "0000-000007" }] }));
+    const connection = {
+      cfg: { name: "default" },
+      getMetadata: async () => ({
+        entities: new Map([["Document_РеализацияТоваровУслуг", { properties: [{ name: "Комментарий" }] }]]),
+      }),
+      client: {
+        operationEntry: async () => ({
+          state: "outcome_unknown",
+          entitySet: "Document_РеализацияТоваровУслуг",
+          updatedAt: new Date().toISOString(),
+        }),
+        getCollection,
+        reconcileOperation: vi.fn(async () => undefined),
+      },
+    };
+    const res = await toolsOf(connection)["write.operation.status"]!.handler(
+      { database: "default", operationId: id },
+      {},
+    );
+    expect(res.structuredContent).toMatchObject({
+      status: "found_reconciled",
+      ref: "ref-7",
+      number: "0000-000007",
+    });
+    const url = decodeURIComponent((getCollection.mock.calls[0] as unknown as [string])[0]);
+    expect(url).toContain("$select=Ref_Key,Number&");
   });
 
   it("reports not_found / unverifiable / not_in_journal without reconciling", async () => {

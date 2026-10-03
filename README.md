@@ -10,9 +10,9 @@
   <img src="docs/assets/demo-debtors.svg" alt="Диалог с Claude: на вопрос «кто из покупателей должен больше всего» приходит список должников и итог из 1С" width="720">
 </p>
 
-> 🇬🇧 **In short:** an MCP server that connects 1C:Enterprise to any MCP client (Claude, Cursor, VS Code, local models…) over the standard OData interface. Ask your accounting database in plain language (debtors, sales, taxes, cash flow) and get the number back; opt-in, preview-gated write. Read-only by default. Run with `npx -y 1c-odata-mcp`. Works with any 1C where OData is published — cloud, SQL or local file base.
+> 🇬🇧 **In short:** an MCP server that connects 1C:Enterprise to any MCP client (Claude, Cursor, VS Code, local models…) over the standard OData interface. Ask your accounting database in plain language (debtors, sales, taxes, cash flow, account turnover, document postings) and get the number back; opt-in, preview-gated write. Read-only by default. Run with `npx -y 1c-odata-mcp`. Works with any 1C where OData is published — cloud, SQL or local file base.
 
-**MCP-сервер (Model Context Protocol) для 1С:Предприятие через стандартный интерфейс OData.** Позволяет работать с данными 1С на естественном языке из **любого MCP-клиента** — Claude, Cursor, VS Code, JetBrains, локальные модели (Ollama, LM Studio): спрашивать про контрагентов, документы, остатки, дебиторку, продажи и движение денег — а при явном включении ещё и создавать/изменять справочники и документы, проводить, регистрировать оплаты.
+**MCP-сервер (Model Context Protocol) для 1С:Предприятие через стандартный интерфейс OData.** Позволяет работать с данными 1С на естественном языке из **любого MCP-клиента** — Claude, Cursor, VS Code, JetBrains, локальные модели (Ollama, LM Studio): спрашивать про контрагентов, документы, остатки, дебиторку, продажи, движение денег, ОСВ и проводки — а при явном включении ещё и создавать/изменять справочники и документы, проводить, регистрировать оплаты.
 
 Если вы искали, **как подключить 1С к нейросети / ИИ**, готовый **коннектор 1С OData** или **интеграцию 1С с Claude** без программирования на стороне 1С — это оно.
 
@@ -60,6 +60,8 @@
 - «История по контрагенту Ромашка» → все документы и взаиморасчёты
 - «Остатки на складе» → количество и сумма по номенклатуре
 - «Продажи за май», «движение денег за квартал» → обороты за период
+- «ОСВ по 51 счёту за квартал», «какие проводки сделал этот документ» → оборотно-сальдовая ведомость и проводки из регистра бухгалтерии
+- «Когда и кем заведён документ» → хронология документа для аудита
 - поиск контрагентов и документов, карточки объектов, карта базы
 
 **Действия (при включённой записи, всегда с предпросмотром и подтверждением):**
@@ -133,7 +135,7 @@ Claude: Готово: контрагент 00-000123, счёт № … (черн
 
 ## Инструменты
 
-57 инструментов (21 чтение/аналитика + 36 записей). У всех есть необязательный параметр **`database`** (какая база 1С — см. `read.system.list_databases`); у аналитических — ещё и **`organization`** (фильтр по юрлицу — см. `read.system.list_organizations`).
+60 инструментов (24 чтение/аналитика + 36 записей). У всех есть необязательный параметр **`database`** (какая база 1С — см. `read.system.list_databases`); у аналитических — ещё и **`organization`** (фильтр по юрлицу — см. `read.system.list_organizations`).
 
 **Чтение и аналитика:**
 
@@ -145,6 +147,9 @@ Claude: Готово: контрагент 00-000123, счёт № … (черн
 | `read.counterparty.find_counterparty` / `read.counterparty.get_counterparty` | Поиск контрагента (по названию/ИНН) и его карточка |
 | `read.document.search_documents` / `read.document.get_document` | Поиск документов и документ с табличной частью |
 | `read.analytics.get_debtors` / `read.analytics.get_inventory` | Дебиторка (сч. 62) / остатки товаров (сч. 41/10/43), можно на дату в прошлом (`asOf`) |
+| `read.accounting.get_account_turnover` | ОСВ по счёту за период (`51`, `60`, `90.01`…): сальдо на начало/конец и обороты Дт/Кт, итогом и по субсчетам |
+| `read.accounting.get_document_postings` | Проводки одного документа (любого `Document_*`) из регистра Хозрасчетный: Дт/Кт с кодами счетов и субконто, суммы, итоги и свод по корреспонденциям. Пример: `{"documentEntity": "Document_РегламентнаяОперация", "documentRef": "919a75d1-7f6a-11f1-86c3-74563c4bf0d1"}` |
+| `read.audit.get_document_history` | Хронология документа для аудита: учётная дата (`documentDate`) отдельно от метки генерации `Ref_Key` из UUIDv1 (`refCreatedAt`, derived), ответственный, `DataVersion` как есть, наличие движений в Хозрасчетном, evidence и limitations. Фактическое время выполнения/изменения через стандартный OData недоступно — не возвращается |
 | `read.analytics.get_sales` / `read.analytics.get_cashflow` | Продажи за период / движение денег (банк + касса) |
 | `read.analytics.get_sales_breakdown` / `read.analytics.get_purchases_breakdown` | Продажи/закупки с разбивкой по контрагенту, месяцу, договору, категории (ИП/ЮрЛицо/…) |
 | `read.analytics.get_payments_breakdown` | Приход/расход по виду операции, месяцу, контрагенту, статье ДДС — «сколько заплатили ИП за год», «проценты по депозиту» |
@@ -178,7 +183,7 @@ Claude: Готово: контрагент 00-000123, счёт № … (черн
 | `write.document.copy_document` | Документ по образцу существующего — со всеми реквизитами |
 | `write.document.update_document_lines` / `write.document.add_document_line` / `write.document.remove_document_line` | Редактирование строк документа |
 | `write.document.post_document` | Провести / отменить проведение (1С формирует проводки) |
-| `write.operation.status` | Статус операции записи по `operationId`; после таймаута сверяет с 1С (созданный объект — по метке, правку строк — по числу строк) и снимает блокировку повтора |
+| `write.operation.status` | Статус операции записи по `operationId`; после таймаута сверяет с 1С (созданный объект — по назначенному `Ref_Key`, правку строк — по числу строк) и снимает блокировку повтора |
 | `write.entity.mark_for_deletion` | Пометить на удаление / снять пометку (мягкое удаление) |
 
 Все инструменты проверены на живой базе **1С:Бухгалтерия предприятия 3.0**.
@@ -285,7 +290,7 @@ src/
 - **`+` vs `%20` в OData 1С.** 1С не декодирует `+` в пробел внутри `$filter` (отвечает 400), поэтому query-string собирается через `encodeURIComponent` (пробел → `%20`), а не `URLSearchParams`.
 - **Счета учёта документов** не подставляются автоматически через OData (это делает форма 1С при выборе номенклатуры) — сервер берёт их из регистра «Счета учёта номенклатуры», с откатом на стандартные коды плана счетов.
 - **Логи и stderr.** `stdout` занят JSON-RPC, поэтому логи идут в `stderr` — но только в терминале. Под MCP-клиентом (когда `stdin` — pipe) логи пишутся в файл `<tmpdir>/1c-odata-mcp/server.log`, чтобы не сломать клиентов, трактующих любой вывод в `stderr` как фатальную ошибку. Вернуть логи в `stderr`: `MCP_LOG_STDERR=1`.
-- **Типизированные ответы.** У всех 57 инструментов объявлен `outputSchema` — клиенты, поддерживающие `structuredContent` (не только текстовый JSON), могут типизировать ответ, не парсить текст.
+- **Типизированные ответы.** У всех 60 инструментов объявлен `outputSchema` — клиенты, поддерживающие `structuredContent` (не только текстовый JSON), могут типизировать ответ, не парсить текст.
 - **Имена инструментов.** Трёхсегментный `dot-notation`: `<read|write>.<категория>.<имя>` (напр. `read.analytics.get_debtors`, `write.sales.create_shipment`) — группирует инструменты по категории и сразу видно, чтение это или запись.
 
 ---
@@ -323,7 +328,11 @@ src/
   найденные на живой базе баги, которые юнит-тестами не ловятся: правка строк акта
   уходила мимо его табличной части, а подбор банковского счёта был сломан молча.
 - **[@alexpostnik](https://github.com/alexpostnik)** — защита записи от дублей в 0.5.0: идея
-  и первая реализация журнала операций (`operationId`, issue #29, PR #30).
+  и первая реализация журнала операций (`operationId`, issue #29, PR #30), а также правка
+  числа инструментов в описании пакета (PR #28).
+- **[@AlexMarinenko](https://github.com/AlexMarinenko)** — учётная аналитика в 0.6.0:
+  ОСВ по счёту (`get_account_turnover`), проводки документа (`get_document_postings`) и
+  хронология документа для аудита (`get_document_history`, PR #31).
 
 Нашли ошибку или не хватает документа — [issue](https://github.com/evilbruce666/1c-odata-mcp/issues)
 и PR приветствуются. Особенно ценны находки на реальных базах: конфигурации 1С
