@@ -5,6 +5,13 @@
 
 ## [Не выпущено]
 
+## [0.6.0] — 2026-10-03
+
+Учётная аналитика: ОСВ по счёту, проводки документа и хронология документа для аудита. Идея и первая
+реализация всех трёх инструментов — **[@AlexMarinenko](https://github.com/AlexMarinenko)** ([#31]);
+мы проверили их на живых базах и доработали (чистое сальдо, проводки после проведения). Плюс защита
+от повтора для строк документа, назначенный `Ref_Key` и договор по умолчанию.
+
 ### Добавлено
 
 - **`read.accounting.get_account_turnover` — ОСВ по счёту.** Сальдо на начало,
@@ -49,7 +56,8 @@
   предпросмотре и отправляет его при подтверждении. Дубль невозможен на уровне базы, а
   `write.operation.status` сверяет создание простым GET по ссылке — теперь и для справочников
   без «Комментария» (раньше — вручную).
- пересобирает инструменты в `manifest.json` из живого сервера и
+
+- **`npm run manifest`** пересобирает инструменты в `manifest.json` из живого сервера и
   синхронизирует версию; **тест согласованности** сверяет манифест, версию, раздел CHANGELOG и
   число инструментов в README / `package.json` с кодом — расхождения ловятся до релиза.
 
@@ -204,6 +212,7 @@
 [#19]: https://github.com/evilbruce666/1c-odata-mcp/pull/19
 [#20]: https://github.com/evilbruce666/1c-odata-mcp/pull/20
 [#21]: https://github.com/evilbruce666/1c-odata-mcp/pull/21
+[#31]: https://github.com/evilbruce666/1c-odata-mcp/pull/31
 
 ## [0.3.0] — 2026-07-13
 
@@ -514,7 +523,8 @@ POST-тестом (create → read → mark) на реальной базе — 
   коды плана счетов); вежливый фоллбэк при отсутствии объекта в «Составе OData».
 - npm-пакет с запуском через `npx 1c-odata-mcp`.
 
-[Не выпущено]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.5.0...HEAD
+[Не выпущено]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.2.0...v0.3.0
