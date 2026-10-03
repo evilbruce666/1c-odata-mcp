@@ -51,8 +51,17 @@ MCPB, где элементы массива `tools` — это только `{n
    cp -R dist "$STAGE/dist"
    cp package.json package-lock.json README.md LICENSE manifest.json "$STAGE/"
    (cd "$STAGE" && npm ci --omit=dev --ignore-scripts)
-   (cd "$STAGE" && zip -r -X -q /tmp/1c-odata-mcp.mcpb . -x ".*")
+   rm -rf "$STAGE/dist/scripts"
+   # В рантайме не нужны: типы, sourcemaps, исходники .ts и markdown пакетов —
+   # бандл ужимается с ~6,4 до ~3,3 МБ. Иначе на медленном канале (~100 КБ/с)
+   # `smithery mcp publish` не успевает загрузить файл и падает «Request timed out».
+   find "$STAGE" -type f \( -name "*.map" -o -name "*.d.ts" -o -name "*.d.mts" -o -name "*.d.cts" \) -delete
+   find "$STAGE/node_modules" -type f \( -name "*.ts" -o -iname "*.md" -o -iname "CHANGELOG*" \) -delete
+   (cd "$STAGE" && zip -r -X -q -9 /tmp/1c-odata-mcp.mcpb . -x ".*")
    ```
+
+   Перед публикацией стоит запустить `$STAGE/dist/index.js` MCP-клиентом (`tools/list` и
+   пара вызовов) — облегчённый бандл должен отвечать так же, как исходный.
 
 4. Опубликовать (нужен вход `npx @smithery/cli auth login`):
 
