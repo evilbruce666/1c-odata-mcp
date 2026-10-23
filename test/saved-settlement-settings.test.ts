@@ -8,7 +8,7 @@ import { parseConfig } from "../src/config/env.js";
 import { createServer } from "../src/mcp/server.js";
 import { ODataError } from "../src/odata/errors.js";
 import type { EntityMeta, ODataEntity } from "../src/types/odata.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/server";
 
 const ORG = "11111111-1111-4111-8111-111111111111";
 const CP = "22222222-2222-4222-8222-222222222222";

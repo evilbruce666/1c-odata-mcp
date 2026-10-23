@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
 import { ok, fail, guard, databaseField, organizationField, dateField } from "./_shared.js";
@@ -79,7 +79,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
         "«сколько заплатили ИП за год», «куда уходили деньги по статьям ДДС», «приход по месяцам». " +
         "Период — даты YYYY-MM-DD. Контрагент в банковских документах хранится полиморфно — фильтр " +
         "применяется на стороне коннектора; статья ДДС / назначение / период / организация — на сервере 1С.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         from: dateField("Дата начала периода"),
@@ -115,7 +115,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
             "Разбивка: operation (вид операции), month (месяц), counterparty (контрагент), " +
               "cashflowItem (статья ДДС), total (без разбивки)",
           ),
-      },
+      }),
       outputSchema: paymentsBreakdownResultSchema,
     },
     ({
@@ -315,7 +315,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
         "напр. «CB12812240037987» — банковский идентификатор депозита/займа/контракта в назначении) " +
         "или ссылкой на договор (contractRef, Ref_Key из find_counterparty + договор). Обязателен ровно " +
         "один из них. Период — опционально (без него — всё время).",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         dealKey: z
@@ -332,7 +332,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
         from: dateField("Дата начала").optional(),
         to: dateField("Дата конца").optional(),
         limit: z.number().int().positive().max(1000).default(200).describe("Сколько событий вернуть"),
-      },
+      }),
       outputSchema: dealHistoryResultSchema,
     },
     ({ database, organization, dealKey, contractRef, from, to, limit }) =>
@@ -478,7 +478,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
         "cashflowItem уточняет конкретный вид налога (напр. «УСН», «Страховые», «НДФЛ», «ЕНП»). " +
         "Отвечает на вопросы вроде «сколько налогов мы заплатили в прошлом году», «сколько ушло " +
         "страховых взносов в квартал», «помесячная нагрузка по налогам». Период — даты YYYY-MM-DD.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         from: dateField("Дата начала периода"),
@@ -491,7 +491,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           .enum(["cashflowItem", "month", "counterparty", "total"])
           .default("cashflowItem")
           .describe("Разбивка: cashflowItem (по налогу) / month / counterparty / total"),
-      },
+      }),
       outputSchema: taxesPaidResultSchema,
     },
     ({ database, organization, from, to, cashflowItem, groupBy }) =>

@@ -3,8 +3,8 @@
  * общается с ним настоящим MCP-клиентом (как Claude Desktop).
  * Запуск: node --env-file=.env dist/scripts/probe-mcp.js
  */
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { Client } from "@modelcontextprotocol/client";
 
 function line(s = ""): void {
   process.stdout.write(`${s}\n`);

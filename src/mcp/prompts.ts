@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 /**
@@ -114,7 +114,7 @@ export function registerPrompts(server: McpServer): void {
     );
     server.registerPrompt(
       def.name,
-      { title: def.title, description: def.description, argsSchema },
+      { title: def.title, description: def.description, argsSchema: z.object(argsSchema) },
       (args) => ({
         messages: [
           {

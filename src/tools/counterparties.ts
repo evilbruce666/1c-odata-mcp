@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
 import { ok, fail, guard, withTruncationNote, databaseField, organizationField } from "./_shared.js";
@@ -97,12 +97,12 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
         "и ролями по видам договоров (roles: покупатель, поставщик, комитент…; contracts — число договоров) — " +
         "помогает выбрать из однофамильцев. " +
         "Пример: «найди контрагента Ромашка» или «контрагент с ИНН 7701234567».",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         query: z.string().min(1).describe("Часть названия или ИНН контрагента"),
         subjectKind: z.enum(["counterparty", "group", "all"]).default("counterparty"),
         limit: z.number().int().positive().max(100).default(20).describe("Сколько вернуть"),
-      },
+      }),
       outputSchema: truncatedList(counterpartySchema),
     },
     ({ database, query, limit, subjectKind = "counterparty" }) =>
@@ -163,10 +163,10 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
       description:
         "Возвращает полную карточку контрагента по его Ref_Key: реквизиты (ИНН/КПП), " +
         "наименования, код. Ref_Key берётся из find_counterparty.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         ref: z.string().describe("Ref_Key контрагента (GUID)"),
-      },
+      }),
       outputSchema: counterpartySchema,
     },
     ({ database, ref }) =>
@@ -248,7 +248,7 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
       description:
         "Документы реализации и счета по контрагенту-покупателю за период. " +
         "Показывает, что и на какие суммы продавали клиенту. Ref_Key — из find_counterparty.",
-      inputSchema: historyInput,
+      inputSchema: z.object(historyInput),
       outputSchema: counterpartyHistoryResultSchema,
     },
     ({ database, organization, ref, from, to, limit }) =>
@@ -282,7 +282,7 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
       description:
         "Документы поступления по контрагенту-поставщику за период. " +
         "Показывает закупки у поставщика. Ref_Key — из find_counterparty.",
-      inputSchema: historyInput,
+      inputSchema: z.object(historyInput),
       outputSchema: counterpartyHistoryResultSchema,
     },
     ({ database, organization, ref, from, to, limit }) =>

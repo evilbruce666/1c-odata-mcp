@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
 import { ok, fail, guard, databaseField, organizationField, dateField } from "./_shared.js";
@@ -680,7 +680,7 @@ export function registerCardTools(server: McpServer, ctx: ServerContext): void {
         "расчётов). Сторно приходит отрицательной суммой в debit/credit. documentCreatedAt — когда документ " +
         "создан (по ссылке): помогает найти документы, внесённые после закрытия месяца. Если остаток сложился " +
         "до периода — возьмите период шире. Для разбора: откуда остаток на 26, кто дал красное сальдо, как сложился долг.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         account: z
@@ -697,7 +697,7 @@ export function registerCardTools(server: McpServer, ctx: ServerContext): void {
           "Ref_Key другого субконто: договор, номенклатура, банковский счёт",
         ).optional(),
         limit: z.number().int().positive().max(2000).default(200).describe("Сколько движений показать"),
-      },
+      }),
       outputSchema: accountCardResultSchema,
     },
     ({ database, organization, account, from, to, counterpartyRef, dimensionRef, limit }) =>
@@ -729,7 +729,7 @@ export function registerCardTools(server: McpServer, ctx: ServerContext): void {
         "назад до maxYears лет. since — дата самого " +
         "старого документа остатка, documentCreatedAt — когда документ создан. Отбор: counterpartyRef — " +
         "контрагент, dimensionRef — договор, номенклатура, банковский счёт.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         account: z
@@ -745,7 +745,7 @@ export function registerCardTools(server: McpServer, ctx: ServerContext): void {
           "Ref_Key другого субконто: договор, номенклатура, банковский счёт",
         ).optional(),
         maxYears: z.number().int().min(1).max(10).default(3).describe("Как далеко назад искать по движениям"),
-      },
+      }),
       outputSchema: balanceOriginResultSchema,
     },
     ({ database, organization, account, asOf, counterpartyRef, dimensionRef, maxYears }) =>
@@ -775,14 +775,14 @@ export function registerCardTools(server: McpServer, ctx: ServerContext): void {
         "внутри расчётов с тем же контрагентом в строки не попадает, как в акте сверки 1С. counterpartyRef — " +
         "Ref_Key из find_counterparty, contractRef — только один договор. Сам документ «Акт сверки» " +
         "печатается из 1С.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         counterpartyRef: guidField("Ref_Key контрагента (из find_counterparty)"),
         contractRef: guidField("Ref_Key договора — сверка по одному договору").optional(),
         from: dateField("Дата начала периода"),
         to: dateField("Дата конца периода"),
-      },
+      }),
       outputSchema: reconciliationResultSchema,
     },
     ({ database, organization, counterpartyRef, contractRef, from, to }) =>

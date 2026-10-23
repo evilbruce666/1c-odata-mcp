@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { ServerContext } from "../context.js";
 import { ok, guard, withTruncationNote, databaseField, organizationField } from "./_shared.js";
@@ -35,7 +35,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
         "Ищет документы заданного типа по периоду, контрагенту, организации, статусу проведения и сумме. " +
         "Тип документа — техническое имя из list_entities, напр. 'Document_РеализацияТоваровУслуг'. " +
         "Сначала уточните имя через list_entities (class=document), а поля — через describe_entity.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         entitySet: z.string().describe("Имя документа, напр. Document_РеализацияТоваровУслуг"),
@@ -45,7 +45,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
         postedOnly: z.boolean().default(false).describe("Только проведённые документы"),
         minAmount: z.number().optional().describe("Минимальная сумма документа"),
         limit: z.number().int().positive().max(500).default(50).describe("Сколько документов вернуть"),
-      },
+      }),
       outputSchema: searchDocumentsResultSchema,
     },
     ({ database, organization, entitySet, from, to, counterpartyRef, postedOnly, minAmount, limit }) =>
@@ -126,11 +126,11 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
       description:
         "Возвращает документ по типу и Ref_Key со всеми полями, включая табличные части. " +
         "Ref_Key берётся из search_documents или истории взаиморасчётов.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         entitySet: z.string().describe("Имя документа, напр. Document_РеализацияТоваровУслуг"),
         ref: z.string().describe("Ref_Key документа (GUID)"),
-      },
+      }),
       outputSchema: odataEntitySchema,
     },
     ({ database, entitySet, ref }) =>

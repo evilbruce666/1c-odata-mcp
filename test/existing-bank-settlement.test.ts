@@ -10,7 +10,8 @@ import { ODataError } from "../src/odata/errors.js";
 import { bp30Metadata, bp30Enums } from "./helpers/metadata-snapshot.js";
 import { settlementAccountsFor } from "../src/odata/settlement-accounts.js";
 import type { EntityMeta, ODataEntity } from "../src/types/odata.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/server";
+
 const id = (n: number) => `${n}`.repeat(8) + "-1111-4111-8111-111111111111";
 const ORG = id(1),
   CP = id(2),

@@ -1,5 +1,5 @@
 import { accountPrefixes } from "../config/accounting.js";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
 import { ok, fail, guard, databaseField, organizationField, dateField } from "./_shared.js";
@@ -505,12 +505,12 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
       description:
         "Сумма выручки по проведённым документам реализации за период (по полю СуммаДокумента). " +
         "Можно ограничить организацией. Период задаётся датами YYYY-MM-DD.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         from: dateField("Дата начала периода"),
         to: dateField("Дата конца периода"),
-      },
+      }),
       outputSchema: getSalesResultSchema,
     },
     ({ database, organization, from, to }) =>
@@ -541,12 +541,12 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
       description:
         "Приход и расход денег за период по проведённым банковским и кассовым документам. " +
         "Возвращает приток, отток и сальдо. Можно ограничить организацией. Период — даты YYYY-MM-DD.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         from: dateField("Дата начала периода"),
         to: dateField("Дата конца периода"),
-      },
+      }),
       outputSchema: getCashflowResultSchema,
     },
     ({ database, organization, from, to }) =>
@@ -588,7 +588,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         "(«51», «60», «62», «90.01»): берутся все субсчета, код которых начинается с него. " +
         "Сальдо развёрнутое по аналитике (измерения и субконто), как в стандартной ОСВ по счёту. " +
         "Можно ограничить организацией. Период — даты YYYY-MM-DD включительно.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         account: z
@@ -600,7 +600,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           .describe("Код счёта или префикс субсчетов, напр. 51, 60, 62, 90.01"),
         from: dateField("Дата начала периода"),
         to: dateField("Дата конца периода"),
-      },
+      }),
       outputSchema: getAccountTurnoverResultSchema,
     },
     ({ database, organization, account, from, to }) =>
@@ -664,7 +664,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         "количество/валютная сумма, итоги Дт/Кт и свод по корреспонденциям счетов. Подходит для " +
         "любого вида документа (Document_*). Только чтение. documentEntity — имя документа из " +
         "list_entities (class=document), documentRef — его Ref_Key (из search_documents).",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         documentEntity: z
           .string()
@@ -679,7 +679,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
             "GUID",
           )
           .describe("Ref_Key документа (GUID)"),
-      },
+      }),
       outputSchema: getDocumentPostingsResultSchema,
     },
     ({ database, documentEntity, documentRef }) =>
@@ -698,12 +698,12 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         "организацией. По умолчанию — текущие остатки; параметром asOf=YYYY-MM-DD можно получить " +
         "остатки на конец указанной даты (для инвентаризации/аудита). " +
         "(В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         asOf: dateField("Дата остатков — на конец этой даты (без параметра — текущие)").optional(),
         limit: z.number().int().positive().max(1000).default(200).describe("Сколько позиций вернуть"),
-      },
+      }),
       outputSchema: getInventoryResultSchema,
     },
     ({ database, organization, asOf, limit }) =>

@@ -4,8 +4,8 @@
  *   - confirm=true на незаписываемой базе блокируется предохранителем.
  * Запуск: node --env-file=.env dist/scripts/probe-write.js
  */
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { Client } from "@modelcontextprotocol/client";
 
 type ToolText = { content: Array<{ type: string; text?: string }>; isError?: boolean };
 const line = (s = ""): void => void process.stdout.write(`${s}\n`);

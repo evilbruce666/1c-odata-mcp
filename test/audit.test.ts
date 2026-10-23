@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client } from "@modelcontextprotocol/client";
+import { McpServer, InMemoryTransport } from "@modelcontextprotocol/server";
 import { Connection, type ServerContext } from "../src/context.js";
 import { uuidTimestamp } from "../src/odata/uuid.js";
 import {

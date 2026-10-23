@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import type { Connection, ServerContext } from "../context.js";
 import { ok, fail, guard, databaseField, organizationField } from "./_shared.js";
 import { CATALOGS, REGISTERS, resolveEntity } from "../config/mapping.js";
@@ -9,6 +9,7 @@ import { fetchAll } from "../odata/pagination.js";
 import { cmp, odataGuid, buildQuery } from "../odata/query.js";
 import type { ODataEntity } from "../types/odata.js";
 import { organizationCardResultSchema } from "../schemas/output.js";
+import { z } from "zod";
 
 /**
  * Карточка организации (реквизиты) — читает Catalog_Организации целиком и
@@ -144,10 +145,10 @@ export function registerOrganizationTools(server: McpServer, ctx: ServerContext)
         "если он опубликован в OData (если нет — вернётся заметка, что нужно добавить в " +
         "«Состав OData»). Работает для любой организации базы — по названию (organization) " +
         "или автоматически, если она в базе одна.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
-      },
+      }),
       outputSchema: organizationCardResultSchema,
     },
     ({ database, organization }) =>

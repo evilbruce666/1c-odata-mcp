@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
 import { CATALOGS, resolveEntity } from "../config/mapping.js";
@@ -393,7 +393,7 @@ export function registerAuditTools(server: McpServer, ctx: ServerContext): void 
         "ответственный (реквизит документа, не автор), DataVersion как есть (не интерпретируется), " +
         "наличие движений в регистре Хозрасчетный (только факт наличия), evidence и limitations. " +
         "Только чтение. documentEntity — Document_* из list_entities, documentRef — Ref_Key.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         documentEntity: z
           .string()
@@ -408,7 +408,7 @@ export function registerAuditTools(server: McpServer, ctx: ServerContext): void 
             "GUID",
           )
           .describe("Ref_Key документа (GUID)"),
-      },
+      }),
       outputSchema: getDocumentHistoryResultSchema,
     },
     ({ database, documentEntity, documentRef }) =>

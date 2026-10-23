@@ -1,6 +1,6 @@
 import { expectedDocumentVersion, guardedDocumentAction } from "../odata/existing-bank-settlement.js";
 import { operationKind as configuredOperationKind, type AccountDefault } from "../config/accounting.js";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
 import { ok, fail, guard, databaseField, organizationField } from "./_shared.js";
@@ -1541,7 +1541,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "not_found. Закрыть операцию как not_applied можно только с markNotApplied=true после того, как " +
         "человек сам сверил базу. Новый предпросмотр допустим после not_applied либо rejected с устранённой " +
         "причиной. Ничего не записывает в 1С.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         operationId: z.string().uuid().describe("operationId из предпросмотра создания"),
         markNotApplied: z
@@ -1552,7 +1552,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
               "Сверка всё равно выполняется: найденный объект фиксируется как успех. Не раньше чем через " +
               `${NOT_APPLIED_MIN_AGE_SEC} с после попытки.`,
           ),
-      },
+      }),
       outputSchema: operationStatusSchema,
     },
     ({ database, operationId, markNotApplied }) =>
@@ -1770,7 +1770,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Создаёт нового контрагента в справочнике. ПО УМОЛЧАНИЮ это предпросмотр (dry-run) — " +
         "сначала покажите пользователю, что будет создано, и только после явного согласия " +
         "вызовите повторно с confirm=true. Запись идёт в боевую базу, поэтому без подтверждения не создавайте.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         name: z.string().min(1).describe("Наименование контрагента (Description)"),
         inn: z.string().optional().describe("ИНН"),
@@ -1785,7 +1785,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         address: z.string().optional().describe("Адрес текстом (в контактную информацию, юр. адрес)"),
         ogrn: z.string().optional().describe("ОГРН (пишется, если в базе настроен доп.реквизит «ОГРН»)"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: createResultSchema,
     },
     ({ database, name, inn, kpp, fullName, legalType, phone, email, address, ogrn, confirm }) =>
@@ -1813,13 +1813,13 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Ставит/снимает пометку на удаление у объекта (как в 1С) — мягкое удаление, " +
         "физически данные не стираются. По умолчанию предпросмотр (dry-run); для применения " +
         "повторите с confirm=true. Полезно, чтобы убрать ошибочно созданную запись.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         entitySet: z.string().describe("Имя объекта, напр. Catalog_Контрагенты"),
         ref: z.string().describe("Ref_Key объекта (GUID)"),
         mark: z.boolean().default(true).describe("true — пометить на удаление, false — снять пометку"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: markForDeletionResultSchema,
     },
     ({ database, entitySet, ref, mark, confirm }) =>
@@ -1856,7 +1856,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "покажите пользователю payload и только после согласия повторите с confirm=true. " +
         "Можно указать артикул, папку (folder — имя группы или Ref_Key) и пометить услугой (isService). " +
         "Запись идёт в боевую базу.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         name: z.string().min(1).describe("Наименование номенклатуры (Description)"),
         fullName: z.string().optional().describe("Полное наименование"),
@@ -1867,7 +1867,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .default(false)
           .describe("true — услуга (Услуга=true, вид «Услуга»), false — товар"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: createResultSchema,
     },
     ({ database, name, fullName, article, folder, isService, confirm }) =>
@@ -1896,7 +1896,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "ВАЖНО: вид договора (kind) обязателен и его НЕЛЬЗЯ выбирать самостоятельно — " +
         "уточните у пользователя, т.к. один контрагент может быть и покупателем, и поставщиком. " +
         "Номер по умолчанию «б/н», дата — сегодня. По умолчанию предпросмотр (dry-run); создание — при confirm=true.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         counterpartyRef: z.string().describe("Ref_Key контрагента (владелец договора)"),
@@ -1923,7 +1923,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .optional()
           .describe("Должность руководителя контрагента (напр. «Генеральный директор»)"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: createResultSchema,
     },
     ({
@@ -1988,7 +1988,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Для услуг задавайте content в строке — это «Содержание», именно оно печатается в счёте. " +
         "По умолчанию предпросмотр (dry-run); создание — при confirm=true. " +
         "Контрагент и (опц.) договор — по Ref_Key; позиции — по Ref_Key номенклатуры.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         counterpartyRef: z.string().describe("Ref_Key контрагента-покупателя"),
@@ -1999,7 +1999,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         // Счёт на оплату проводок не делает — счета учёта в его строках не нужны.
         lines: z.array(purchaseLine).min(1).describe("Позиции счёта"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: createResultSchema,
     },
     ({
@@ -2048,7 +2048,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Для повторного проведения Posted=true задайте repost=true, post=true и expectedDataVersion. " +
         "Версионный Post использует PostingModeOperational=false без Unpost; проверяет состояние документа, не проводки. " +
         "применение — при confirm=true. ВНИМАНИЕ: проведение меняет учётные данные — используйте осознанно.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         entitySet: z.string().describe("Имя документа, напр. Document_СчетНаОплатуПокупателю"),
         ref: z.string().describe("Ref_Key документа (GUID)"),
@@ -2065,7 +2065,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
             "Явно разрешить повторный Post уже проведённого документа; требует post=true и expectedDataVersion",
           ),
         confirm: confirmField,
-      },
+      }),
       outputSchema: postDocumentResultSchema,
     },
     ({ database, entitySet, ref, post, repost, confirm, expectedDataVersion }) =>
@@ -2134,7 +2134,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Изменяет произвольные поля объекта 1С через PATCH по Ref_Key. Имена полей — технические " +
         '(узнать через describe_entity), напр. {"ИНН":"7701234567"}. По умолчанию предпросмотр (dry-run); ' +
         "применение — при confirm=true. Мощный инструмент: меняйте только те поля, что указали.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         entitySet: z.string().describe("Имя объекта, напр. Catalog_Контрагенты"),
         ref: z.string().describe("Ref_Key объекта (GUID)"),
@@ -2142,7 +2142,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))
           .describe("Поля для изменения: { техническоеИмя: значение }"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: patchResultSchema,
     },
     ({ database, entitySet, ref, fields, confirm }) =>
@@ -2161,7 +2161,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       description:
         "Изменяет реквизиты контрагента по Ref_Key (наименование/ИНН/КПП/полное имя). " +
         "По умолчанию предпросмотр (dry-run); применение — при confirm=true. Указывайте только меняемые поля.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         ref: z.string().describe("Ref_Key контрагента"),
         name: z.string().optional().describe("Новое наименование (Description)"),
@@ -2173,7 +2173,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         address: z.string().optional().describe("Адрес текстом (юр. адрес)"),
         ogrn: z.string().optional().describe("ОГРН (если в базе настроен доп.реквизит)"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: patchResultSchema,
     },
     ({ database, ref, name, inn, kpp, fullName, phone, email, address, ogrn, confirm }) =>
@@ -2225,14 +2225,14 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       description:
         "Изменяет реквизиты номенклатуры по Ref_Key (наименование/полное имя/артикул). " +
         "По умолчанию предпросмотр (dry-run); применение — при confirm=true. Указывайте только меняемые поля.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         ref: z.string().describe("Ref_Key номенклатуры"),
         name: z.string().optional().describe("Новое наименование (Description)"),
         fullName: z.string().optional().describe("Полное наименование"),
         article: z.string().optional().describe("Артикул"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: patchResultSchema,
     },
     ({ database, ref, name, fullName, article, confirm }) =>
@@ -2290,7 +2290,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Документ НЕПРОВЕДЁННЫЙ; провести — вручную в 1С или post_document (тогда 1С сформирует проводки Дт 41/19 Кт 60; счёт расчётов — по настройке договора, источник виден в предпросмотре). " +
         "Позиции могут нести content (Содержание строки) — для услуг вроде доставки. " +
         "По умолчанию dry-run; создание — при confirm=true. Контрагент — поставщик, договор — вида «СПоставщиком».",
-      inputSchema: purchaseDocInput,
+      inputSchema: z.object(purchaseDocInput),
       outputSchema: createResultSchema,
     },
     ({
@@ -2339,7 +2339,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "счета учёта не нужны. Табличная часть «Товары» вмещает и товары, и услуги (напр. доставку — задайте " +
         "content/Содержание). Реквизиты входящего счёта: incomingNumber/incomingDate. " +
         "По умолчанию dry-run; создание — при confirm=true. Контрагент — поставщик, договор — вида «СПоставщиком».",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         counterpartyRef: z.string().describe("Ref_Key контрагента-поставщика"),
@@ -2355,7 +2355,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         sumIncludesVat: z.boolean().default(true).describe("Сумма включает НДС"),
         lines: z.array(purchaseLine).min(1).describe("Позиции счёта (товары и услуги в одной таблице)"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: createResultSchema,
     },
     ({
@@ -2411,7 +2411,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "задаётся явно вызывающим (обычно чтобы совпасть с номером уже отправленной банковской " +
         "платёжки), не генерируется автоматически. По умолчанию dry-run (confirm=false); создание — " +
         "при confirm=true. Счёт организации и валюта — резолвятся автоматически, если не заданы.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         counterpartyRef: z.string().describe("Ref_Key контрагента-получателя (из find_counterparty)"),
@@ -2452,7 +2452,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         priority: z.number().int().default(5).describe("Очередность платежа (ОчередностьПлатежа)"),
         comment: z.string().optional().describe("Комментарий к документу"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: createResultSchema,
     },
     ({
@@ -2527,7 +2527,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Документ НЕПРОВЕДЁННЫЙ; провести — вручную в 1С или post_document (тогда 1С сформирует проводки Дт 62 Кт 90, Дт 90 Кт 41 и др.; счёт расчётов — по настройке договора, источник виден в предпросмотре). " +
         "Позиции могут нести content (Содержание строки — печатается в УПД) и свои счета доходов/расходов. " +
         "По умолчанию dry-run; создание — при confirm=true. Контрагент — покупатель, договор — вида «СПокупателем».",
-      inputSchema: shipmentDocInput,
+      inputSchema: z.object(shipmentDocInput),
       outputSchema: createResultSchema,
     },
     ({
@@ -2584,7 +2584,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Строки пишутся в ту табличную часть, которая у документа заполнена («Товары» или «Услуги»). " +
         "Документ должен быть НЕПРОВЕДЁННЫМ " +
         "(если проведён — сначала отмените проведение через post_document). По умолчанию dry-run; применение — при confirm=true.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         entitySet: z.string().describe("Имя документа, напр. Document_РеализацияТоваровУслуг"),
         ref: z.string().describe("Ref_Key документа"),
@@ -2596,7 +2596,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
               "задавайте content и счета заново)",
           ),
         confirm: confirmField,
-      },
+      }),
       outputSchema: patchResultSchema,
     },
     ({ database, entitySet, ref, lines, confirm }) =>
@@ -2652,7 +2652,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Создаёт документ «Возврат товаров от покупателя» с табличной частью «Товары». НЕПРОВЕДЁННЫЙ; " +
         "провести — post_document (проводки сторнируют реализацию: Дт 90.02 Кт 41, Дт 62 Кт 90.01 со знаком минус; счёт расчётов — по настройке договора, источник виден в предпросмотре). " +
         "dry-run/confirm. Контрагент — покупатель.",
-      inputSchema: salesDocInput,
+      inputSchema: z.object(salesDocInput),
       outputSchema: createResultSchema,
     },
     ({
@@ -2704,7 +2704,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Создаёт документ «Возврат товаров поставщику» с табличной частью «Товары». НЕПРОВЕДЁННЫЙ; " +
         "провести — post_document (проводки сторнируют поступление: Дт 60 Кт 41/19; счёт расчётов — по настройке договора, источник виден в предпросмотре). dry-run/confirm. " +
         "Контрагент — поставщик.",
-      inputSchema: purchaseDocInput,
+      inputSchema: z.object(purchaseDocInput),
       outputSchema: createResultSchema,
     },
     ({ database, organization, counterpartyRef, contractRef, warehouse, date, lines, confirm }) =>
@@ -2741,7 +2741,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       description:
         "Создаёт документ «Перемещение товаров» между складами. НЕПРОВЕДЁННЫЙ; провести — post_document " +
         "(проводки Дт 41(склад-получатель) Кт 41(склад-отправитель)). dry-run/confirm.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         fromWarehouse: z.string().describe("Название склада-отправителя"),
@@ -2749,7 +2749,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
         lines: whLines,
         confirm: confirmField,
-      },
+      }),
       outputSchema: createResultSchema,
     },
     ({ database, organization, fromWarehouse, toWarehouse, date, lines, confirm }) =>
@@ -2790,7 +2790,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       description:
         "Создаёт документ «Оприходование товаров» (излишки). НЕПРОВЕДЁННЫЙ; провести — post_document " +
         "(проводки Дт 41 Кт 91.01). Можно указать документ-основание — инвентаризацию. dry-run/confirm.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         warehouse: z.string().optional().describe("Название склада (если несколько)"),
@@ -2798,7 +2798,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
         lines: whLines,
         confirm: confirmField,
-      },
+      }),
       outputSchema: createResultSchema,
     },
     ({ database, organization, warehouse, inventoryRef, date, lines, confirm }) =>
@@ -2838,7 +2838,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       description:
         "Создаёт документ «Списание товаров» (недостача/порча). НЕПРОВЕДЁННЫЙ; провести — post_document " +
         "(проводки Дт 94 Кт 41). Можно указать документ-основание — инвентаризацию. dry-run/confirm.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         warehouse: z.string().optional().describe("Название склада (если несколько)"),
@@ -2846,7 +2846,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
         lines: whLines,
         confirm: confirmField,
-      },
+      }),
       outputSchema: createResultSchema,
     },
     ({ database, organization, warehouse, inventoryRef, date, lines, confirm }) =>
@@ -2887,7 +2887,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Создаёт документ «Инвентаризация товаров на складе» (сверка факт/учёт). Документ НЕ проводится " +
         "(движений не делает) — служит основанием для оприходования/списания. dry-run/confirm. " +
         "Для каждой позиции: фактическое и учётное количество.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         warehouse: z.string().optional().describe("Название склада (если несколько)"),
@@ -2904,7 +2904,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .min(1)
           .describe("Позиции инвентаризации"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: createResultSchema,
     },
     ({ database, organization, warehouse, date, lines, confirm }) =>
@@ -2960,13 +2960,13 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Добавляет одну позицию в табличную часть «Товары» существующего НЕПРОВЕДЁННОГО документа " +
         "(счёт/поступление/реализация), сохраняя прежние строки со всеми их реквизитами " +
         "(содержание, счета учёта, номенклатурная группа). dry-run/confirm.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         entitySet: z.string().describe("Имя документа, напр. Document_РеализацияТоваровУслуг"),
         ref: z.string().describe("Ref_Key документа (GUID)"),
         line: lineObject.describe("Добавляемая позиция"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: patchResultSchema,
     },
     ({ database, entitySet, ref, line, confirm }) =>
@@ -3011,7 +3011,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Правки: date — дата; fields — реквизиты шапки техническими именами (как в update_entity); " +
         "lines — правки строк по номеру (напр. количество и содержание). Сумма документа " +
         "пересчитывается по строкам, если не задана явно в fields. Счета расчётов — как в исходном документе; если в fields сменён договор — по настройке нового договора. По умолчанию dry-run; запись — при confirm=true.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         entitySet: z.string().describe("Имя документа, напр. Document_СчетНаОплатуПокупателю"),
         ref: z.string().describe("Ref_Key документа-образца (GUID)"),
@@ -3036,7 +3036,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .optional()
           .describe("Правки строк табличной части по номеру (остальные строки копируются как есть)"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: createResultSchema,
     },
     ({ database, entitySet, ref, date, fields, lines, confirm }) =>
@@ -3102,13 +3102,13 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       description:
         "Удаляет строку (по номеру LineNumber, начиная с 1) из табличной части «Товары» существующего " +
         "НЕПРОВЕДЁННОГО документа. Нельзя удалить последнюю строку. dry-run/confirm.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         entitySet: z.string().describe("Имя документа, напр. Document_РеализацияТоваровУслуг"),
         ref: z.string().describe("Ref_Key документа (GUID)"),
         lineNumber: z.number().int().positive().describe("Номер строки (с 1)"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: patchResultSchema,
     },
     ({ database, entitySet, ref, lineNumber, confirm }) =>
@@ -3149,7 +3149,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "в акте и УПД (номер приложения, номер договора, период оказания). 1С его не заполнит. " +
         "Счета доходов/расходов при необходимости задаются явно (напр. 90.01.2 / 90.02.2). " +
         "dry-run/confirm. Контрагент — покупатель; позиции — услуги-номенклатура.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         counterpartyRef: z.string().describe("Ref_Key покупателя"),
@@ -3175,7 +3175,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         orgBankAccount: orgBankAccountField,
         lines: z.array(lineObject).min(1).describe("Позиции-услуги"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: createResultSchema,
     },
     ({
@@ -3228,7 +3228,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "номенклатурной группе). Отличается от create_act тем, что требует номенклатурную группу " +
         "(субконто счёта 90.01) — она НЕ угадывается. Проводки Дт 62 Кт 90.01, НДС 90.03 (счёт расчётов — по настройке договора, источник виден в предпросмотре). " +
         "НЕПРОВЕДЁННЫЙ; провести — post_document. dry-run/confirm.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         counterpartyRef: z.string().describe("Ref_Key покупателя"),
@@ -3248,7 +3248,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         ),
         lines: z.array(lineObject).min(1).describe("Позиции-услуги"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: createResultSchema,
     },
     ({
@@ -3320,7 +3320,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Сумма взаиморасчётов для рублёвого договора заполняется сама; для договора в валюте или у.е. " +
         "курс укажите в 1С, иначе 1С проведёт оплату без проводок. " +
         "Банковский счёт организации берётся по названию или первый. dry-run/confirm.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         counterpartyRef: z.string().describe("Ref_Key покупателя"),
@@ -3339,7 +3339,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         orgBankAccount: orgBankAccountField,
         date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: createResultSchema,
     },
     ({
@@ -3442,7 +3442,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "провести — post_document. Вид операции ОБЯЗАТЕЛЕН и не угадывается (напр. «ОплатаПоставщику», " +
         "«ПеречислениеНалога», «ПеречислениеЗП», «ПереводНаДругойСчет», «ПрочееСписание»). " +
         "Для оплаты поставщику с договором заполняется расшифровка: счёт расчётов — по настройке договора, источник виден в предпросмотре (обычно 60), сумма взаиморасчётов — для рублёвого договора. dry-run/confirm.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         operationKind: z
@@ -3459,7 +3459,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
         comment: z.string().optional().describe("Комментарий"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: createResultSchema,
     },
     ({
@@ -3557,7 +3557,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "«ВозвратОтПодотчетногоЛица»). " +
         "Для оплаты по договору заполняется расшифровка: счёт расчётов — по настройке договора, источник виден в предпросмотре, сумма взаиморасчётов — для рублёвого договора. " +
         "dry-run/confirm.",
-      inputSchema: cashDocInput,
+      inputSchema: z.object(cashDocInput),
       outputSchema: createResultSchema,
     },
     (a) =>
@@ -3580,7 +3580,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "«ВыплатаЗаработнойПлатыПоВедомостям»). " +
         "Для оплаты по договору заполняется расшифровка: счёт расчётов — по настройке договора, источник виден в предпросмотре, сумма взаиморасчётов — для рублёвого договора. " +
         "dry-run/confirm.",
-      inputSchema: cashDocInput,
+      inputSchema: z.object(cashDocInput),
       outputSchema: createResultSchema,
     },
     (a) =>
@@ -3601,7 +3601,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Создаёт «Счёт-фактура выданный» НА ОСНОВАНИИ реализации (или иного документа отгрузки). " +
         "Реквизиты (организация, контрагент, договор, суммы, НДС) наследуются от документа-основания. " +
         "НЕПРОВЕДЁННЫЙ; провести — post_document. dry-run/confirm.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         baseDocumentRef: z.string().describe("Ref_Key документа-основания (реализация товаров и услуг)"),
         baseDocumentEntity: z
@@ -3613,7 +3613,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         operationCode: z.string().optional().describe("Код вида операции (по умолчанию 01)"),
         date: z.string().optional().describe("Дата и дата выставления YYYY-MM-DD (по умолчанию сегодня)"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: createResultSchema,
     },
     ({ database, baseDocumentRef, baseDocumentEntity, operationCode, date, confirm }) =>
@@ -3658,7 +3658,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Создаёт «Счёт-фактура полученный» НА ОСНОВАНИИ поступления товаров и услуг. " +
         "Реквизиты наследуются от основания; дату входящего счёта-фактуры продавца указывают вручную " +
         "(в поступлении её нет). НЕПРОВЕДЁННЫЙ; провести — post_document. dry-run/confirm.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         baseDocumentRef: z.string().describe("Ref_Key документа-основания (поступление товаров и услуг)"),
         baseDocumentEntity: z
@@ -3669,7 +3669,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         operationCode: z.string().optional().describe("Код вида операции (по умолчанию 01)"),
         date: z.string().optional().describe("Дата регистрации YYYY-MM-DD (по умолчанию сегодня)"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: createResultSchema,
     },
     ({ database, baseDocumentRef, baseDocumentEntity, incomingDate, operationCode, date, confirm }) =>
@@ -3722,7 +3722,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Заводит расчётный счёт контрагента (подчинённый справочник): банк по БИК + номер счёта. " +
         "Можно сделать счёт основным. По умолчанию dry-run; создание — при confirm=true. " +
         "Ref контрагента — из find_counterparty.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         ownerRef: z.string().describe("Ref_Key контрагента-владельца счёта"),
         accountNumber: z.string().min(1).describe("Номер расчётного счёта"),
@@ -3731,7 +3731,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         label: z.string().optional().describe("Наименование счёта (по умолчанию — номер счёта)"),
         makeMain: z.boolean().default(false).describe("Сделать основным банковским счётом контрагента"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: createResultSchema,
     },
     ({ database, ownerRef, accountNumber, bik, currency, label, makeMain, confirm }) =>
@@ -3773,7 +3773,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       description:
         "Заводит контактное лицо контрагента (директор, бухгалтер, менеджер): ФИО + должность. " +
         "Можно сделать основным контактным лицом. По умолчанию dry-run; создание — при confirm=true.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         ownerRef: z.string().describe("Ref_Key контрагента"),
         name: z.string().min(1).describe("ФИО (наименование контактного лица)"),
@@ -3782,7 +3782,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         position: z.string().optional().describe("Должность (напр. «Директор»)"),
         makeMain: z.boolean().default(false).describe("Сделать основным контактным лицом контрагента"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: createResultSchema,
     },
     ({ database, ownerRef, name, lastName, firstName, position, makeMain, confirm }) =>
@@ -3821,7 +3821,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Создаёт папку/группу в иерархическом справочнике 1С (по умолчанию — Контрагенты). " +
         "Опционально вкладывает в родительскую папку (parent — имя папки или Ref_Key). " +
         "В 1С «папки» = группы справочника; отдельных тегов в типовой Бухгалтерии нет. dry-run/confirm.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         entitySet: z
           .string()
@@ -3830,7 +3830,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         name: z.string().min(1).describe("Название папки"),
         parent: z.string().optional().describe("Родительская папка — имя или Ref_Key (для вложенности)"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: createResultSchema,
     },
     ({ database, entitySet, name, parent, confirm }) =>
@@ -3850,7 +3850,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       description:
         "Перемещает элемент справочника (напр. контрагента) в папку/группу — задаёт родителя (Parent_Key). " +
         "folder — имя папки или Ref_Key. По умолчанию справочник Контрагенты. dry-run/confirm.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         entitySet: z
           .string()
@@ -3859,7 +3859,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         ref: z.string().describe("Ref_Key перемещаемого элемента"),
         folder: z.string().describe("Папка назначения — имя или Ref_Key"),
         confirm: confirmField,
-      },
+      }),
       outputSchema: patchResultSchema,
     },
     ({ database, entitySet, ref, folder, confirm }) =>

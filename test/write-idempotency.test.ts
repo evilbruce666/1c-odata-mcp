@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { InputError } from "../src/errors.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/server";
 import { createServer } from "../src/mcp/server.js";
 import { CATALOGS } from "../src/config/mapping.js";
 import { currentWriteOperationId, currentWriteRequestHash } from "../src/odata/write-operation-context.js";

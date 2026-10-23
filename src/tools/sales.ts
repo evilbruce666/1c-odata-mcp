@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
 import { ok, fail, guard, databaseField, organizationField, dateField } from "./_shared.js";
@@ -179,7 +179,7 @@ export function registerSalesTools(server: McpServer, ctx: ServerContext): void 
         "(ИП/ЮрЛицо/ФизЛицо/Нерезидент/Госорган) или договором. Отвечает на вопросы вроде «топ покупателей " +
         "за год», «выручка по месяцам», «сколько продали ИП», «продажи по конкретному договору». " +
         "Период — даты YYYY-MM-DD.",
-      inputSchema: commonInput,
+      inputSchema: z.object(commonInput),
       outputSchema: salesBreakdownResultSchema,
     },
     (a) =>
@@ -197,7 +197,7 @@ export function registerSalesTools(server: McpServer, ctx: ServerContext): void 
         "поставщику / месяцу / договору / итогу. Можно фильтровать конкретным поставщиком, категорией " +
         "контрагента или договором. Отвечает на вопросы вроде «топ поставщиков за год», «закупки по " +
         "месяцам», «сколько закупили у ИП». Период — даты YYYY-MM-DD.",
-      inputSchema: commonInput,
+      inputSchema: z.object(commonInput),
       outputSchema: salesBreakdownResultSchema,
     },
     (a) =>

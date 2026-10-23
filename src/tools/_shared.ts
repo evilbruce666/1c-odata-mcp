@@ -1,4 +1,4 @@
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { ODataError } from "../odata/errors.js";
 import { NotPublishedError, publicationHelp } from "../odata/publication.js";

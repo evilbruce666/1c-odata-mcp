@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
 import { ok, fail, guard, databaseField, organizationField, dateField } from "./_shared.js";
@@ -360,13 +360,13 @@ function settlementsTool(
     {
       title: def.title,
       description: def.description,
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         asOf: dateField("Дата сальдо — на конец этой даты (без параметра — текущее)").optional(),
         limit: z.number().int().positive().max(1000).default(100).describe("Сколько контрагентов вернуть"),
         ...agingFields,
-      },
+      }),
       outputSchema: side === "receivable" ? getDebtorsResultSchema : getCreditorsResultSchema,
     },
     ({ database, organization, asOf, limit, aging, overdueOnly, defaultTermDays }) =>
@@ -747,14 +747,14 @@ export function registerDebtTools(server: McpServer, ctx: ServerContext): void {
         "счёт), статус unpaid / partial / paid / overpaid, сколько дней счёту. status=open (по умолчанию) — " +
         "неоплаченные и частично оплаченные, с текущим сальдо покупателя по 62 (customerBalance) для " +
         "сверки; all — все. Счета старше 90 дней видны только с явным from. Период — по дате счёта; без from — последние 90 дней.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         from: dateField("Счета с даты (без параметра — 90 дней назад)").optional(),
         to: dateField("Счета по дату (без параметра — сегодня)").optional(),
         status: z.enum(INVOICE_STATUSES).default("open").describe("open | all"),
         limit: z.number().int().positive().max(1000).default(100).describe("Сколько счетов вернуть"),
-      },
+      }),
       outputSchema: unpaidInvoicesResultSchema,
     },
     ({ database, organization, from, to, status, limit }) =>
@@ -777,11 +777,11 @@ export function registerDebtTools(server: McpServer, ctx: ServerContext): void {
         "(спецсчета, депозиты), 57 (переводы в пути, эквайринг) из регистра Хозрасчетный — по каждому " +
         "банковскому счёту и кассе, итоги available (50+51+52), special (55), inTransit (57). Для валютных " +
         "счетов — сумма в валюте. asOf=YYYY-MM-DD — остатки на конец даты; без него — текущие.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         asOf: dateField("Дата остатков — на конец этой даты (без параметра — текущие)").optional(),
-      },
+      }),
       outputSchema: cashBalanceResultSchema,
     },
     ({ database, organization, asOf }) =>

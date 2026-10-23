@@ -3,8 +3,8 @@ import { registerCounterpartyGroupTools } from "../tools/counterparty-groups.js"
 import { registerSettlementSettingsTools } from "../tools/settlement-settings.js";
 import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { McpServer } from "@modelcontextprotocol/server";
+import type { CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { ServerContext } from "../context.js";
 import { createResultSchema } from "../schemas/output.js";
@@ -100,14 +100,18 @@ export function createServer(ctx: ServerContext): McpServer {
     const isCreateTool = name.startsWith("write.") && config.outputSchema === createResultSchema;
     if (!isCreateTool && !JOURNALED_UPDATE_TOOLS.has(name)) return original(name, annotatedConfig, cb);
 
-    const inputSchema = {
-      ...(config.inputSchema as Record<string, unknown>),
-      operationId: z
-        .string()
-        .uuid()
-        .optional()
-        .describe("UUID из предпросмотра. Передайте его при confirm=true, чтобы повтор не создал дубликат."),
-    };
+    // v2: inputSchema — z.object(...); добавляем operationId через extend (разворот zod-объекта
+    // как простого объекта даёт не схему, а его внутренние поля).
+    const operationIdField = z
+      .string()
+      .uuid()
+      .optional()
+      .describe("UUID из предпросмотра. Передайте его при confirm=true, чтобы повтор не создал дубликат.");
+    const base = config.inputSchema;
+    const inputSchema =
+      base instanceof z.ZodObject
+        ? base.extend({ operationId: operationIdField })
+        : { ...(base as Record<string, unknown>), operationId: operationIdField };
     const wrapped = async (args: Record<string, unknown>, extra: unknown): Promise<CallToolResult> => {
       if (name === "write.document.post_document" && args.expectedDataVersion === undefined)
         return cb(args, extra);

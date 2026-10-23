@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
 import { ok, guard, databaseField, organizationField } from "./_shared.js";
@@ -974,11 +974,11 @@ export function registerMonthCloseTools(server: McpServer, ctx: ServerContext): 
         "не попасть; перезакрытие этого времени не меняет). Для перехода в карточку счёта: analyticsRefs с " +
         "analyticsTypes Catalog_Контрагенты — counterpartyRef, иначе dimensionRef. У регламентных операций в БП " +
         "Posted = false — это нормально. Только чтение: закрыть месяц через OData нельзя, только проверить результат.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         month: z.string().regex(MONTH_RE, "Месяц в формате YYYY-MM").describe("Проверяемый месяц, YYYY-MM"),
-      },
+      }),
       outputSchema: monthCloseResultSchema,
     },
     ({ database, organization, month }) =>

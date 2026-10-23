@@ -3,7 +3,8 @@ import { parseConfig } from "../src/config/env.js";
 import { ServerContext } from "../src/context.js";
 import { createServer } from "../src/mcp/server.js";
 import { contractSettlementKind } from "../src/odata/settlement-accounts.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/server";
+
 const single = { ODATA_BASE_URL: "https://example.invalid/odata/", ODATA_USERNAME: "u", ODATA_PASSWORD: "p" };
 const multi = {
   ODATA_DB_BY_BASE_URL: single.ODATA_BASE_URL,

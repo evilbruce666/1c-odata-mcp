@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
 import { InputError } from "../errors.js";
@@ -96,7 +96,11 @@ export function registerCounterpartyGroupTools(server: McpServer, ctx: ServerCon
       title: "Создать группу контрагентов",
       description:
         "Создаёт только явно названную группу контрагентов в указанной группе parentRef; пустой GUID parentRef означает корень. Проверяет родителя и иерархию, сначала предпросмотр, затем confirm с тем же operationId и контрольное чтение. Не создаёт произвольные бизнес-группы без поручения владельца.",
-      inputSchema: { database: databaseField, ...createSchema.shape, confirm: z.boolean().default(false) },
+      inputSchema: z.object({
+        database: databaseField,
+        ...createSchema.shape,
+        confirm: z.boolean().default(false),
+      }),
       outputSchema: patchResultSchema,
     },
     (args) =>
@@ -133,7 +137,11 @@ export function registerCounterpartyGroupTools(server: McpServer, ctx: ServerCon
       title: "Указать группу отдельного контрагента",
       description:
         "Меняет только Parent_Key отдельного контрагента (subjectKind=counterparty, IsFolder=false). Перемещение самих групп запрещено: безопасность глубины их потомков не проверяется. parentRef — точная группа или пустой GUID для корня. Проверяет отсутствие удаления и цикла; expectedDataVersion обязателен, PATCH с If-Match, предпросмотр/confirm/operationId и контроль сохранения остальных полей. Удаление недоступно.",
-      inputSchema: { database: databaseField, ...moveSchema.shape, confirm: z.boolean().default(false) },
+      inputSchema: z.object({
+        database: databaseField,
+        ...moveSchema.shape,
+        confirm: z.boolean().default(false),
+      }),
       outputSchema: patchResultSchema,
     },
     (args) =>

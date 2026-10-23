@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { ServerContext } from "../context.js";
 import { ok, fail, guard, databaseField } from "./_shared.js";
@@ -39,7 +39,7 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
         "Показывает настроенные базы 1С, к которым подключён сервер, и какая из них основная. " +
         "Имя базы передаётся в параметр database остальных инструментов. " +
         "Вызывайте, если нужно понять, какие базы доступны или сравнить данные нескольких баз.",
-      inputSchema: {},
+      inputSchema: z.object({}),
       outputSchema: listDatabasesResultSchema,
     },
     () =>
@@ -56,7 +56,7 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
         "Проверяет доступность OData-сервиса 1С и корректность авторизации для выбранной базы. " +
         "Перечитывает $metadata и обновляет кеш схемы; возвращает версию OData и число видимых объектов. " +
         "Вызывайте первым, если другие инструменты выдают ошибки.",
-      inputSchema: { database: databaseField },
+      inputSchema: z.object({ database: databaseField }),
       outputSchema: healthCheckResultSchema,
     },
     ({ database }) =>
@@ -104,7 +104,7 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
         "Список организаций (юрлиц) внутри выбранной базы 1С. " +
         "Название организации передаётся в параметр organization аналитических инструментов " +
         "(get_sales, get_debtors, get_cashflow, get_inventory и др.), чтобы получить данные по одному юрлицу.",
-      inputSchema: { database: databaseField },
+      inputSchema: z.object({ database: databaseField }),
       outputSchema: listOrganizationsResultSchema,
     },
     ({ database }) =>
@@ -123,7 +123,7 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
         "справочники, документы, регистры, перечисления и т.д. " +
         "Используйте, чтобы понять, какие данные доступны в базе. " +
         "Можно отфильтровать по классу и/или подстроке имени.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         class: z
           .enum([
@@ -138,7 +138,7 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
           .optional()
           .describe("Ограничить одним классом объектов"),
         search: z.string().optional().describe("Подстрока в имени объекта (без учёта регистра)"),
-      },
+      }),
       outputSchema: listEntitiesResultSchema,
     },
     ({ database, class: cls, search }) =>
@@ -166,10 +166,10 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
         "Показывает поля (с типами) и связи конкретного объекта 1С из $metadata. " +
         "Принимает техническое имя EntitySet, напр. 'Catalog_Контрагенты' или " +
         "'Document_РеализацияТоваровУслуг'. Используйте перед поиском, чтобы узнать доступные поля.",
-      inputSchema: {
+      inputSchema: z.object({
         database: databaseField,
         entitySet: z.string().describe("Техническое имя объекта, напр. Catalog_Контрагенты"),
-      },
+      }),
       outputSchema: describeEntityResultSchema,
     },
     ({ database, entitySet }) =>

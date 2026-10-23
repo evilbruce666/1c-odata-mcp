@@ -6,8 +6,8 @@
  * Запуск: npm run manifest (после него — npm test: тест согласованности сверит тексты).
  */
 import { readFileSync, writeFileSync } from "node:fs";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { Client } from "@modelcontextprotocol/client";
 import { PROMPTS } from "../mcp/prompts.js";
 
 async function main(): Promise<void> {
