@@ -100,7 +100,7 @@
       "inputSchema": {
         "type": "object",
         "properties": {},
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -134,7 +134,7 @@
         "required": [
           "databases"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -145,7 +145,7 @@
     {
       "name": "read.system.health_check",
       "title": "Проверка соединения",
-      "description": "Проверяет доступность OData-сервиса 1С и корректность авторизации для выбранной базы. Возвращает версию OData и число опубликованных объектов. Вызывайте первым, если другие инструменты выдают ошибки.",
+      "description": "Проверяет доступность OData-сервиса 1С и корректность авторизации для выбранной базы. Перечитывает $metadata и обновляет кеш схемы; возвращает версию OData и число видимых объектов. Вызывайте первым, если другие инструменты выдают ошибки.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -154,7 +154,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -243,7 +243,7 @@
           "readOnly",
           "regulatedCurrency"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -263,7 +263,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -298,7 +298,7 @@
           "count",
           "organizations"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -335,7 +335,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -376,7 +376,7 @@
           "database",
           "groups"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -403,7 +403,7 @@
         "required": [
           "entitySet"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -457,7 +457,7 @@
           "fields",
           "relations"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -501,7 +501,7 @@
         "required": [
           "query"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -564,7 +564,7 @@
           "count",
           "truncated"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -591,7 +591,7 @@
         "required": [
           "ref"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -631,7 +631,7 @@
           "ref",
           "name"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -677,7 +677,7 @@
         "required": [
           "ref"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -758,7 +758,7 @@
           "count",
           "truncated"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -804,7 +804,7 @@
         "required": [
           "ref"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -885,7 +885,7 @@
           "count",
           "truncated"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -896,7 +896,7 @@
     {
       "name": "read.document.search_documents",
       "title": "Поиск документов",
-      "description": "Ищет документы заданного типа по периоду, контрагенту, организации, статусу проведения и сумме. Тип документа — техническое имя из list_entities, напр. 'Document_РеализацияТоваровУслуг'. Сначала уточните имя через list_entities (class=document), а поля — через describe_entity.",
+      "description": "Ищет документы по периоду, номеру, контрагенту, организации, статусу проведения и сумме. Тип задаётся видом (kind: продажи, покупки, банк, касса…) или техническим именем entitySet из list_entities; без обоих — по всем основным видам документов сразу («все документы за 10 сентября», «документ №33»). number — номер как его называет человек: «33» находит 0000-000033, а также входящий номер документа контрагента (накладной поставщика). Нумерация в 1С каждый год своя — по одному номеру обычно несколько документов разных лет; уточняйте период. Редкие виды (зарплата, регламентные операции) — только через entitySet.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -909,8 +909,26 @@
             "type": "string"
           },
           "entitySet": {
+            "description": "Техническое имя документа, напр. Document_РеализацияТоваровУслуг; не вместе с kind",
+            "type": "string"
+          },
+          "kind": {
+            "description": "Вид документа: sales — реализации и акты, customer_invoices — счета покупателям, purchases — поступления, supplier_invoices — счета поставщиков, bank — банк (поступления, списания, платёжки), cash — касса (ПКО, РКО), vat_invoices — счета-фактуры, warehouse — складские",
             "type": "string",
-            "description": "Имя документа, напр. Document_РеализацияТоваровУслуг"
+            "enum": [
+              "sales",
+              "customer_invoices",
+              "purchases",
+              "supplier_invoices",
+              "bank",
+              "cash",
+              "vat_invoices",
+              "warehouse"
+            ]
+          },
+          "number": {
+            "description": "Номер документа: «33», «№ 0000-000033», входящий «ГК-22537»",
+            "type": "string"
           },
           "from": {
             "description": "Дата начала (YYYY-MM-DD)",
@@ -941,10 +959,7 @@
             "maximum": 500
           }
         },
-        "required": [
-          "entitySet"
-        ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -1011,7 +1026,7 @@
           "count",
           "truncated"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -1043,12 +1058,12 @@
           "entitySet",
           "ref"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
         "properties": {},
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -1086,7 +1101,7 @@
           "from",
           "to"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -1154,7 +1169,7 @@
           "byDocument",
           "scan"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -1192,7 +1207,7 @@
           "from",
           "to"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -1268,7 +1283,7 @@
           "byDocument",
           "scan"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -1314,7 +1329,7 @@
           "from",
           "to"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -1457,7 +1472,7 @@
           "accounts",
           "scan"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -1468,7 +1483,7 @@
     {
       "name": "read.accounting.get_document_postings",
       "title": "Проводки документа",
-      "description": "Бухгалтерские проводки, сформированные одним документом (регистратором), из регистра бухгалтерии Хозрасчетный: Дт/Кт (код, наименование, Ref_Key счёта, субконто), сумма, количество/валютная сумма, итоги Дт/Кт и свод по корреспонденциям счетов. Подходит для любого вида документа (Document_*). Только чтение. documentEntity — имя документа из list_entities (class=document), documentRef — его Ref_Key (из search_documents).",
+      "description": "Бухгалтерские проводки, сформированные одним документом (регистратором), из регистра бухгалтерии Хозрасчетный: Дт/Кт (код, наименование, Ref_Key счёта, субконто), сумма, у каждой стороны dimensionsStatus: present/empty — субконто есть/подтверждённо пусты, not_in_schema/not_returned — аналитику установить нельзя (это не «пусто»). количество/валютная сумма, итоги Дт/Кт и свод по корреспонденциям счетов. Подходит для любого вида документа (Document_*). Только чтение. documentEntity — имя документа из list_entities (class=document), documentRef — его Ref_Key (из search_documents).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1491,7 +1506,7 @@
           "documentEntity",
           "documentRef"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -1603,6 +1618,15 @@
                             "additionalProperties": {}
                           }
                         },
+                        "dimensionsStatus": {
+                          "type": "string",
+                          "enum": [
+                            "present",
+                            "empty",
+                            "not_in_schema",
+                            "not_returned"
+                          ]
+                        },
                         "divisionRef": {
                           "type": "string"
                         }
@@ -1656,6 +1680,15 @@
                             ],
                             "additionalProperties": {}
                           }
+                        },
+                        "dimensionsStatus": {
+                          "type": "string",
+                          "enum": [
+                            "present",
+                            "empty",
+                            "not_in_schema",
+                            "not_returned"
+                          ]
                         },
                         "divisionRef": {
                           "type": "string"
@@ -1740,6 +1773,9 @@
           "note": {
             "type": "string"
           },
+          "dimensionsNote": {
+            "type": "string"
+          },
           "source": {
             "type": "object",
             "properties": {
@@ -1789,7 +1825,7 @@
           "source",
           "scan"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -1825,7 +1861,7 @@
             "maximum": 1000
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -1908,7 +1944,7 @@
           "items",
           "scan"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -1960,7 +1996,7 @@
             "maximum": 3650
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -2039,7 +2075,7 @@
           "debtors",
           "scan"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -2091,7 +2127,7 @@
             "maximum": 3650
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -2170,7 +2206,7 @@
           "creditors",
           "scan"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -2220,7 +2256,7 @@
             "maximum": 1000
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -2334,7 +2370,7 @@
           "invoices",
           "scan"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -2363,7 +2399,7 @@
             "description": "Дата остатков — на конец этой даты (без параметра — текущие) (YYYY-MM-DD)"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -2446,7 +2482,7 @@
           "balances",
           "scan"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -2478,7 +2514,7 @@
         "required": [
           "month"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -2620,7 +2656,7 @@
           "checks",
           "scan"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -2683,7 +2719,7 @@
           "from",
           "to"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -2785,7 +2821,7 @@
           "entries",
           "scan"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -2841,7 +2877,7 @@
         "required": [
           "account"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -2934,7 +2970,7 @@
           "items",
           "scan"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -2983,7 +3019,7 @@
           "from",
           "to"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -3149,7 +3185,7 @@
           "byContract",
           "scan"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -3236,7 +3272,7 @@
           "from",
           "to"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -3352,7 +3388,7 @@
           "groups",
           "scan"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -3401,7 +3437,7 @@
             "maximum": 1000
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -3517,7 +3553,7 @@
           "items",
           "scan"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -3570,7 +3606,7 @@
           "from",
           "to"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -3674,7 +3710,7 @@
           "groups",
           "scan"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -3749,7 +3785,7 @@
           "from",
           "to"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -3857,7 +3893,7 @@
           "groups",
           "scan"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -3932,7 +3968,7 @@
           "from",
           "to"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -4040,7 +4076,7 @@
           "groups",
           "scan"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -4064,7 +4100,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -4221,7 +4257,7 @@
           "database",
           "ref"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -4255,7 +4291,7 @@
           "documentEntity",
           "documentRef"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -4475,7 +4511,7 @@
           "limitations",
           "scan"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -4486,7 +4522,7 @@
     {
       "name": "write.operation.status",
       "title": "Статус операции записи",
-      "description": "Состояние операции записи по operationId из предпросмотра. После потери ответа созданный объект сверяется по назначенной ссылке (старые операции — по метке), строки документа — по числу строк, настройка регистра — по точному составному ключу и отпечатку проверяемых полей. Совпадение фиксирует успех без повторной отправки. Для изменения группы, Post/Unpost и неподтверждённого результата регистра ответ unverifiable удерживает повтор и требует ручной сверки. Отсутствие объекта само по себе не разрешает новый запрос: он мог ещё выполняться. Новый предпросмотр допустим после подтверждённого not_applied либо rejected с устранённой причиной. Ничего не записывает в 1С.",
+      "description": "Состояние операции записи по operationId из предпросмотра. После потери ответа созданный объект сверяется по назначенной ссылке (старые операции — по метке), строки документа — по числу строк, настройка регистра — по точному составному ключу и отпечатку проверяемых полей. Совпадение фиксирует успех без повторной отправки. Для изменения группы, Post/Unpost и неподтверждённого результата регистра ответ unverifiable удерживает повтор и требует ручной сверки. Отсутствие объекта само по себе не разрешает новый запрос: 1С могла ещё выполнять его, сколько бы времени ни прошло, — ответ not_found. Закрыть операцию как not_applied можно только с markNotApplied=true после того, как человек сам сверил базу. Новый предпросмотр допустим после not_applied либо rejected с устранённой причиной. Ничего не записывает в 1С.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -4499,12 +4535,16 @@
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
             "description": "operationId из предпросмотра создания"
+          },
+          "markNotApplied": {
+            "description": "Только по явному решению человека, который сам сверил базу 1С и убедился, что записи нет. Сверка всё равно выполняется: найденный объект фиксируется как успех. Не раньше чем через 120 с после попытки.",
+            "type": "boolean"
           }
         },
         "required": [
           "operationId"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -4541,13 +4581,16 @@
           },
           "note": {
             "type": "string"
+          },
+          "lastError": {
+            "type": "string"
           }
         },
         "required": [
           "operationId",
           "status"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -4623,7 +4666,7 @@
         "required": [
           "name"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -4680,7 +4723,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -4723,7 +4766,7 @@
           "entitySet",
           "ref"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -4757,7 +4800,7 @@
             "type": "boolean"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -4814,7 +4857,7 @@
         "required": [
           "name"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -4871,7 +4914,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -4954,7 +4997,7 @@
           "counterpartyRef",
           "kind"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -5011,7 +5054,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -5119,7 +5162,7 @@
           "counterpartyRef",
           "lines"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -5176,7 +5219,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -5188,7 +5231,7 @@
     {
       "name": "write.document.post_document",
       "title": "Провести / отменить проведение документа",
-      "description": "Проводит документ (влияет на учёт) или отменяет проведение. По умолчанию предпросмотр (dry-run); применение — при confirm=true. ВНИМАНИЕ: проведение меняет учётные данные — используйте осознанно.",
+      "description": "Проводит документ (влияет на учёт) или отменяет проведение. По умолчанию предпросмотр (dry-run); Для повторного проведения Posted=true задайте repost=true, post=true и expectedDataVersion. Версионный Post использует PostingModeOperational=false без Unpost; проверяет состояние документа, не проводки. применение — при confirm=true. ВНИМАНИЕ: проведение меняет учётные данные — используйте осознанно.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -5215,6 +5258,10 @@
             "description": "true — провести, false — отменить проведение",
             "type": "boolean"
           },
+          "repost": {
+            "description": "Явно разрешить повторный Post уже проведённого документа; требует post=true и expectedDataVersion",
+            "type": "boolean"
+          },
           "confirm": {
             "default": false,
             "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя; при подтверждении передавайте operationId из результата предпросмотра и те же аргументы. После таймаута повторяйте подтверждение с тем же id, не создавая новый предпросмотр.",
@@ -5231,7 +5278,7 @@
           "entitySet",
           "ref"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -5250,6 +5297,32 @@
           },
           "done": {
             "type": "boolean"
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "verificationScope": {
+            "type": "string",
+            "enum": [
+              "document_state",
+              "journal_receipt"
+            ]
+          },
+          "accountingMovementsVerified": {
+            "type": "boolean"
+          },
+          "readbackFetched": {
+            "type": "boolean"
+          },
+          "readback": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "readbackNote": {
+            "type": "string"
           },
           "ref": {
             "type": "string"
@@ -5292,7 +5365,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -5346,7 +5419,7 @@
           "ref",
           "fields"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -5397,7 +5470,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -5462,7 +5535,7 @@
         "required": [
           "ref"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -5513,7 +5586,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -5558,7 +5631,7 @@
         "required": [
           "ref"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -5609,7 +5682,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -5717,7 +5790,7 @@
           "counterpartyRef",
           "lines"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -5774,7 +5847,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -5894,7 +5967,7 @@
           "counterpartyRef",
           "lines"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -5951,7 +6024,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -6089,7 +6162,7 @@
           "purposeText",
           "recipientText"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -6146,7 +6219,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -6274,7 +6347,7 @@
           "counterpartyRef",
           "lines"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -6331,7 +6404,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -6425,7 +6498,7 @@
           "ref",
           "lines"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -6476,7 +6549,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -6600,7 +6673,7 @@
           "counterpartyRef",
           "lines"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -6657,7 +6730,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -6765,7 +6838,7 @@
           "counterpartyRef",
           "lines"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -6822,7 +6895,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -6904,7 +6977,7 @@
           "toWarehouse",
           "lines"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -6961,7 +7034,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -7041,7 +7114,7 @@
         "required": [
           "lines"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -7098,7 +7171,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -7178,7 +7251,7 @@
         "required": [
           "lines"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -7235,7 +7308,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -7317,7 +7390,7 @@
         "required": [
           "lines"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -7374,7 +7447,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -7470,7 +7543,7 @@
           "ref",
           "line"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -7521,7 +7594,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -7618,7 +7691,7 @@
           "entitySet",
           "ref"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -7675,7 +7748,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -7726,7 +7799,7 @@
           "ref",
           "lineNumber"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -7777,7 +7850,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -7907,7 +7980,7 @@
           "counterpartyRef",
           "lines"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -7964,7 +8037,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -8089,7 +8162,7 @@
           "nomenclatureGroupRef",
           "lines"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -8146,7 +8219,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -8214,7 +8287,7 @@
           "contractRef",
           "amount"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -8271,7 +8344,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -8348,7 +8421,7 @@
           "operationKind",
           "amount"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -8405,7 +8478,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -8482,7 +8555,7 @@
           "operationKind",
           "amount"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -8539,7 +8612,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -8616,7 +8689,7 @@
           "operationKind",
           "amount"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -8673,7 +8746,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -8724,7 +8797,7 @@
         "required": [
           "baseDocumentRef"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -8781,7 +8854,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -8836,7 +8909,7 @@
         "required": [
           "baseDocumentRef"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -8893,7 +8966,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -8957,7 +9030,7 @@
           "accountNumber",
           "bik"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -9014,7 +9087,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -9076,7 +9149,7 @@
           "ownerRef",
           "name"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -9133,7 +9206,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -9182,7 +9255,7 @@
         "required": [
           "name"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -9239,7 +9312,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -9282,7 +9355,7 @@
           "ref",
           "folder"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -9333,7 +9406,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -9402,12 +9475,12 @@
           "side",
           "expectedDataVersion"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
         "properties": {},
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -9457,7 +9530,7 @@
           "contractRef",
           "settlementKind"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -9508,7 +9581,7 @@
           "key",
           "scope"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false
       },
       "annotations": {
@@ -9609,7 +9682,7 @@
           "mode",
           "accounts"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -9660,7 +9733,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -9718,7 +9791,7 @@
           "settlementKind",
           "scope"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -9769,7 +9842,7 @@
           "key",
           "scope"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false
       },
       "annotations": {
@@ -9878,7 +9951,7 @@
           "mode",
           "accounts"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -9929,7 +10002,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -9974,7 +10047,7 @@
           "name",
           "parentRef"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -10025,7 +10098,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
@@ -10081,7 +10154,7 @@
           "parentRef",
           "expectedDataVersion"
         ],
-        "$schema": "http://json-schema.org/draft-07/schema#"
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
       },
       "outputSchema": {
         "type": "object",
@@ -10132,7 +10205,7 @@
             "type": "string"
           }
         },
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
       },
       "annotations": {
