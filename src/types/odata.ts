@@ -45,7 +45,7 @@ export interface MetaProperty {
 /** Навигационное свойство (связь) из $metadata. */
 export interface MetaNavigation {
   name: string;
-  /** Целевой тип связи (имя EntityType). */
+  /** Целевой тип связи (имя EntityType, у 1С совпадает с EntitySet); "" — связь не описана. */
   toType: string;
   /** true, если связь «к многим». */
   collection: boolean;

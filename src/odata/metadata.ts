@@ -46,6 +46,16 @@ interface RawEntityType {
   Property?: RawProp | RawProp[];
   NavigationProperty?: RawNav | RawNav[];
 }
+interface RawAssociation {
+  "@_Name": string;
+  End?:
+    | { "@_Role": string; "@_Type": string; "@_Multiplicity"?: string }
+    | Array<{
+        "@_Role": string;
+        "@_Type": string;
+        "@_Multiplicity"?: string;
+      }>;
+}
 interface RawEntitySet {
   "@_Name": string;
   "@_EntityType": string;
@@ -79,6 +89,18 @@ export function parseMetadata(xml: string): MetadataMap {
     typeByName.set(t["@_Name"], t);
   }
 
+  // Связь ссылочного поля: NavigationProperty → Association → End с ролью ToRole несёт тип цели
+  // («Контрагент» → Catalog_Контрагенты) и кратность.
+  const association = new Map<string, RawAssociation>();
+  for (const a of asArray<RawAssociation>(schema?.Association as RawAssociation | RawAssociation[]))
+    association.set(a["@_Name"], a);
+  const navTarget = (n: RawNav) => {
+    const end = asArray(association.get(stripNamespace(n["@_Relationship"] ?? ""))?.End).find(
+      (e) => e["@_Role"] === n["@_ToRole"],
+    );
+    return { toType: end ? stripNamespace(end["@_Type"]) : "", collection: end?.["@_Multiplicity"] === "*" };
+  };
+
   const sets = asArray<RawEntitySet>(
     (schema?.EntityContainer as { EntitySet?: RawEntitySet | RawEntitySet[] })?.EntitySet,
   );
@@ -98,8 +120,7 @@ export function parseMetadata(xml: string): MetadataMap {
 
     const navigations: MetaNavigation[] = asArray<RawNav>(raw?.NavigationProperty).map((n) => ({
       name: n["@_Name"],
-      toType: stripNamespace(n["@_ToRole"] ?? ""),
-      collection: false, // уточняется по Association; для карты достаточно имени
+      ...navTarget(n),
     }));
 
     const keyRefs = asArray(raw?.Key?.PropertyRef).map((k) => k["@_Name"]);
@@ -127,6 +148,7 @@ function stripNamespace(name: string): string {
 function findSchema(doc: Record<string, unknown>):
   | {
       EntityType?: RawEntityType | RawEntityType[];
+      Association?: RawAssociation | RawAssociation[];
       EntityContainer?: { EntitySet?: RawEntitySet | RawEntitySet[] };
     }
   | undefined {

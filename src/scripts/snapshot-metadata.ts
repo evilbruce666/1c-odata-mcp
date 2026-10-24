@@ -44,6 +44,8 @@ export function pruneMetadata(xml: string, sets: string[]): string {
   const entities = blocks("EntityType").filter(([n]) => keep(n));
   const complex = blocks("ComplexType").filter(([n]) => keep(n));
   const enums = blocks("EnumType");
+  // Связи ссылочных полей (на какой объект ведёт Контрагент_Key и т. п.) — по имени исходного объекта.
+  const associations = blocks("Association").filter(([n]) => keep(n));
   const entitySets = [...text.matchAll(/\t+<EntitySet Name="([^"]+)"[^>]*?\/>\n/g)].filter((m) =>
     keep(m[1]!),
   );
@@ -57,7 +59,7 @@ export function pruneMetadata(xml: string, sets: string[]): string {
     throw new Error("Неожиданный формат $metadata: нет EntityType/EntityContainer.");
   return (
     head +
-    [...entities, ...complex, ...enums].map(([, b]) => b).join("") +
+    [...entities, ...complex, ...enums, ...associations].map(([, b]) => b).join("") +
     container +
     entitySets.map((m) => m[0]).join("") +
     functions.map(([, b]) => b).join("") +

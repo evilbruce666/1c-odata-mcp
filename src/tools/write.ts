@@ -35,6 +35,7 @@ import { currentWriteOperationId, fingerprintRecordFields } from "../odata/write
 import { InputError } from "../errors.js";
 import { ODataError } from "../odata/errors.js";
 import { getDocumentPostings } from "./registers.js";
+import { tryPreviewView } from "./preview-view.js";
 
 /** Тип ссылки на номенклатуру в табличной части (полиморфная ссылка 1С). */
 const NOMENCLATURE_TYPE = "StandardODATA.Catalog_Номенклатура";
@@ -1380,6 +1381,7 @@ async function createOrPreview(
       database: conn.cfg.name,
       writableBase: conn.cfg.writable,
       willCreate: entitySet,
+      ...(await tryPreviewView(conn, entitySet, payload)),
       payload,
       ...extra,
       note: conn.cfg.writable
@@ -1413,6 +1415,25 @@ async function createOrPreview(
   });
 }
 
+/**
+ * Текущие значения изменяемых полей шапки — для «было → станет» в предпросмотре. Не прочитались —
+ * предпросмотр без изменений, а не отказ.
+ */
+async function currentValues(
+  conn: Connection,
+  entitySet: string,
+  guid: string,
+  fields: Record<string, unknown>,
+): Promise<Record<string, unknown> | undefined> {
+  const props = new Set(
+    ((await conn.getMetadata()).entities.get(entitySet)?.properties ?? []).map((p) => p.name),
+  );
+  const keys = Object.keys(fields).filter((k) => !Array.isArray(fields[k]) && props.has(k));
+  const select = [...keys, ...keys.map((k) => `${k.replace(/_Key$/, "")}_Type`).filter((k) => props.has(k))];
+  if (select.length === 0) return undefined;
+  return conn.client.getEntity(`${entitySet}(guid'${guid}')${buildQuery({ select })}`).catch(() => undefined);
+}
+
 /** Общий путь изменения (PATCH): dry-run при confirm=false, иначе применяет. */
 async function patchOrPreview(
   conn: Connection,
@@ -1429,6 +1450,7 @@ async function patchOrPreview(
       dryRun: true,
       database: conn.cfg.name,
       willPatch: `${entitySet}(${guid})`,
+      ...(await tryPreviewView(conn, entitySet, fields, await currentValues(conn, entitySet, guid, fields))),
       fields,
       ...extra,
       note: conn.cfg.writable
