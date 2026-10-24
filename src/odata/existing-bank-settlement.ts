@@ -326,18 +326,216 @@ export async function applyBankSettlementSettings(
  * Инструмент суммы не меняет — только предупреждает до проведения.
  */
 export function paymentAmountWarnings(doc: ODataEntity, rows: unknown[]): string[] {
-  const total = doc["СуммаДокумента"];
-  if (typeof total !== "number") return [];
-  const amounts = rows.map((r) => (r as ODataEntity)["СуммаПлатежа"]);
-  if (amounts.some((a) => typeof a !== "number")) return [];
-  const allocated = (amounts as number[]).reduce((a, b) => a + b, 0);
-  if (Math.abs(allocated - total) < 0.005) return [];
-  return [
-    `Сумма документа ${total} не совпадает с суммой расшифровки платежа ${Math.round(allocated * 100) / 100}` +
-      `${rows.length === 0 ? " (строк расшифровки нет)" : ""}. Проводки формируются по расшифровке — ` +
-      "до проведения исправьте сумму строки в 1С; этот инструмент суммы не меняет.",
-  ];
+  const problems = paymentAmountProblems(doc, rows);
+  return problems.length
+    ? [
+        `${problems.join("; ")}. Проводки формируются по расшифровке — до проведения исправьте: ${ALIGN_HINT}.`,
+      ]
+    : [];
 }
+
+/** Как исправить суммы расшифровки штатно — для подсказок и отказа проведения. */
+export const ALIGN_HINT =
+  "write.document.align_bank_payment_amounts (одна строка, рубли) или в форме документа в 1С";
+
+/**
+ * Расхождения сумм «Расшифровки платежа» с документом, при которых 1С проведёт документ с неверными
+ * проводками по расчётам или без них. Без строк (налоги, прочие операции без договора) — не проверяем:
+ * сумма там в шапке, расшифровка пуста законно. Неизвестные (не числа) — не утверждаем.
+ */
+export function paymentAmountProblems(doc: ODataEntity, rows: unknown[]): string[] {
+  const total = doc["СуммаДокумента"];
+  if (typeof total !== "number" || rows.length === 0) return [];
+  const list = rows as ODataEntity[];
+  const problems: string[] = [];
+  const amounts = list.map((r) => r["СуммаПлатежа"]);
+  if (amounts.every((a) => typeof a === "number")) {
+    const allocated = (amounts as number[]).reduce((a, b) => a + b, 0);
+    if (Math.abs(allocated - total) >= 0.005)
+      problems.push(
+        `сумма документа ${total} не совпадает с суммой расшифровки платежа ${Math.round(allocated * 100) / 100}`,
+      );
+  }
+  const emptySettlement = list.some(
+    (r) =>
+      typeof r[CONTRACT] === "string" &&
+      r[CONTRACT] !== EMPTY_GUID &&
+      "СуммаВзаиморасчетов" in r &&
+      !r["СуммаВзаиморасчетов"] &&
+      typeof r["СуммаПлатежа"] === "number" &&
+      r["СуммаПлатежа"] !== 0,
+  );
+  if (emptySettlement) problems.push("в строке с договором не заполнена сумма взаиморасчётов");
+  return problems;
+}
+
+/**
+ * Перед проведением банковского документа: расхождения сумм расшифровки (см. paymentAmountProblems).
+ * Не банковский документ — без запроса. Возвращает текст отказа или undefined.
+ */
+export async function bankPostingBlocker(
+  conn: Connection,
+  entitySet: string,
+  ref: string,
+): Promise<string | undefined> {
+  if (!bankSets.has(entitySet)) return undefined;
+  const props = new Set(
+    ((await conn.getMetadata()).entities.get(entitySet)?.properties ?? []).map((p) => p.name),
+  );
+  if (!props.has(ROWS) || !props.has("СуммаДокумента")) return undefined;
+  const doc = await conn.client.getEntity(
+    `${entitySet}(${odataGuid(ref)})?$format=json&$select=СуммаДокумента,${ROWS}`,
+  );
+  const problems = paymentAmountProblems(doc, Array.isArray(doc[ROWS]) ? (doc[ROWS] as unknown[]) : []);
+  if (!problems.length) return undefined;
+  return (
+    `Проведение не отправлено: ${problems.join("; ")}. 1С проведёт такой документ, но проводки по расчётам ` +
+    `будут неверными или не сформируются. Исправьте суммы: ${ALIGN_HINT}, затем проведите снова.`
+  );
+}
+
+export const alignBankPaymentInput = {
+  entitySet: z.string(),
+  ref: exactRef,
+  expectedDataVersion: expectedDocumentVersion,
+};
+
+/** Процент НДС из значения перечисления: «НДС22», «НДС22_122» → 22; «БезНДС», «НДС0» → 0. */
+function vatPercent(rate: unknown): number | undefined {
+  if (rate === "БезНДС" || rate === "" || rate === undefined || rate === null) return 0;
+  const m = /^НДС(\d+)(?:_\d+)?$/.exec(String(rate));
+  return m ? Number(m[1]) : undefined;
+}
+
+/**
+ * Выравнивает единственную строку «Расшифровки платежа» непроведённого рублёвого документа по сумме
+ * документа (#61): сумма платежа и сумма взаиморасчётов = сумма документа, курс и кратность 1, НДС по
+ * ставке строки (сумма платежа включает НДС: сумма × ставка / (100 + ставка), как считает форма).
+ * Ничего не угадывает: несколько строк, валюта, условные единицы, неизвестная ставка — отказ.
+ * Остальные поля документа и строки сохраняются; версия, журнал и контрольное чтение — как у
+ * apply_bank_settlement_settings. Проведение — отдельным вызовом.
+ */
+export async function alignBankPaymentAmounts(
+  conn: Connection,
+  input: unknown,
+  confirm: boolean,
+): Promise<Record<string, unknown>> {
+  const p = z.object(alignBankPaymentInput).parse(input);
+  if (!bankSets.has(p.entitySet))
+    throw new InputError("Поддержаны только существующие банковские поступления и списания.");
+  const { doc, meta, path } = await readVersionedDocument(conn, p.entitySet, p.ref, p.expectedDataVersion);
+  if (doc.Posted !== false)
+    throw new InputError(
+      "Документ проведён. Отмена проведения выполняется отдельно; автоматической отмены нет.",
+    );
+  requireTypes(meta, { СуммаДокумента: "Edm.Double", ВалютаДокумента_Key: "Edm.Guid" });
+  const md = await conn.getMetadata();
+  const rowMeta = md.entities.get(`${p.entitySet}_${ROWS}`);
+  requireTypes(rowMeta, {
+    [CONTRACT]: "Edm.Guid",
+    СуммаПлатежа: "Edm.Double",
+    СуммаВзаиморасчетов: "Edm.Double",
+  });
+  const rowTypes = new Map(rowMeta!.properties.map((f) => [f.name, f.type]));
+  if (!Array.isArray(doc[ROWS])) throw new InputError("Расшифровка платежа неизвестна; изменение запрещено.");
+  const rows = doc[ROWS] as ODataEntity[];
+  if (rows.length !== 1)
+    throw new InputError(
+      rows.length === 0
+        ? "В расшифровке платежа нет строк — выравнивать нечего."
+        : "Несколько строк платежа: как разнести сумму, решает человек; изменение запрещено.",
+    );
+  const row = rows[0]!;
+  const total = doc.СуммаДокумента;
+  if (typeof total !== "number" || !(total > 0)) throw new InputError("Сумма документа не заполнена.");
+
+  // Рубли и договор в рублях без условных единиц — тогда курс и кратность 1 и считать нечего.
+  const available = new Set(md.entities.keys());
+  const currencies = resolveEntity(CATALOGS.currencies, available);
+  if (!currencies) throw new InputError("Справочник валют не опубликован.");
+  const currency = exactRef.parse(doc.ВалютаДокумента_Key);
+  const cur = await conn.client.getEntity(
+    `${currencies}(${odataGuid(currency)})?$format=json&$select=Ref_Key,Code`,
+  );
+  if (String(cur.Code ?? "").trim() !== (conn.behavior.regulatedCurrencyCode ?? "643"))
+    throw new InputError(
+      "Документ не в валюте регламентированного учёта: курс не угадываем, изменение запрещено.",
+    );
+  const contractRef = exactRef.parse(row[CONTRACT]);
+  if (contractRef === EMPTY_GUID)
+    throw new InputError("В строке не указан договор — сначала apply_bank_settlement_settings.");
+  const contracts = resolveEntity(CATALOGS.contracts, available);
+  if (!contracts) throw new InputError("Договоры не опубликованы.");
+  const contract = await conn.client.getEntity(`${contracts}(${odataGuid(contractRef)})?$format=json`);
+  if (
+    contract.РасчетыВУсловныхЕдиницах !== false ||
+    String(contract.ВалютаВзаиморасчетов_Key).toLowerCase() !== currency
+  )
+    throw new InputError(
+      "Договор в условных единицах или в другой валюте: курс не угадываем, изменение запрещено.",
+    );
+  const percent = vatPercent(row.СтавкаНДС);
+  if (percent === undefined)
+    throw new InputError(`Ставка НДС строки «${String(row.СтавкаНДС)}» не поддержана.`);
+
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const aligned: ODataEntity = {
+    ...row,
+    СуммаПлатежа: total,
+    СуммаВзаиморасчетов: total,
+    ...(rowTypes.has("КурсВзаиморасчетов") ? { КурсВзаиморасчетов: 1 } : {}),
+    ...(rowTypes.has("КратностьВзаиморасчетов") ? { КратностьВзаиморасчетов: 1 } : {}),
+    ...(rowTypes.has("СуммаНДС") ? { СуммаНДС: round2((total * percent) / (100 + percent)) } : {}),
+  };
+  const changes = Object.keys(aligned)
+    .filter((k) => !same(aligned[k], row[k]))
+    .map((k) => ({ field: k, from: row[k] ?? null, to: aligned[k] }));
+  if (changes.length === 0)
+    throw new InputError("Суммы строки уже совпадают с суммой документа; изменение не нужно.");
+  const payload: ODataEntity = { [ROWS]: [aligned] };
+  const headers = { "If-Match": p.expectedDataVersion };
+  const prepared = {
+    method: "PATCH",
+    path,
+    payload,
+    headers,
+    observedDocument: published(doc, meta),
+    changes,
+  };
+  if (!confirm) {
+    await conn.client.prepareCreate(p.entitySet, prepared, { withRefKey: false });
+    return {
+      dryRun: true,
+      database: conn.cfg.name,
+      ...prepared,
+      note: "Предпросмотр. Меняется только эта строка расшифровки; проведение — отдельным вызовом.",
+    };
+  }
+  const result = await conn.client.writeRecordOnce(
+    p.entitySet,
+    prepared,
+    () =>
+      verifyAfter(
+        () => conn.client.request(path, "PATCH", payload, headers),
+        () => conn.client.getEntity(path),
+        withoutVersion({ ...published(doc, meta), ...payload }),
+        withoutVersion,
+      ),
+    { kind: "documentState", ref: p.ref },
+  );
+  return {
+    updated: true,
+    verified: true,
+    database: conn.cfg.name,
+    entitySet: p.entitySet,
+    ref: result.Ref_Key,
+    dataVersion: result.DataVersion,
+    changes,
+  };
+}
+
+const withoutVersion = (record: ODataEntity): ODataEntity =>
+  Object.fromEntries(Object.entries(record).filter(([field]) => field !== "DataVersion"));
 /** Separate bound action: fresh read guards version; OData Post CAS is not claimed. */
 export async function guardedDocumentAction(
   conn: Connection,

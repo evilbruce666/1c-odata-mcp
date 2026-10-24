@@ -1,4 +1,9 @@
-import { expectedDocumentVersion, guardedDocumentAction } from "../odata/existing-bank-settlement.js";
+import {
+  ALIGN_HINT,
+  bankPostingBlocker,
+  expectedDocumentVersion,
+  guardedDocumentAction,
+} from "../odata/existing-bank-settlement.js";
 import { operationKind as configuredOperationKind, type AccountDefault } from "../config/accounting.js";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
@@ -1300,9 +1305,17 @@ export function emptySettlementWarning(
   ]
     .filter(Boolean)
     .join(" и ");
+  // Подсказка — только к инструменту, который это действительно исправляет (#61): update_entity
+  // табличную часть не меняет.
+  const how = [
+    headerEmpty || rowEmpty ? "счёт расчётов — write.document.apply_bank_settlement_settings" : "",
+    sumEmpty ? `сумму взаиморасчётов — ${ALIGN_HINT}` : "",
+  ]
+    .filter(Boolean)
+    .join("; ");
   return (
     `ВНИМАНИЕ: в созданном документе ${what} — при проведении 1С не сформирует проводки по расчётам. ` +
-    "Заполните до проведения (write.entity.update_entity)."
+    `Заполните до проведения: ${how}.`
   );
 }
 
@@ -2176,6 +2189,11 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           throw new InputError("repost=true требует post=true и точную expectedDataVersion.");
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
+        // Суммы расшифровки банковского документа — и в предпросмотре: ошибку видно до подтверждения (#61).
+        if (post) {
+          const blocker = await bankPostingBlocker(conn, entitySet, ref.replace(/[{}']/g, ""));
+          if (blocker) return fail(blocker);
+        }
         if (expectedDataVersion !== undefined) {
           if (post && confirm) {
             const missing = await missingContract(conn, entitySet, ref);

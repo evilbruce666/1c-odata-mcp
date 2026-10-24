@@ -53,6 +53,7 @@ const INSTRUCTIONS =
  */
 const JOURNALED_UPDATE_TOOLS = new Set([
   "write.document.apply_bank_settlement_settings",
+  "write.document.align_bank_payment_amounts",
   "write.document.post_document",
   "write.accounting.set_contract_settlement_settings",
   "write.accounting.set_settlement_settings",

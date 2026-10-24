@@ -283,11 +283,11 @@ describe("existing bank inherited settlement", () => {
     const p = await f.run();
     expect(p.isError).toBeFalsy();
     expect(String(data(p).warnings)).toContain(
-      "Сумма документа 150 не совпадает с суммой расшифровки платежа 0",
+      "сумма документа 150 не совпадает с суммой расшифровки платежа 0",
     );
     const r = await f.run({ confirm: true, operationId: data(p).operationId });
     expect(r.isError).toBeFalsy();
-    expect(String(data(r).warnings)).toContain("суммы не меняет");
+    expect(String(data(r).warnings)).toContain("align_bank_payment_amounts");
     expect((f.doc()[ROWS] as ODataEntity[])[0]!.СуммаПлатежа).toBe(0);
   });
 
@@ -1033,12 +1033,139 @@ describe("published header business values survive settlement PATCH", () => {
 });
 
 describe("paymentAmountWarnings (#61)", () => {
-  it("совпадает — без предупреждения; нет строк — предупреждение; суммы неизвестны — молчим", () => {
+  it("совпадает — без предупреждения; нет строк (налоги, прочее) — молчим; суммы неизвестны — молчим", () => {
     expect(
       paymentAmountWarnings({ СуммаДокумента: 100 }, [{ СуммаПлатежа: 60 }, { СуммаПлатежа: 40 }]),
     ).toEqual([]);
-    expect(paymentAmountWarnings({ СуммаДокумента: 100 }, [])[0]).toContain("строк расшифровки нет");
+    expect(paymentAmountWarnings({ СуммаДокумента: 100 }, [])).toEqual([]);
     expect(paymentAmountWarnings({ СуммаДокумента: 100 }, [{ СуммаПлатежа: "?" }])).toEqual([]);
     expect(paymentAmountWarnings({}, [{ СуммаПлатежа: 1 }])).toEqual([]);
+  });
+});
+
+describe("align_bank_payment_amounts и запрет проведения при расхождении сумм (#61)", () => {
+  const ALIGN = "write.document.align_bank_payment_amounts";
+  const POST = "write.document.post_document";
+  /** Строка с полями взаиморасчётов, как в БП 3.0; суммы строки — пустые. */
+  async function broken() {
+    const f = await fixture();
+    const rowSet = `${SET}_${ROWS}`;
+    const rowMeta = f.entities.get(rowSet)!;
+    f.entities.set(rowSet, {
+      ...rowMeta,
+      properties: [
+        ...rowMeta.properties,
+        { name: "СуммаВзаиморасчетов", type: "Edm.Double", nullable: true },
+        { name: "КурсВзаиморасчетов", type: "Edm.Double", nullable: true },
+        { name: "КратностьВзаиморасчетов", type: "Edm.Int64", nullable: true },
+      ],
+    });
+    const row = (f.doc()[ROWS] as ODataEntity[])[0]!;
+    f.setDoc({
+      [ROWS]: [
+        {
+          ...row,
+          СуммаПлатежа: 0,
+          СуммаВзаиморасчетов: 0,
+          КурсВзаиморасчетов: 0,
+          КратностьВзаиморасчетов: 0,
+        },
+      ],
+    });
+    return f;
+  }
+  const rowOf = (f: Awaited<ReturnType<typeof fixture>>) => (f.doc()[ROWS] as ODataEntity[])[0]!;
+
+  it("предпросмотр «было → станет» без записи, подтверждение — один PATCH, остальное сохранено", async () => {
+    const f = await broken();
+    const p = await f.run({}, ALIGN);
+    expect(p.isError).toBeFalsy();
+    const changes = data(p).changes as Array<{ field: string; from: unknown; to: unknown }>;
+    expect(changes).toEqual(
+      expect.arrayContaining([
+        { field: "СуммаПлатежа", from: 0, to: 150 },
+        { field: "СуммаВзаиморасчетов", from: 0, to: 150 },
+        { field: "КурсВзаиморасчетов", from: 0, to: 1 },
+        { field: "КратностьВзаиморасчетов", from: 0, to: 1 },
+        { field: "СуммаНДС", from: 0, to: 25 },
+      ]),
+    );
+    expect(f.writes).toHaveLength(0);
+    const r = await f.run({ confirm: true, operationId: data(p).operationId }, ALIGN);
+    expect(r.isError).toBeFalsy();
+    expect(data(r)).toMatchObject({ updated: true, verified: true });
+    expect(f.writes).toHaveLength(1);
+    expect(f.writes[0]).toMatchObject({ method: "PATCH", headers: { "If-Match": "v1" } });
+    expect(rowOf(f)).toMatchObject({ СуммаПлатежа: 150, СуммаВзаиморасчетов: 150, СуммаНДС: 25 });
+    expect(rowOf(f).Субконто).toBe("preserved");
+    expect(f.doc().СуммаДокумента).toBe(150);
+  });
+
+  it.each([
+    [
+      "несколько строк",
+      (f: Awaited<ReturnType<typeof broken>>) => f.setDoc({ [ROWS]: [rowOf(f), rowOf(f)] }),
+      "Несколько строк",
+    ],
+    ["проведён", (f: Awaited<ReturnType<typeof broken>>) => f.setDoc({ Posted: true }), "проведён"],
+    ["валюта", (f: Awaited<ReturnType<typeof broken>>) => f.setCurrency({ Code: "840" }), "валюте"],
+    [
+      "условные единицы",
+      (f: Awaited<ReturnType<typeof broken>>) => f.setContract({ РасчетыВУсловныхЕдиницах: true }),
+      "условных единицах",
+    ],
+    [
+      "неизвестная ставка",
+      (f: Awaited<ReturnType<typeof broken>>) => f.setDoc({ [ROWS]: [{ ...rowOf(f), СтавкаНДС: "НДСЧто" }] }),
+      "Ставка НДС",
+    ],
+  ] as const)("отказ без записи: %s", async (_label, spoil, reason) => {
+    const f = await broken();
+    spoil(f);
+    const r = await f.run({}, ALIGN);
+    expect(r.isError).toBe(true);
+    expect(JSON.stringify(r.content)).toContain(reason);
+    expect(f.writes).toHaveLength(0);
+  });
+
+  it("суммы уже совпадают — отказ «изменение не нужно»", async () => {
+    const f = await fixture();
+    const rowSet = `${SET}_${ROWS}`;
+    const rowMeta = f.entities.get(rowSet)!;
+    f.entities.set(rowSet, {
+      ...rowMeta,
+      properties: [
+        ...rowMeta.properties,
+        { name: "СуммаВзаиморасчетов", type: "Edm.Double", nullable: true },
+      ],
+    });
+    f.setDoc({ [ROWS]: [{ ...rowOf(f), СуммаПлатежа: 150, СуммаВзаиморасчетов: 150, СуммаНДС: 25 }] });
+    const r = await f.run({}, ALIGN);
+    expect(JSON.stringify(r.content)).toContain("уже совпадают");
+  });
+
+  it("проведение отказывает до отправки, пока суммы расходятся; после выравнивания — проводит", async () => {
+    const f = await broken();
+    // Простое проведение (без версии) — отказ на подтверждении, до отправки Post.
+    const blocked = await f.run({ post: true, confirm: true, expectedDataVersion: undefined }, POST);
+    expect(blocked.isError).toBe(true);
+    expect(JSON.stringify(blocked.content)).toContain("Проведение не отправлено");
+    expect(JSON.stringify(blocked.content)).toContain("align_bank_payment_amounts");
+    expect(f.writes).toHaveLength(0);
+    // Предпросмотр проведения показывает тот же отказ — до подтверждения.
+    expect((await f.run({ post: true }, POST)).isError).toBe(true);
+
+    const p = await f.run({}, ALIGN);
+    await f.run({ confirm: true, operationId: data(p).operationId }, ALIGN);
+    const pp = await f.run({ post: true, expectedDataVersion: "v2" }, POST);
+    expect(pp.isError).toBeFalsy();
+  });
+
+  it("сумма совпадает, но пуста сумма взаиморасчётов — тоже отказ проведения", async () => {
+    const f = await broken();
+    f.setDoc({ [ROWS]: [{ ...rowOf(f), СуммаПлатежа: 150 }] });
+    const r = await f.run({ post: true }, POST);
+    expect(r.isError).toBe(true);
+    expect(JSON.stringify(r.content)).toContain("не заполнена сумма взаиморасчётов");
   });
 });

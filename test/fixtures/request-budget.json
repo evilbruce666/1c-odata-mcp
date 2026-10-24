@@ -44,6 +44,7 @@
   "write.counterparty.set_group": 1,
   "write.counterparty.update_counterparty": 4,
   "write.document.add_document_line": 10,
+  "write.document.align_bank_payment_amounts": 1,
   "write.document.apply_bank_settlement_settings": 6,
   "write.document.copy_document": 6,
   "write.document.post_document": 0,

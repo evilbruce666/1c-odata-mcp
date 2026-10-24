@@ -52,6 +52,11 @@ const ARGS: Record<string, Record<string, unknown>> = {
     side: "supplier",
     expectedDataVersion: "v1",
   },
+  "write.document.align_bank_payment_amounts": {
+    entitySet: "Document_ПоступлениеНаРасчетныйСчет",
+    ref: id,
+    expectedDataVersion: "v1",
+  },
   "write.document.post_document": { ...doc, post: true, expectedDataVersion: "v1" },
   "write.sales.create_services_act": {
     counterpartyRef: id,
@@ -89,6 +94,22 @@ function setup() {
     if (path.startsWith("InformationRegister_СчетаУчетаРасчетовСКонтрагентами("))
       throw new ODataError({ kind: "not_found", message: "Synthetic absent setting" });
     const record = await originalGet(path);
+    // Выравнивание сумм: рублёвое поступление с одной строкой расшифровки без сумм.
+    const unalignedReceipt = path.startsWith("Document_ПоступлениеНаРасчетныйСчет(")
+      ? {
+          СуммаДокумента: 100,
+          РасшифровкаПлатежа: [
+            {
+              ...(record.РасшифровкаПлатежа as Array<Record<string, unknown>>)?.[0],
+              ДоговорКонтрагента_Key: id,
+              СуммаПлатежа: 0,
+              СуммаВзаиморасчетов: 0,
+              СтавкаНДС: "БезНДС",
+            },
+          ],
+        }
+      : {};
+    if (path.startsWith("Catalog_Валюты(")) return { ...record, Code: "643" };
     return {
       ...record,
       Ref_Key: path.match(/guid'([^']+)'/)?.[1] ?? id,
@@ -103,6 +124,7 @@ function setup() {
       ВидОперации: "ОплатаПоставщику",
       ВалютаДокумента_Key: id,
       РасшифровкаПлатежа: [],
+      ...unalignedReceipt,
     };
   });
   const originalCollection = vi.mocked(conn.client.getCollection).getMockImplementation()!;

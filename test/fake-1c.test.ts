@@ -99,6 +99,11 @@ const OVERRIDES: Record<string, Record<string, unknown>> = {
     side: "customer",
     expectedDataVersion: "AAAAAAAAAAA=",
   },
+  "write.document.align_bank_payment_amounts": {
+    entitySet: "Document_ПоступлениеНаРасчетныйСчет",
+    ref: id,
+    expectedDataVersion: "AAAAAAAAAAA=",
+  },
   "write.counterparty.set_group": {
     ref: id,
     subjectKind: "counterparty",
@@ -159,7 +164,10 @@ const MAX_RESPONSE_CHARS = 50_000;
  * Инструменты, которым синтетических данных подделки мало для успешного ответа (ошибка — по
  * бизнес-логике, а не из-за схемы). Нарушения схемы проверяются и для них.
  */
-const EXPECTED_ERRORS: Record<string, string> = {};
+const EXPECTED_ERRORS: Record<string, string> = {
+  // В синтетике сумма документа 0 — выравнивать не по чему; схема чтения документа проверяется.
+  "write.document.align_bank_payment_amounts": "Сумма документа не заполнена",
+};
 
 afterEach(() => {
   vi.unstubAllGlobals();

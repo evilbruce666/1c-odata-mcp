@@ -1,7 +1,12 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { ServerContext } from "../context.js";
 import { z } from "zod";
-import { applyBankSettlementSettings, bankSettlementInput } from "../odata/existing-bank-settlement.js";
+import {
+  alignBankPaymentAmounts,
+  alignBankPaymentInput,
+  applyBankSettlementSettings,
+  bankSettlementInput,
+} from "../odata/existing-bank-settlement.js";
 import { databaseField, guard, ok } from "./_shared.js";
 export function registerExistingBankSettlementTools(server: McpServer, ctx: ServerContext): void {
   server.registerTool(
@@ -20,6 +25,25 @@ export function registerExistingBankSettlementTools(server: McpServer, ctx: Serv
     (args) =>
       guard("write.document.apply_bank_settlement_settings", async () =>
         ok(await applyBankSettlementSettings(ctx.db(args.database), args, args.confirm)),
+      ),
+  );
+
+  server.registerTool(
+    "write.document.align_bank_payment_amounts",
+    {
+      title: "Выровнять сумму расшифровки банковского документа",
+      description:
+        "Выравнивает единственную строку «Расшифровки платежа» существующего НЕПРОВЕДЁННОГО банковского поступления или списания по сумме документа: сумма платежа и сумма взаиморасчётов = сумма документа, курс и кратность 1, НДС по ставке строки. Для случая, когда сумма в шапке есть, а в строке пусто или другая — иначе 1С проведёт документ с неверными проводками по расчётам. Только рубли и договор в рублях без условных единиц; несколько строк, валюта и неизвестная ставка НДС — отказ, суммы не угадываются. Нужна точная expectedDataVersion; предпросмотр показывает «было → станет», остальные поля сохраняются, контрольное чтение после записи. Проведение — отдельным вызовом post_document.",
+      inputSchema: z.object({
+        database: databaseField,
+        ...alignBankPaymentInput,
+        confirm: z.boolean().default(false),
+      }),
+      outputSchema: z.object({}).passthrough(),
+    },
+    (args) =>
+      guard("write.document.align_bank_payment_amounts", async () =>
+        ok(await alignBankPaymentAmounts(ctx.db(args.database), args, args.confirm)),
       ),
   );
 }
