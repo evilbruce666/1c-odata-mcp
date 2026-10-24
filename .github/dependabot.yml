@@ -7,6 +7,12 @@ updates:
     open-pull-requests-limit: 5
     groups:
       # Группируем, чтобы не плодить десятки PR.
+      # SDK MCP — первой группой: server (prod) и client (dev) выходят из одного
+      # монорепо и делят @modelcontextprotocol/core; обновляем их одним PR, иначе
+      # между PR версии разъедутся и в установку попадут две копии core.
+      # Без update-types — мажор SDK тоже придёт сюда, одним PR.
+      mcp-sdk:
+        patterns: ["@modelcontextprotocol/*"]
       dev-dependencies:
         dependency-type: "development"
       prod-minor-patch:
