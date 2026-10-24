@@ -132,7 +132,7 @@ export class ODataClient {
         logger.debug({ url, status: res.status, ms }, "odata ok");
         // Действия (Post/Unpost) могут вернуть пустое тело — это не ошибка.
         const text = await res.text();
-        return (text ? JSON.parse(text) : undefined) as T;
+        return parseBody<T>(text, res.headers.get("Content-Type"), url, method);
       } catch (e) {
         const err = normalize(e, url);
         if (err.retryable && attempt < maxAttempts) {
@@ -311,7 +311,9 @@ export class ODataClient {
         const body = await res.text().catch(() => undefined);
         throw fromHttpStatus(res.status, url, body, { method: "GET", path });
       }
-      return await res.text();
+      const text = await res.text();
+      if (isHtml(text, res.headers.get("Content-Type"))) throw htmlPageError(text, url, "GET");
+      return text;
     } catch (e) {
       throw normalize(e, url);
     } finally {
@@ -319,6 +321,57 @@ export class ODataClient {
       release();
     }
   }
+}
+
+/**
+ * Тело успешного ответа. Публикация 1С (в том числе 1cfresh) на отказ доступа или исключение
+ * сервера может ответить HTML-страницей с кодом 200 — это не OData и не сетевой сбой: повторять
+ * такой запрос бесполезно, а при записи исход неизвестен (kind parse — не однозначный отказ).
+ */
+function parseBody<T>(text: string, contentType: string | null, url: string, method: string): T {
+  if (!text) return undefined as T;
+  if (isHtml(text, contentType)) throw htmlPageError(text, url, method);
+  try {
+    return JSON.parse(text) as T;
+  } catch (e) {
+    throw new ODataError({
+      kind: "parse",
+      url,
+      cause: e,
+      message: `1С ответила не в формате OData (JSON): ${pageText(text)}${writeNote(method)}`,
+    });
+  }
+}
+
+function isHtml(text: string, contentType: string | null): boolean {
+  return /text\/html/i.test(contentType ?? "") || /^\s*<(!doctype html|html)[\s>]/i.test(text);
+}
+
+function htmlPageError(text: string, url: string, method: string): ODataError {
+  return new ODataError({
+    kind: "parse",
+    url,
+    message:
+      `1С вернула HTML-страницу вместо ответа OData: ${pageText(text)}. Обычно это страница входа, ` +
+      "отказа в доступе или ошибки публикации; проверьте доступ к базе и публикацию OData." +
+      writeNote(method),
+  });
+}
+
+/** Короткий текст страницы для сообщения: заголовок или начало текста без разметки, до 200 символов. */
+function pageText(text: string): string {
+  const title = /<title[^>]*>([^<]*)<\/title>/i.exec(text)?.[1]?.trim();
+  const plain = (title || text.replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ").replace(/<[^>]+>/g, " "))
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return plain.length > 200 ? `${plain.slice(0, 200)}…` : plain || "пустая страница";
+}
+
+function writeNote(method: string): string {
+  return READ_METHODS.has(method)
+    ? ""
+    : " Запрос на запись отправлен, исход неизвестен — сверьте результат в 1С, прежде чем повторять.";
 }
 
 /** Преобразует исключение fetch/AbortController в ODataError. */

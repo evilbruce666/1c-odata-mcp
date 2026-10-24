@@ -68,7 +68,11 @@ describe("договор по умолчанию — как форма 1С пр�
 describe("post_document: без договора — понятная ошибка до вызова 1С", () => {
   const ref = "33333333-3333-4333-8333-333333333333";
   const tool = (contract: string) => {
-    const action = vi.fn(async () => ({}));
+    let posted = false;
+    const action = vi.fn(async () => {
+      posted = true;
+      return {};
+    });
     const connection = {
       cfg: { name: "default", writable: true },
       available: async () => new Set([ACT]),
@@ -77,7 +81,15 @@ describe("post_document: без договора — понятная ошибк
           [ACT, { properties: [{ name: "Контрагент_Key" }, { name: "ДоговорКонтрагента_Key" }] }],
         ]),
       }),
-      client: { action, getEntity: async () => ({ Контрагент_Key: cp, ДоговорКонтрагента_Key: contract }) },
+      client: {
+        action,
+        getEntity: async () => ({
+          Контрагент_Key: cp,
+          ДоговорКонтрагента_Key: contract,
+          Posted: posted,
+          DataVersion: posted ? "2" : "1",
+        }),
+      },
     };
     const t = (
       createServer({ db: () => connection } as never) as unknown as {

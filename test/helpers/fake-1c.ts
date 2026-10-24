@@ -184,6 +184,8 @@ export function fake1C(env: Record<string, string> = {}): Fake1C {
   const requests: FakeRequest[] = [];
   const violations: string[] = [];
   const kinds = operationKinds();
+  /** Признак и версия проведённых в этом прогоне документов, по пути «Набор(guid'…')». */
+  const postedState = new Map<string, { Posted: boolean; DataVersion: string }>();
 
   const handle = (url: string, method: string, body: unknown): Response => {
     const raw = url.startsWith(FAKE_BASE_URL) ? url.slice(FAKE_BASE_URL.length) : url;
@@ -228,7 +230,13 @@ export function fake1C(env: Record<string, string> = {}): Fake1C {
     for (const key of ["$filter", "$orderby"] as const)
       for (const name of identifiers(params.get(key) ?? "")) if (!known(name)) return bad(key, name);
 
-    if (method === "POST" && (fn === "Post" || fn === "Unpost")) return json(200, undefined);
+    if (method === "POST" && (fn === "Post" || fn === "Unpost")) {
+      // Как в 1С: проведение меняет признак и версию документа — инструмент сверяет их после действия.
+      const doc = /^[^(]+\([^)]*\)/.exec(path)![0];
+      const version = Number(postedState.get(doc)?.DataVersion ?? 0) + 1;
+      postedState.set(doc, { Posted: fn === "Post", DataVersion: String(version) });
+      return json(200, undefined);
+    }
     if (method === "POST" || method === "PATCH") {
       const payload = (body ?? {}) as Record<string, unknown>;
       for (const [key, value] of Object.entries(payload)) {
@@ -259,6 +267,7 @@ export function fake1C(env: Record<string, string> = {}): Fake1C {
     const row = syntheticRow(fields, base);
     const guid = /guid'([0-9a-f-]{36})'/i.exec(path)?.[1];
     if (keyed && guid && "Ref_Key" in row) row.Ref_Key = guid;
+    if (keyed) Object.assign(row, postedState.get(path));
     // Составной ключ (регистры сведений): запись отвечает теми значениями измерений, по которым её запросили.
     const key = /^[^(]+\(([^)]*)\)/.exec(path)?.[1] ?? "";
     for (const m of key.matchAll(/([\wА-Яа-яЁё]+)=(?:guid'([0-9a-f-]{36})'|'((?:[^']|'')*)')/gi))

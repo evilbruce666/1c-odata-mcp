@@ -2098,7 +2098,33 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           const missing = await missingContract(conn, entitySet, guid);
           if (missing) return fail(missing);
         }
-        await conn.client.action(path);
+        // Успех — только по состоянию документа: 1С может ответить 200 и не провести (ошибка в
+        // обработке проведения). Повторный Post проведённого документа подтверждает смена DataVersion.
+        const statePath = `${entitySet}(guid'${guid}')?$format=json&$select=Posted,DataVersion`;
+        const state = () => conn.client.getEntity<{ Posted?: boolean; DataVersion?: string }>(statePath);
+        const before = await state();
+        const response = await conn.client.action(path);
+        let after: Awaited<ReturnType<typeof state>>;
+        try {
+          after = await state();
+        } catch (e) {
+          return fail(
+            `1С приняла ${action}, но перечитать документ не удалось (${e instanceof Error ? e.message : String(e)}). ` +
+              "Проверьте в 1С, проведён ли документ, прежде чем повторять.",
+          );
+        }
+        const applied = post
+          ? after.Posted === true && (before.Posted !== true || after.DataVersion !== before.DataVersion)
+          : after.Posted === false;
+        if (!applied) {
+          const body = response === undefined ? "" : JSON.stringify(response).slice(0, 500);
+          return fail(
+            `1С ответила на ${action} без ошибки, но документ ${post ? "не проведён" : "остался проведённым"} ` +
+              `(Posted=${String(after.Posted)}${post && before.Posted === true ? ", версия не изменилась" : ""}). ` +
+              "Причину покажет проведение документа в самой 1С." +
+              (body ? ` Ответ 1С: ${body}` : ""),
+          );
+        }
         // Что провёл документ — сразу в ответе: проводки по регистру Хозрасчетный.
         // Сбой чтения проводок не отменяет проведения, только поясняется.
         let postings: Record<string, unknown> = {};
@@ -2122,7 +2148,15 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
             };
           }
         }
-        return ok({ done: true, database: conn.cfg.name, ref: guid, action, ...postings });
+        return ok({
+          done: true,
+          verified: true,
+          verificationScope: "document_state",
+          database: conn.cfg.name,
+          ref: guid,
+          action,
+          ...postings,
+        });
       }),
   );
 
