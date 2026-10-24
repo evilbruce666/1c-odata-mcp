@@ -5443,6 +5443,12 @@
           "updated": {
             "type": "boolean"
           },
+          "verified": {
+            "type": "boolean"
+          },
+          "readbackNote": {
+            "type": "string"
+          },
           "operationId": {
             "type": "string",
             "format": "uuid",
@@ -5559,6 +5565,12 @@
           "updated": {
             "type": "boolean"
           },
+          "verified": {
+            "type": "boolean"
+          },
+          "readbackNote": {
+            "type": "string"
+          },
           "operationId": {
             "type": "string",
             "format": "uuid",
@@ -5654,6 +5666,12 @@
           },
           "updated": {
             "type": "boolean"
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "readbackNote": {
+            "type": "string"
           },
           "operationId": {
             "type": "string",
@@ -6521,6 +6539,12 @@
           },
           "updated": {
             "type": "boolean"
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "readbackNote": {
+            "type": "string"
           },
           "operationId": {
             "type": "string",
@@ -7567,6 +7591,12 @@
           "updated": {
             "type": "boolean"
           },
+          "verified": {
+            "type": "boolean"
+          },
+          "readbackNote": {
+            "type": "string"
+          },
           "operationId": {
             "type": "string",
             "format": "uuid",
@@ -7822,6 +7852,12 @@
           },
           "updated": {
             "type": "boolean"
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "readbackNote": {
+            "type": "string"
           },
           "operationId": {
             "type": "string",
@@ -9379,6 +9415,12 @@
           "updated": {
             "type": "boolean"
           },
+          "verified": {
+            "type": "boolean"
+          },
+          "readbackNote": {
+            "type": "string"
+          },
           "operationId": {
             "type": "string",
             "format": "uuid",
@@ -9706,6 +9748,12 @@
           "updated": {
             "type": "boolean"
           },
+          "verified": {
+            "type": "boolean"
+          },
+          "readbackNote": {
+            "type": "string"
+          },
           "operationId": {
             "type": "string",
             "format": "uuid",
@@ -9975,6 +10023,12 @@
           "updated": {
             "type": "boolean"
           },
+          "verified": {
+            "type": "boolean"
+          },
+          "readbackNote": {
+            "type": "string"
+          },
           "operationId": {
             "type": "string",
             "format": "uuid",
@@ -10070,6 +10124,12 @@
           },
           "updated": {
             "type": "boolean"
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "readbackNote": {
+            "type": "string"
           },
           "operationId": {
             "type": "string",
@@ -10177,6 +10237,12 @@
           },
           "updated": {
             "type": "boolean"
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "readbackNote": {
+            "type": "string"
           },
           "operationId": {
             "type": "string",

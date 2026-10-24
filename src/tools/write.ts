@@ -1415,6 +1415,36 @@ async function createOrPreview(
   });
 }
 
+/** Скалярные поля шапки из fields, опубликованные у объекта, с их типами из $metadata. */
+async function scalarFields(
+  conn: Connection,
+  entitySet: string,
+  fields: Record<string, unknown>,
+): Promise<Map<string, string>> {
+  const types = new Map(
+    ((await conn.getMetadata()).entities.get(entitySet)?.properties ?? []).map((p) => [p.name, p.type]),
+  );
+  return new Map(
+    Object.keys(fields)
+      .filter((k) => !Array.isArray(fields[k]) && types.has(k))
+      .map((k) => [k, types.get(k)!]),
+  );
+}
+
+/** Читает из 1С текущие значения полей (и *_Type составных ссылок). Бросает при сбое чтения. */
+async function readFields(
+  conn: Connection,
+  entitySet: string,
+  guid: string,
+  keys: string[],
+): Promise<Record<string, unknown>> {
+  const props = new Set(
+    ((await conn.getMetadata()).entities.get(entitySet)?.properties ?? []).map((p) => p.name),
+  );
+  const select = [...keys, ...keys.map((k) => `${k.replace(/_Key$/, "")}_Type`).filter((k) => props.has(k))];
+  return conn.client.getEntity(`${entitySet}(guid'${guid}')${buildQuery({ select })}`);
+}
+
 /**
  * Текущие значения изменяемых полей шапки — для «было → станет» в предпросмотре. Не прочитались —
  * предпросмотр без изменений, а не отказ.
@@ -1425,14 +1455,32 @@ async function currentValues(
   guid: string,
   fields: Record<string, unknown>,
 ): Promise<Record<string, unknown> | undefined> {
-  const props = new Set(
-    ((await conn.getMetadata()).entities.get(entitySet)?.properties ?? []).map((p) => p.name),
-  );
-  const keys = Object.keys(fields).filter((k) => !Array.isArray(fields[k]) && props.has(k));
-  const select = [...keys, ...keys.map((k) => `${k.replace(/_Key$/, "")}_Type`).filter((k) => props.has(k))];
-  if (select.length === 0) return undefined;
-  return conn.client.getEntity(`${entitySet}(guid'${guid}')${buildQuery({ select })}`).catch(() => undefined);
+  const keys = [...(await scalarFields(conn, entitySet, fields)).keys()];
+  if (keys.length === 0) return undefined;
+  return readFields(conn, entitySet, guid, keys).catch(() => undefined);
 }
+
+/**
+ * Совпадает ли сохранённое значение с отправленным — с учётом того, как 1С возвращает типы:
+ * GUID в любом регистре, дата без времени — как полночь, пустая ссылка и строка — как null.
+ */
+export function sameStoredValue(sent: unknown, stored: unknown, type: string): boolean {
+  const empty = (v: unknown) => v === null || v === undefined || v === "" || v === EMPTY_REF;
+  if (empty(sent) || empty(stored)) return empty(sent) && empty(stored);
+  if (type === "Edm.Guid") return String(sent).toLowerCase() === String(stored).toLowerCase();
+  if (type === "Edm.Boolean") return sent === stored;
+  if (/^Edm\.(Double|Decimal|Int16|Int32|Int64|Single|Byte)$/.test(type))
+    return Math.abs(Number(sent) - Number(stored)) < 1e-9;
+  if (type === "Edm.DateTime") {
+    const d = (v: unknown) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) ? `${String(v)}T00:00:00` : String(v));
+    return d(sent) === d(stored);
+  }
+  return String(sent).trimEnd() === String(stored).trimEnd();
+}
+
+/** Поля, которые банковский документ перезаполняет из строк «Расшифровки платежа» при записи. */
+const BANK_SETTLEMENT_FIELDS = /^(ДоговорКонтрагента|СчетУчетаРасчетов|СтатьяДвиженияДенежныхСредств)/;
+const BANK_DOCUMENTS = new Set<string>([...DOCUMENTS.bankIn, ...DOCUMENTS.bankOut]);
 
 /** Общий путь изменения (PATCH): dry-run при confirm=false, иначе применяет. */
 async function patchOrPreview(
@@ -1459,13 +1507,45 @@ async function patchOrPreview(
     });
   }
   const updated = await conn.client.patch<ODataEntity>(`${entitySet}(guid'${guid}')?$format=json`, fields);
+  // Успех — только по фактически сохранённым значениям (#60): 1С может принять PATCH и при записи
+  // объекта перезаполнить часть полей сама (банковский документ — договор из расшифровки платежа).
+  const types = await scalarFields(conn, entitySet, fields);
+  let stored: Record<string, unknown>;
+  try {
+    stored = types.size ? await readFields(conn, entitySet, guid, [...types.keys()]) : {};
+  } catch (e) {
+    return fail(
+      `1С приняла изменение, но перечитать объект не удалось (${e instanceof Error ? e.message : String(e)}). ` +
+        "Сверьте поля в 1С, прежде чем повторять.",
+    );
+  }
+  const unconfirmed = [...types]
+    .filter(([k, t]) => !sameStoredValue(fields[k], stored[k], t))
+    .map(([k]) => k);
+  if (unconfirmed.length) {
+    const bankHint =
+      BANK_DOCUMENTS.has(entitySet) && unconfirmed.some((k) => BANK_SETTLEMENT_FIELDS.test(k))
+        ? " Договор, счета расчётов и статью ДДС банковский документ берёт из строк «Расшифровка платежа» — " +
+          "меняйте их там: write.document.apply_bank_settlement_settings."
+        : "";
+    return fail(
+      `1С приняла изменение, но сохранила не всё: не совпали поля ${unconfirmed.join(", ")}` +
+        `${unconfirmed.length < types.size ? " (остальные сохранены)" : ""}. ` +
+        "Скорее всего, 1С перезаполнила их при записи объекта; повтор того же изменения даст тот же результат." +
+        bankHint,
+    );
+  }
+  // verified — только когда сверено всё отправленное; табличные части этим путём не сверяются.
+  const skipped = Object.keys(fields).filter((k) => !types.has(k));
   return ok({
     updated: true,
+    verified: skipped.length === 0,
     database: conn.cfg.name,
     entitySet,
     ref: updated["Ref_Key"] ?? guid,
     description: updated["Description"],
     ...extra,
+    ...(skipped.length ? { readbackNote: `Не сверялись (табличные части): ${skipped.join(", ")}.` } : {}),
   });
 }
 

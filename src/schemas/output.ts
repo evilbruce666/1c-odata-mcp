@@ -95,6 +95,8 @@ export const patchResultSchema = z
     willPatch: z.string().optional(),
     fields: z.record(z.string(), z.unknown()).optional(),
     updated: z.boolean().optional(),
+    verified: z.boolean().optional(),
+    readbackNote: z.string().optional(),
     operationId: z.string().uuid().optional(),
     replayed: z.boolean().optional(),
     entitySet: z.string().optional(),

@@ -186,6 +186,8 @@ export function fake1C(env: Record<string, string> = {}): Fake1C {
   const kinds = operationKinds();
   /** Признак и версия проведённых в этом прогоне документов, по пути «Набор(guid'…')». */
   const postedState = new Map<string, { Posted: boolean; DataVersion: string }>();
+  /** Поля шапки, изменённые PATCH в этом прогоне, по тому же пути. */
+  const storedState = new Map<string, Record<string, unknown>>();
 
   const handle = (url: string, method: string, body: unknown): Response => {
     const raw = url.startsWith(FAKE_BASE_URL) ? url.slice(FAKE_BASE_URL.length) : url;
@@ -252,6 +254,14 @@ export function fake1C(env: Record<string, string> = {}): Fake1C {
           return odataError(500, `Перечисление 'ВидыОпераций' не содержит элемент '${value}'`);
         }
       }
+      // Изменение запоминается: повторное чтение объекта видит сохранённые поля, как в 1С.
+      if (method === "PATCH") {
+        const doc = /^[^(]+\([^)]*\)/.exec(path)?.[0];
+        if (doc) {
+          const scalars = Object.fromEntries(Object.entries(payload).filter(([, v]) => !Array.isArray(v)));
+          storedState.set(doc, { ...storedState.get(doc), ...scalars });
+        }
+      }
       return json(method === "POST" ? 201 : 200, { ...syntheticRow(fields, base), ...payload });
     }
 
@@ -267,7 +277,7 @@ export function fake1C(env: Record<string, string> = {}): Fake1C {
     const row = syntheticRow(fields, base);
     const guid = /guid'([0-9a-f-]{36})'/i.exec(path)?.[1];
     if (keyed && guid && "Ref_Key" in row) row.Ref_Key = guid;
-    if (keyed) Object.assign(row, postedState.get(path));
+    if (keyed) Object.assign(row, storedState.get(path), postedState.get(path));
     // Составной ключ (регистры сведений): запись отвечает теми значениями измерений, по которым её запросили.
     const key = /^[^(]+\(([^)]*)\)/.exec(path)?.[1] ?? "";
     for (const m of key.matchAll(/([\wА-Яа-яЁё]+)=(?:guid'([0-9a-f-]{36})'|'((?:[^']|'')*)')/gi))

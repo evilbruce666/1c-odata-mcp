@@ -277,6 +277,7 @@ export async function applyBankSettlementSettings(
       },
     ];
   }
+  const warnings = paymentAmountWarnings(doc, rows);
   const headers = { "If-Match": p.expectedDataVersion };
   const prepared = {
     method: "PATCH",
@@ -292,7 +293,7 @@ export async function applyBankSettlementSettings(
   };
   if (!confirm) {
     await conn.client.prepareCreate(p.entitySet, prepared, { withRefKey: false });
-    return { dryRun: true, database: conn.cfg.name, ...prepared };
+    return { dryRun: true, database: conn.cfg.name, ...prepared, ...(warnings.length ? { warnings } : {}) };
   }
   const result = await conn.client.writeRecordOnce(
     p.entitySet,
@@ -314,7 +315,28 @@ export async function applyBankSettlementSettings(
     ref: result.Ref_Key,
     dataVersion: result.DataVersion,
     resolution,
+    ...(warnings.length ? { warnings } : {}),
   };
+}
+
+/**
+ * Сумма платежа должна быть разнесена по расшифровке целиком: проводки банковского документа
+ * формируются по строкам «Расшифровки платежа», и неразнесённая часть не попадёт в расчёты.
+ * Форма 1С держит суммы согласованными сама, расходятся они при записи в обход формы (#61).
+ * Инструмент суммы не меняет — только предупреждает до проведения.
+ */
+export function paymentAmountWarnings(doc: ODataEntity, rows: unknown[]): string[] {
+  const total = doc["СуммаДокумента"];
+  if (typeof total !== "number") return [];
+  const amounts = rows.map((r) => (r as ODataEntity)["СуммаПлатежа"]);
+  if (amounts.some((a) => typeof a !== "number")) return [];
+  const allocated = (amounts as number[]).reduce((a, b) => a + b, 0);
+  if (Math.abs(allocated - total) < 0.005) return [];
+  return [
+    `Сумма документа ${total} не совпадает с суммой расшифровки платежа ${Math.round(allocated * 100) / 100}` +
+      `${rows.length === 0 ? " (строк расшифровки нет)" : ""}. Проводки формируются по расшифровке — ` +
+      "до проведения исправьте сумму строки в 1С; этот инструмент суммы не меняет.",
+  ];
 }
 /** Separate bound action: fresh read guards version; OData Post CAS is not claimed. */
 export async function guardedDocumentAction(

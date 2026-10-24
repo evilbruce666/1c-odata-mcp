@@ -7,6 +7,7 @@ import { Connection } from "../src/context.js";
 import { parseConfig } from "../src/config/env.js";
 import { createServer } from "../src/mcp/server.js";
 import { ODataError } from "../src/odata/errors.js";
+import { paymentAmountWarnings } from "../src/odata/existing-bank-settlement.js";
 import { bp30Metadata, bp30Enums } from "./helpers/metadata-snapshot.js";
 import { settlementAccountsFor } from "../src/odata/settlement-accounts.js";
 import type { EntityMeta, ODataEntity } from "../src/types/odata.js";
@@ -274,6 +275,22 @@ describe("existing bank inherited settlement", () => {
     expect((await f.run({ confirm: true, operationId: data(p).operationId })).isError).toBeFalsy();
     expect(f.writes).toHaveLength(1);
   });
+  it("предупреждает до проведения, если сумма расшифровки не равна сумме документа (#61)", async () => {
+    const f = await fixture();
+    expect(data(await f.run()).warnings).toBeUndefined();
+    const row = (f.doc()[ROWS] as ODataEntity[])[0]!;
+    f.setDoc({ [ROWS]: [{ ...row, СуммаПлатежа: 0 }] });
+    const p = await f.run();
+    expect(p.isError).toBeFalsy();
+    expect(String(data(p).warnings)).toContain(
+      "Сумма документа 150 не совпадает с суммой расшифровки платежа 0",
+    );
+    const r = await f.run({ confirm: true, operationId: data(p).operationId });
+    expect(r.isError).toBeFalsy();
+    expect(String(data(r).warnings)).toContain("суммы не меняет");
+    expect((f.doc()[ROWS] as ODataEntity[])[0]!.СуммаПлатежа).toBe(0);
+  });
+
   it("uses individual override before all-org group", async () => {
     const f = await fixture();
     f.setSettings([
@@ -1012,5 +1029,16 @@ describe("published header business values survive settlement PATCH", () => {
     expect((await f.conn.client.operationEntry(String(args.operationId)))?.state).toBe("outcome_unknown");
     expect((await f.run(args)).isError).toBe(true);
     expect(f.writes).toHaveLength(1);
+  });
+});
+
+describe("paymentAmountWarnings (#61)", () => {
+  it("совпадает — без предупреждения; нет строк — предупреждение; суммы неизвестны — молчим", () => {
+    expect(
+      paymentAmountWarnings({ СуммаДокумента: 100 }, [{ СуммаПлатежа: 60 }, { СуммаПлатежа: 40 }]),
+    ).toEqual([]);
+    expect(paymentAmountWarnings({ СуммаДокумента: 100 }, [])[0]).toContain("строк расшифровки нет");
+    expect(paymentAmountWarnings({ СуммаДокумента: 100 }, [{ СуммаПлатежа: "?" }])).toEqual([]);
+    expect(paymentAmountWarnings({}, [{ СуммаПлатежа: 1 }])).toEqual([]);
   });
 });

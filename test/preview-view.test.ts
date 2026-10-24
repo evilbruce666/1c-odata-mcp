@@ -143,7 +143,7 @@ describe("предпросмотр инструментов записи нес�
     )._registeredTools;
 
   it("create_invoice: view с заголовком и строками рядом с payload", async () => {
-    const f = fake1C({ READ_ONLY: "false", ODATA_DB_DEFAULT_WRITABLE: "true" });
+    const f = fake1C({ READ_ONLY: "false", ODATA_WRITABLE: "true" });
     const r = await tools(f.ctx)["write.sales.create_invoice"]!.handler(
       {
         counterpartyRef: CP,
