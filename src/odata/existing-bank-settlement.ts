@@ -309,13 +309,28 @@ export async function applyBankSettlementSettings(
   );
   return {
     updated: true,
-    verified: true,
+    ...readbackResult(result),
     database: conn.cfg.name,
     entitySet: p.entitySet,
     ref: result.Ref_Key,
     dataVersion: result.DataVersion,
     resolution,
     ...(warnings.length ? { warnings } : {}),
+  };
+}
+
+/**
+ * Документ из контрольного чтения — сразу в ответе, без второго GET у вызывающего (#50), как у
+ * версионного проведения. Повтор завершённой операции отвечает квитанцией журнала: это не новое
+ * чтение 1С, поэтому verified=false и verificationScope=journal_receipt, документа в ответе нет.
+ */
+function readbackResult(result: ODataEntity): Record<string, unknown> {
+  const replayed = result._operation_replayed === true;
+  return {
+    verified: !replayed,
+    verificationScope: replayed ? "journal_receipt" : "document_state",
+    readbackFetched: !replayed,
+    ...(replayed ? { replayed: true } : { readback: result }),
   };
 }
 
@@ -525,7 +540,7 @@ export async function alignBankPaymentAmounts(
   );
   return {
     updated: true,
-    verified: true,
+    ...readbackResult(result),
     database: conn.cfg.name,
     entitySet: p.entitySet,
     ref: result.Ref_Key,
@@ -574,11 +589,8 @@ export async function guardedDocumentAction(
   );
   return {
     done: true,
-    verified: result._operation_replayed !== true,
-    verificationScope: result._operation_replayed === true ? "journal_receipt" : "document_state",
+    ...readbackResult(result),
     accountingMovementsVerified: false,
-    readbackFetched: result._operation_replayed !== true,
-    ...(result._operation_replayed === true ? { replayed: true } : { readback: result }),
     database: conn.cfg.name,
     ref: result.Ref_Key,
     dataVersion: result.DataVersion,

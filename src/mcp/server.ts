@@ -51,6 +51,11 @@ const INSTRUCTIONS =
  * Правки документа, которые нельзя слепо повторять: инструмент перечитывает документ, и повтор
  * добавил бы ещё строку или удалил соседнюю. Как и создание, защищены operationId и журналом.
  */
+/** Правки существующего банковского документа: итог несёт readback, повтор — квитанцию журнала. */
+const BANK_DOCUMENT_TOOLS = new Set([
+  "write.document.apply_bank_settlement_settings",
+  "write.document.align_bank_payment_amounts",
+]);
 const JOURNALED_UPDATE_TOOLS = new Set([
   "write.document.apply_bank_settlement_settings",
   "write.document.align_bank_payment_amounts",
@@ -142,6 +147,15 @@ export function createServer(ctx: ServerContext): McpServer {
                     accountingMovementsVerified: false,
                     readbackNote:
                       "Журнал хранит только квитанцию; полный документ и проводки повторно не читались.",
+                  }
+                : {}),
+              // Правка банковского документа отдаёт документ из контрольного чтения (#50); повтор — нет.
+              ...(BANK_DOCUMENT_TOOLS.has(name)
+                ? {
+                    verified: false,
+                    verificationScope: "journal_receipt",
+                    readbackFetched: false,
+                    readbackNote: "Журнал хранит только квитанцию; документ повторно не читался.",
                   }
                 : {}),
               replayed: true,

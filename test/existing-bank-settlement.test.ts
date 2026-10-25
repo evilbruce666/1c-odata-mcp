@@ -291,6 +291,22 @@ describe("existing bank inherited settlement", () => {
     expect((f.doc()[ROWS] as ODataEntity[])[0]!.СуммаПлатежа).toBe(0);
   });
 
+  it("итог содержит документ из контрольного чтения; повтор — квитанция журнала без документа (#50)", async () => {
+    const f = await fixture();
+    const p = await f.run();
+    const r = await f.run({ confirm: true, operationId: data(p).operationId });
+    expect(data(r)).toMatchObject({
+      verified: true,
+      verificationScope: "document_state",
+      readbackFetched: true,
+      readback: { Ref_Key: DOC, DataVersion: "v2" },
+    });
+    const replay = await f.run({ confirm: true, operationId: data(p).operationId });
+    expect(data(replay)).toMatchObject({ verificationScope: "journal_receipt", replayed: true });
+    expect(data(replay).readback).toBeUndefined();
+    expect(f.writes).toHaveLength(1);
+  });
+
   it("uses individual override before all-org group", async () => {
     const f = await fixture();
     f.setSettings([
