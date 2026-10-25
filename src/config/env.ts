@@ -44,6 +44,12 @@ export interface Behavior {
    * сверка идёт по назначенному Ref_Key; метка — только для тех, кому нужна видимая в 1С привязка.
    */
   writeOperationMarker: boolean;
+  /**
+   * Читаемый вид (`view`) в предпросмотре записи: названия вместо GUID — до 4 запросов к справочникам.
+   * По умолчанию включён: запись подтверждает человек. false — для интеграций с массовой записью без
+   * человека в цикле; машинная часть предпросмотра не меняется.
+   */
+  previewView?: boolean;
   /** Предел одновременных HTTP-запросов одного подключения; 0 — без предела (по умолчанию). */
   maxConcurrentRequests: number;
   /** Сколько ждать свободного места под запрос, мс. */
@@ -90,6 +96,7 @@ const BehaviorSchema = z.object({
   ODATA_ANALYTICS_MAX_ROWS: z.coerce.number().int().positive().max(1_000_000).default(200_000),
   ODATA_WRITE_JOURNAL_DIR: z.string().min(1).optional(),
   ODATA_WRITE_OPERATION_MARKER: z.enum(["true", "false"]).default("false"),
+  ODATA_PREVIEW_VIEW: z.enum(["true", "false"]).default("true"),
   // Предел одновременных HTTP-запросов к одной базе (0 — без предела) и сколько ждать места.
   ODATA_MAX_CONCURRENT_REQUESTS: z.coerce.number().int().min(0).max(64).default(0),
   ODATA_QUEUE_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
@@ -223,6 +230,7 @@ export function parseConfig(env: Env): RuntimeConfig {
       analyticsMaxRows: b.ODATA_ANALYTICS_MAX_ROWS,
       readOnly: b.READ_ONLY === "true",
       writeOperationMarker: b.ODATA_WRITE_OPERATION_MARKER === "true",
+      previewView: b.ODATA_PREVIEW_VIEW === "true",
       maxConcurrentRequests: b.ODATA_MAX_CONCURRENT_REQUESTS,
       queueTimeoutMs: b.ODATA_QUEUE_TIMEOUT_MS,
       regulatedCurrencyCode: b.ODATA_REGULATED_CURRENCY_CODE ?? "643",

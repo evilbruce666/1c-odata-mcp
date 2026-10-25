@@ -216,6 +216,7 @@ export async function tryPreviewView(
   data: Record<string, unknown>,
   before?: Record<string, unknown>,
 ): Promise<{ view?: PreviewView }> {
+  if (conn.behavior.previewView === false) return {};
   try {
     return { view: await buildPreviewView(conn, entitySet, data, before) };
   } catch {

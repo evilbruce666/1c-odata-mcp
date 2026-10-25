@@ -121,6 +121,7 @@ describe("читаемый предпросмотр записи", () => {
     const { conn: c } = conn(["Catalog_Контрагенты"]);
     expect((await buildPreviewView(c, SALE, { Контрагент_Key: CP })).fields).toEqual({ Контрагент: CP });
     const broken = {
+      behavior: {},
       getMetadata: async () => {
         throw new Error("сбой");
       },
@@ -171,5 +172,24 @@ describe("предпросмотр инструментов записи нес�
     expect(sc.view.changes).toEqual([{ field: "Комментарий", from: "—", to: "новый" }]);
     expect(sc.fields).toEqual({ Комментарий: "новый" });
     expect(f.violations).toEqual([]);
+  });
+});
+
+describe("ODATA_PREVIEW_VIEW", () => {
+  it("false — предпросмотр без view и без запросов названий; по умолчанию — с view", async () => {
+    const off = fake1C({ ODATA_PREVIEW_VIEW: "false" });
+    const spy = vi.spyOn(off.conn.client, "getCollection");
+    const r = await (
+      createServer(off.ctx) as unknown as {
+        _registeredTools: Record<string, { handler: (a: object, e: object) => Promise<CallToolResult> }>;
+      }
+    )._registeredTools["write.entity.update_entity"]!.handler(
+      { entitySet: "Catalog_Контрагенты", ref: CP, fields: { Комментарий: "x" }, confirm: false },
+      {},
+    );
+    expect(r.structuredContent).not.toHaveProperty("view");
+    expect(r.structuredContent).toHaveProperty("fields");
+    expect(spy).not.toHaveBeenCalled();
+    expect(fake1C().conn.behavior.previewView).toBe(true);
   });
 });
