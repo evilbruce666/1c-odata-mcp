@@ -7,7 +7,6 @@ import { fake1C } from "./helpers/fake-1c.js";
 // #60: изменение — успех только по фактически сохранённым значениям, а не по ответу на PATCH.
 const BANK_IN = "Document_ПоступлениеНаРасчетныйСчет";
 const REF = "33333333-3333-4333-8333-333333333333";
-const CONTRACT_OLD = "aaaaaaaa-0000-4000-8000-000000000001";
 const CONTRACT_NEW = "aaaaaaaa-0000-4000-8000-000000000002";
 const ACCOUNT_NEW = "bbbbbbbb-0000-4000-8000-000000000002";
 
