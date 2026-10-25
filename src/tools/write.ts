@@ -1491,9 +1491,27 @@ export function sameStoredValue(sent: unknown, stored: unknown, type: string): b
   return String(sent).trimEnd() === String(stored).trimEnd();
 }
 
-/** Поля, которые банковский документ перезаполняет из строк «Расшифровки платежа» при записи. */
-const BANK_SETTLEMENT_FIELDS = /^(ДоговорКонтрагента|СчетУчетаРасчетов|СтатьяДвиженияДенежныхСредств)/;
+/**
+ * Расчётные реквизиты банковского документа: договор и счета расчётов/авансов живут и в шапке, и в
+ * строках «Расшифровки платежа», а 1С при записи берёт шапку из строк. Общий PATCH шапки даёт
+ * частичную правку без согласования со строками и проводками (#60), поэтому он запрещён — и для
+ * проведённого, и для непроведённого документа. Поддержанный путь — apply_bank_settlement_settings.
+ */
+const BANK_SETTLEMENT_FIELDS = /^(ДоговорКонтрагента_Key|СчетУчетаРасчетов[\wА-Яа-яЁё]*_Key)$/;
 const BANK_DOCUMENTS = new Set<string>([...DOCUMENTS.bankIn, ...DOCUMENTS.bankOut]);
+
+function bankSettlementPatchRefusal(entitySet: string, fields: Record<string, unknown>): string | undefined {
+  if (!BANK_DOCUMENTS.has(entitySet)) return undefined;
+  const blocked = Object.keys(fields).filter((k) => BANK_SETTLEMENT_FIELDS.test(k));
+  if (!blocked.length) return undefined;
+  return (
+    `Изменение не отправлено: ${blocked.join(", ")} банковского документа общим инструментом не меняются — ` +
+    "1С берёт их из строк «Расшифровки платежа», и правка шапки была бы частичной. Порядок: если документ " +
+    "проведён — отмените проведение (write.document.post_document с post=false); затем договор и счета — " +
+    "write.document.apply_bank_settlement_settings (шапка и строка согласованно, с проверкой результата); " +
+    "затем проведите отдельным вызовом."
+  );
+}
 
 /** Общий путь изменения (PATCH): dry-run при confirm=false, иначе применяет. */
 async function patchOrPreview(
@@ -1506,6 +1524,9 @@ async function patchOrPreview(
 ) {
   const guid = ref.replace(/[{}']/g, "");
   const extra = notes?.length ? { notes } : {};
+  // Проверка не зависит от состояния документа — одинаково в предпросмотре и при подтверждении.
+  const refusal = bankSettlementPatchRefusal(entitySet, fields);
+  if (refusal) return fail(refusal);
   if (!confirm) {
     return ok({
       dryRun: true,
@@ -1521,7 +1542,7 @@ async function patchOrPreview(
   }
   const updated = await conn.client.patch<ODataEntity>(`${entitySet}(guid'${guid}')?$format=json`, fields);
   // Успех — только по фактически сохранённым значениям (#60): 1С может принять PATCH и при записи
-  // объекта перезаполнить часть полей сама (банковский документ — договор из расшифровки платежа).
+  // объекта перезаполнить часть полей сама.
   const types = await scalarFields(conn, entitySet, fields);
   let stored: Record<string, unknown>;
   try {
@@ -1536,16 +1557,10 @@ async function patchOrPreview(
     .filter(([k, t]) => !sameStoredValue(fields[k], stored[k], t))
     .map(([k]) => k);
   if (unconfirmed.length) {
-    const bankHint =
-      BANK_DOCUMENTS.has(entitySet) && unconfirmed.some((k) => BANK_SETTLEMENT_FIELDS.test(k))
-        ? " Договор, счета расчётов и статью ДДС банковский документ берёт из строк «Расшифровка платежа» — " +
-          "меняйте их там: write.document.apply_bank_settlement_settings."
-        : "";
     return fail(
       `1С приняла изменение, но сохранила не всё: не совпали поля ${unconfirmed.join(", ")}` +
         `${unconfirmed.length < types.size ? " (остальные сохранены)" : ""}. ` +
-        "Скорее всего, 1С перезаполнила их при записи объекта; повтор того же изменения даст тот же результат." +
-        bankHint,
+        "Скорее всего, 1С перезаполнила их при записи объекта; повтор того же изменения даст тот же результат.",
     );
   }
   // verified — только когда сверено всё отправленное; табличные части этим путём не сверяются.
@@ -2287,7 +2302,9 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       description:
         "Изменяет произвольные поля объекта 1С через PATCH по Ref_Key. Имена полей — технические " +
         '(узнать через describe_entity), напр. {"ИНН":"7701234567"}. По умолчанию предпросмотр (dry-run); ' +
-        "применение — при confirm=true. Мощный инструмент: меняйте только те поля, что указали.",
+        "применение — при confirm=true. Мощный инструмент: меняйте только те поля, что указали. " +
+        "После записи поля перечитываются: успех — только если 1С сохранила всё. Договор и счета расчётов " +
+        "банковских документов этим инструментом не меняются — write.document.apply_bank_settlement_settings.",
       inputSchema: z.object({
         database: databaseField,
         entitySet: z.string().describe("Имя объекта, напр. Catalog_Контрагенты"),
