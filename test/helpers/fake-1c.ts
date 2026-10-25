@@ -99,8 +99,9 @@ function syntheticValue(name: string, type: string): unknown {
     case "Edm.Decimal":
     case "Edm.Int16":
     case "Edm.Int32":
-    case "Edm.Int64":
       return 0;
+    case "Edm.Int64":
+      return "0"; // OData v3: 1С отдаёт Int64 строкой («КратностьВзаиморасчетов»: "1")
     default:
       return OVERRIDES[name] ?? (name === "Description" ? "Synthetic" : "");
   }

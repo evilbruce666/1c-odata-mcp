@@ -494,17 +494,23 @@ export async function alignBankPaymentAmounts(
     throw new InputError(`Ставка НДС строки «${String(row.СтавкаНДС)}» не поддержана.`);
 
   const round2 = (n: number) => Math.round(n * 100) / 100;
-  const aligned: ODataEntity = {
-    ...row,
+  // Число — в том виде, в каком его отдаёт 1С: Int64 (кратность) приходит строкой «1». Иначе «1» → 1
+  // выглядело бы изменением, а контрольное чтение после записи не совпало бы с отправленным.
+  const asObserved = (field: string, n: number) => (typeof row[field] === "string" ? String(n) : n);
+  const numeric: Record<string, number> = {
     СуммаПлатежа: total,
     СуммаВзаиморасчетов: total,
     ...(rowTypes.has("КурсВзаиморасчетов") ? { КурсВзаиморасчетов: 1 } : {}),
     ...(rowTypes.has("КратностьВзаиморасчетов") ? { КратностьВзаиморасчетов: 1 } : {}),
     ...(rowTypes.has("СуммаНДС") ? { СуммаНДС: round2((total * percent) / (100 + percent)) } : {}),
   };
-  const changes = Object.keys(aligned)
-    .filter((k) => !same(aligned[k], row[k]))
-    .map((k) => ({ field: k, from: row[k] ?? null, to: aligned[k] }));
+  const aligned: ODataEntity = {
+    ...row,
+    ...Object.fromEntries(Object.entries(numeric).map(([k, n]) => [k, asObserved(k, n)])),
+  };
+  const changes = Object.entries(numeric)
+    .filter(([k, n]) => !(Number.isFinite(Number(row[k])) && Math.abs(Number(row[k]) - n) < 1e-9))
+    .map(([k]) => ({ field: k, from: row[k] ?? null, to: aligned[k] }));
   if (changes.length === 0)
     throw new InputError("Суммы строки уже совпадают с суммой документа; изменение не нужно.");
   const payload: ODataEntity = { [ROWS]: [aligned] };

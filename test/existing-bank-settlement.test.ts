@@ -1144,6 +1144,35 @@ describe("align_bank_payment_amounts и запрет проведения при
     expect(f.writes).toHaveLength(0);
   });
 
+  it("Int64 строкой, как отдаёт 1С: «1» не считается изменением и отправляется строкой", async () => {
+    const f = await broken();
+    f.setDoc({ [ROWS]: [{ ...rowOf(f), КратностьВзаиморасчетов: "1", КурсВзаиморасчетов: 1 }] });
+    const p = await f.run({}, ALIGN);
+    const fields = (data(p).changes as Array<{ field: string }>).map((c) => c.field);
+    expect(fields).not.toContain("КратностьВзаиморасчетов");
+    expect(fields).not.toContain("КурсВзаиморасчетов");
+    await f.run({ confirm: true, operationId: data(p).operationId }, ALIGN);
+    const sent = (f.writes[0]!.body as { РасшифровкаПлатежа: ODataEntity[] }).РасшифровкаПлатежа[0]!;
+    expect(sent.КратностьВзаиморасчетов).toBe("1");
+  });
+
+  it("неизменившиеся числа — «уже совпадают», даже если 1С отдаёт их строкой", async () => {
+    const f = await broken();
+    f.setDoc({
+      [ROWS]: [
+        {
+          ...rowOf(f),
+          СуммаПлатежа: 150,
+          СуммаВзаиморасчетов: 150,
+          СуммаНДС: 25,
+          КурсВзаиморасчетов: 1,
+          КратностьВзаиморасчетов: "1",
+        },
+      ],
+    });
+    expect(JSON.stringify((await f.run({}, ALIGN)).content)).toContain("уже совпадают");
+  });
+
   it("суммы уже совпадают — отказ «изменение не нужно»", async () => {
     const f = await fixture();
     const rowSet = `${SET}_${ROWS}`;
