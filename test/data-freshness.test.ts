@@ -227,6 +227,27 @@ describe("withDatabaseInfo: какая база ответила", () => {
     expect((r.content[0] as { text: string }).text).toBe("сводка");
   });
 
+  it.each(["read.accounting.get_contract_settlement_settings", "read.accounting.get_settlement_settings"])(
+    "%s называет базу",
+    async (name) => {
+      const f = fake1C();
+      const id = "11111111-1111-4111-8111-111111111111";
+      const tool = toolsOf(f.ctx)[name]!;
+      const r = await tool.handler(
+        tool.inputSchema.parse({
+          organizationRef: id,
+          counterpartyRef: id,
+          contractRef: id,
+          settlementKind: "РасчетыВВалютеРегламентированногоУчета",
+          scope: "contract",
+        }),
+        {},
+      );
+      expect(r.isError).toBeFalsy();
+      expect((r.structuredContent as { database: string }).database).toBeTruthy();
+    },
+  );
+
   it("каждый инструмент чтения называет базу (кроме list_databases)", async () => {
     const f = fake1C();
     const tools = toolsOf(f.ctx);
