@@ -88,7 +88,7 @@ async function fixture() {
     });
     return {} as never;
   });
-  const server = createServer({ db: () => conn } as never);
+  const server = createServer({ db: () => conn, databases: () => [] } as never);
   const tools = (
     server as unknown as {
       _registeredTools: Record<

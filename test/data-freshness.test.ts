@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CallToolResult } from "@modelcontextprotocol/server";
-import { createServer, withDatabaseInfo } from "../src/mcp/server.js";
+import { createServer, requireDatabase, withDatabaseInfo } from "../src/mcp/server.js";
 import { addDays, localToday } from "../src/odata/settlements-aging.js";
 import { lastClosedMonths } from "../src/tools/freshness.js";
 import { KEY_CLOSING_OPERATION, type ClosingOp } from "../src/tools/month-close.js";
@@ -216,5 +216,59 @@ describe("withDatabaseInfo: какая база ответила", () => {
     const list = tools["read.system.list_databases"]!;
     const l = await list.handler({}, {});
     expect((l.structuredContent as { database?: string }).database).toBeUndefined();
+  });
+});
+
+describe("запись при нескольких базах требует database", () => {
+  const multi = (f: ReturnType<typeof fake1C>) =>
+    new Proxy(f.ctx, {
+      get: (t, k) =>
+        k === "databases"
+          ? () => [
+              { name: "ip", isDefault: true },
+              { name: "ooo", isDefault: false },
+            ]
+          : k === "db"
+            ? () => f.conn
+            : Reflect.get(t, k),
+    }) as typeof f.ctx;
+
+  it("отказ без обращения к инструменту; с базой и с одной базой проходит", async () => {
+    const inner = vi.fn(async () => ({ content: [] }));
+    const two = { databases: () => [{ name: "a" }, { name: "b" }] } as never;
+    const one = { databases: () => [{ name: "a" }] } as never;
+    const refused = await requireDatabase(two, inner)({}, {});
+    expect(refused.isError).toBe(true);
+    expect((refused.content[0] as { text: string }).text).toContain("a, b");
+    expect(inner).not.toHaveBeenCalled();
+    await requireDatabase(two, inner)({ database: "a" }, {});
+    await requireDatabase(one, inner)({}, {});
+    expect(inner).toHaveBeenCalledTimes(2);
+  });
+
+  it("каждый инструмент записи: отказ без database, ни одного запроса; и есть параметр database", async () => {
+    const f = fake1C({ READ_ONLY: "false", ODATA_WRITABLE: "true" });
+    const tools = toolsOf(multi(f));
+    const spy = vi.spyOn(f.conn.client, "getCollection");
+    const names = Object.keys(tools).filter((n) => n.startsWith("write."));
+    expect(names.length).toBeGreaterThan(30);
+    for (const name of names) {
+      const tool = tools[name] as Tool & { inputSchema: { shape: Record<string, unknown> } };
+      expect(Object.keys(tool.inputSchema.shape), name).toContain("database");
+      for (const confirm of [false, true]) {
+        const r = await tool.handler({ confirm }, {});
+        expect(r.isError, `${name} confirm=${confirm}`).toBe(true);
+        expect((r.content[0] as { text: string }).text, name).toContain("укажите database");
+      }
+    }
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("чтение при нескольких базах без database работает", async () => {
+    const f = fake1C();
+    const tool = toolsOf(multi(f))["read.system.list_organizations"]!;
+    const r = await tool.handler(tool.inputSchema.parse({}), {});
+    expect(r.isError).toBeFalsy();
+    expect(r.structuredContent).toMatchObject({ databaseDefaulted: true });
   });
 });

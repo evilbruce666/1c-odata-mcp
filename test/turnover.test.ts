@@ -295,7 +295,7 @@ function fakeCtx(regRows: Array<Record<string, unknown>>) {
     behavior: { analyticsMaxRows: 200_000, pageSize: 100, maxRows: 1000 },
     available: async () => new Set([REG, CHART, ORGS]),
   };
-  const ctx = { db: () => conn } as unknown as ServerContext;
+  const ctx = { db: () => conn, databases: () => [] } as unknown as ServerContext;
   return { ctx, paths };
 }
 

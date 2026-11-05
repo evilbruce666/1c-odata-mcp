@@ -92,7 +92,7 @@ describe("post_document: без договора — понятная ошибк
       },
     };
     const t = (
-      createServer({ db: () => connection } as never) as unknown as {
+      createServer({ db: () => connection, databases: () => [] } as never) as unknown as {
         _registeredTools: Record<
           string,
           { handler: (a: Record<string, unknown>, e: unknown) => Promise<CallToolResult> }
@@ -157,7 +157,7 @@ describe("create_contract regulated currency", () => {
       },
     };
     const tools = (
-      createServer({ db: () => connection } as never) as unknown as {
+      createServer({ db: () => connection, databases: () => [] } as never) as unknown as {
         _registeredTools: Record<
           string,
           { handler: (args: object, extra: object) => Promise<CallToolResult> }

@@ -433,7 +433,7 @@ describe("copy_document: счета расчётов — как в исходн�
     const getEntity = c.client["getEntity"] as (p: string) => Promise<unknown>;
     c.client["getEntity"] = async (p: string) => (p.startsWith(ACT) ? { ...source } : getEntity(p));
     c.client["prepareCreate"] = vi.fn(async () => undefined);
-    const server = createServer({ db: () => conn } as never) as unknown as {
+    const server = createServer({ db: () => conn, databases: () => [] } as never) as unknown as {
       _registeredTools: Record<string, { handler: Handler }>;
     };
     return server._registeredTools["write.document.copy_document"]!.handler;

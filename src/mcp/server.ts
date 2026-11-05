@@ -48,8 +48,9 @@ const INSTRUCTIONS =
   "при таймауте повторяйте подтверждение с тем же id и теми же аргументами, а не с новым предпросмотром. " +
   "Это защищает от дубликата, если ответ 1С потерялся. " +
   "Если настроено несколько баз и из вопроса неясно какая, спросите пользователя или проверьте " +
-  "read.system.data_freshness, а не полагайтесь на базу по умолчанию: при её подстановке в ответе есть " +
-  "databaseDefaulted. Ref_Key действуют только в своей базе: чужая ссылка даёт пустой результат, а не ошибку.";
+  "read.system.data_freshness, а не полагайтесь на базу по умолчанию: при её подстановке в ответе чтения есть " +
+  "databaseDefaulted, а запись без database при нескольких базах отказывает. " +
+  "Ref_Key действуют только в своей базе: чужая ссылка даёт пустой результат, а не ошибку.";
 
 /**
  * Правки документа, которые нельзя слепо повторять: инструмент перечитывает документ, и повтор
@@ -117,6 +118,26 @@ export function withDatabaseInfo(
   return { ...result, content, structuredContent };
 }
 
+/**
+ * Запись при нескольких настроенных базах — только с явной базой, и предпросмотр тоже: иначе
+ * документ можно создать не в той организации, а предпросмотр и подтверждение разойдутся по аргументам.
+ */
+export function requireDatabase(
+  ctx: ServerContext,
+  cb: (args: Record<string, unknown>, extra: unknown) => Promise<CallToolResult>,
+): (args: Record<string, unknown>, extra: unknown) => Promise<CallToolResult> {
+  return async (args, extra) => {
+    const names = ctx.databases().map((d) => d.name);
+    if (names.length > 1 && typeof args.database !== "string") {
+      return fail(
+        `Настроено несколько баз (${names.join(", ")}): для записи укажите database. Ничего не записано. ` +
+          "Если неясно какая база, спросите пользователя.",
+      );
+    }
+    return cb(args, extra);
+  };
+}
+
 /** Создаёт MCP-сервер и регистрирует все инструменты (чтение + гейтованная запись). */
 export function createServer(ctx: ServerContext): McpServer {
   const server = new McpServer(
@@ -150,7 +171,9 @@ export function createServer(ctx: ServerContext): McpServer {
         withDatabaseInfo(ctx, args, await cb(args, extra)),
       );
     }
-    if (!isCreateTool && !JOURNALED_UPDATE_TOOLS.has(name)) return original(name, annotatedConfig, cb);
+    if (!isCreateTool && !JOURNALED_UPDATE_TOOLS.has(name)) {
+      return original(name, annotatedConfig, name.startsWith("write.") ? requireDatabase(ctx, cb) : cb);
+    }
 
     // v2: inputSchema — z.object(...); добавляем operationId через extend (разворот zod-объекта
     // как простого объекта даёт не схему, а его внутренние поля).
@@ -230,7 +253,7 @@ export function createServer(ctx: ServerContext): McpServer {
         return { ...result, content, structuredContent };
       });
     };
-    return original(name, { ...annotatedConfig, inputSchema }, wrapped);
+    return original(name, { ...annotatedConfig, inputSchema }, requireDatabase(ctx, wrapped));
   };
   Reflect.set(server, "registerTool", (name: string, config: unknown, cb: unknown) =>
     registerTool(

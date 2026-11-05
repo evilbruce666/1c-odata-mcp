@@ -205,7 +205,7 @@ async function fixture(entitySet = SET) {
     throw new Error(`Unexpected synthetic path ${path}`);
   });
   const tools = (
-    createServer({ db: () => conn } as never) as unknown as {
+    createServer({ db: () => conn, databases: () => [] } as never) as unknown as {
       _registeredTools: Record<string, { handler: (args: object, extra: object) => Promise<CallToolResult> }>;
     }
   )._registeredTools;

@@ -19,7 +19,7 @@ describe("create tool operationId flow", () => {
       available: async () => new Set(CATALOGS.counterparties),
       client: { prepareCreate, create, operationSettled: async () => undefined },
     };
-    const server = createServer({ db: () => connection } as never) as unknown as {
+    const server = createServer({ db: () => connection, databases: () => [] } as never) as unknown as {
       _registeredTools: Record<
         string,
         {
@@ -54,8 +54,11 @@ type Tool = {
   handler: (args: Record<string, unknown>, extra: Record<string, unknown>) => Promise<CallToolResult>;
 };
 const toolsOf = (connection: unknown): Record<string, Tool> =>
-  (createServer({ db: () => connection } as never) as unknown as { _registeredTools: Record<string, Tool> })
-    ._registeredTools;
+  (
+    createServer({ db: () => connection, databases: () => [] } as never) as unknown as {
+      _registeredTools: Record<string, Tool>;
+    }
+  )._registeredTools;
 
 describe("operation marker and write.operation.status", () => {
   const meta = (withComment: boolean) => ({

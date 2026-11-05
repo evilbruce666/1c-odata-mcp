@@ -210,7 +210,7 @@ function setup(opts: Fake1C = {}) {
       readOnly: false,
     },
   );
-  const ctx = { db: () => conn } as unknown as ServerContext;
+  const ctx = { db: () => conn, databases: () => [] } as unknown as ServerContext;
   return { conn, ctx, calls };
 }
 

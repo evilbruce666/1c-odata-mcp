@@ -21,7 +21,9 @@ const changelog = read("CHANGELOG.md");
 
 type Registered = Record<string, { inputSchema?: { shape?: Record<string, unknown> } }>;
 const registered = (
-  createServer({ db: () => undefined } as never) as unknown as { _registeredTools: Registered }
+  createServer({ db: () => undefined, databases: () => [] } as never) as unknown as {
+    _registeredTools: Registered;
+  }
 )._registeredTools;
 const names = Object.keys(registered).sort();
 /** «63 инструмента», «60 инструментов», «61 инструмент». */
