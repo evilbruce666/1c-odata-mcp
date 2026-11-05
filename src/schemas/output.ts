@@ -382,6 +382,13 @@ export const accountCardResultSchema = z
     closingBalance: z.number(),
     consistent: z.boolean(),
     count: z.number(),
+    offset: z.number(),
+    returned: z.number(),
+    truncated: z.boolean(),
+    nextOffset: z.number().optional(),
+    groups: z
+      .array(z.object({ debit: z.number(), credit: z.number(), count: z.number() }).passthrough())
+      .optional(),
     entries: z.array(z.object({ date: z.string(), balance: z.number() }).passthrough()),
     scan: scanSchema,
   })

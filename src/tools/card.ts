@@ -102,6 +102,102 @@ async function codesOf(conn: Connection, known: readonly Account[], entries: rea
 
 // ─── Карточка счёта ──────────────────────────────────────────────────────────
 
+/**
+ * Предел текста ответа карточки — с запасом к норме 50 000 символов (MAX_RESPONSE_CHARS в тестах):
+ * больший ответ клиент уносит в файл или обрезает, и конец периода теряется уже у него.
+ */
+export const MAX_CARD_CHARS = 45_000;
+/** Строк на страницу: наименования разрешаются запросами, незачем разрешать те, что не поместятся. */
+export const MAX_CARD_PAGE = 100;
+/** Группы карточки занимают не больше этого; иначе отказ — обрезанная сводка хуже её отсутствия. */
+const MAX_GROUP_CHARS = 40_000;
+
+export const CARD_GROUPS = ["month", "corrAccount", "counterparty", "contract"] as const;
+export type CardGroup = (typeof CARD_GROUPS)[number];
+
+/** Символов, которые значение занимает в ответе ok() как элемент массива верхнего уровня. */
+const elementChars = (v: unknown): number => {
+  const text = JSON.stringify(v, null, 2);
+  return text.length + text.split("\n").length * 4 + 2;
+};
+
+/** Сколько первых строк поместится в остаток предела. Хотя бы одна — иначе offset не сдвинется. */
+export function fitToChars<T>(items: readonly T[], usedChars: number, maxChars = MAX_CARD_CHARS): T[] {
+  let used = usedChars;
+  let n = 0;
+  for (const item of items) {
+    used += elementChars(item);
+    if (used > maxChars && n > 0) break;
+    n += 1;
+  }
+  return items.slice(0, n);
+}
+
+const isCounterparty = (d: Dim) => d.set === "Catalog_Контрагенты";
+const isContract = (d: Dim) => !!d.set?.startsWith("Catalog_Договор");
+
+/** Субконто, по которым идёт группировка: их наименования нужны и для строк вне страницы. */
+export function groupDims(entries: readonly CardEntry[], groupBy: readonly CardGroup[]): Dim[] {
+  return entries.flatMap((e) =>
+    e.dims.filter(
+      (d) =>
+        (groupBy.includes("counterparty") && isCounterparty(d)) ||
+        (groupBy.includes("contract") && isContract(d)),
+    ),
+  );
+}
+
+/**
+ * Сводка по ВСЕМ движениям карточки, а не по странице: суммы групп сходятся с оборотами карточки.
+ * Строка без нужного субконто попадает в группу без этого поля, а не теряется. Субконто группируются
+ * по ссылке: одноимённые договоры разных контрагентов («Основной договор») — разные группы, ссылка
+ * есть в ответе (counterpartyRef, contractRef) и годится для отбора.
+ */
+export function groupEntries(
+  entries: readonly CardEntry[],
+  groupBy: readonly CardGroup[],
+  name: (d: Dim) => string,
+  code: (key?: string) => string | undefined,
+): Array<Record<string, string | number>> {
+  const groups = new Map<
+    string,
+    { fields: Record<string, string>; sortKey: string; dr: number; cr: number; count: number }
+  >();
+  for (const e of entries) {
+    const fields: Record<string, string> = {};
+    const ids: string[] = [];
+    for (const g of groupBy) {
+      if (g === "month" || g === "corrAccount") {
+        const value = g === "month" ? e.period.slice(0, 7) : code(e.corrAccount);
+        if (value) fields[g] = value;
+        ids.push(value ?? "");
+        continue;
+      }
+      const d = e.dims.find(g === "counterparty" ? isCounterparty : isContract);
+      if (d) {
+        fields[g] = name(d);
+        fields[`${g}Ref`] = d.ref;
+      }
+      ids.push(d?.ref ?? "");
+    }
+    const k = ids.join("\u0000");
+    const group = groups.get(k) ?? {
+      fields,
+      sortKey: `${groupBy.map((g) => fields[g] ?? "").join("\u0000")}\u0000${k}`,
+      dr: 0,
+      cr: 0,
+      count: 0,
+    };
+    if (e.side === "debit") group.dr += e.cents;
+    else group.cr += e.cents;
+    group.count += 1;
+    groups.set(k, group);
+  }
+  return [...groups.values()]
+    .sort((a, b) => a.sortKey.localeCompare(b.sortKey))
+    .map((g) => ({ ...g.fields, debit: rub(g.dr), credit: rub(g.cr), count: g.count }));
+}
+
 async function accountCard(
   conn: Connection,
   o: {
@@ -112,6 +208,9 @@ async function accountCard(
     counterpartyRef?: string | undefined;
     dimensionRef?: string | undefined;
     limit: number;
+    offset: number;
+    groupBy: readonly CardGroup[];
+    summaryOnly: boolean;
   },
 ) {
   const t0 = Date.now();
@@ -152,33 +251,46 @@ async function accountCard(
     }
     return { e, balance };
   });
-  const shown = withBalance.slice(0, o.limit);
+  const groupBy = [...new Set(o.groupBy)];
+  const candidates = o.summaryOnly
+    ? []
+    : withBalance.slice(o.offset, o.offset + Math.min(o.limit, MAX_CARD_PAGE));
   const [names, code] = await Promise.all([
     describeRefs(
       conn,
-      shown.map((x) => x.e),
+      candidates.map((x) => x.e),
+      groupDims(entries, groupBy),
     ),
-    codesOf(
-      conn,
-      accounts,
-      shown.map((x) => x.e),
-    ),
+    codesOf(conn, accounts, groupBy.includes("corrAccount") ? entries : candidates.map((x) => x.e)),
   ]);
+  const rows = candidates.map(({ e, balance: b }) => {
+    const doc = names.doc(e.recorderSet, e.recorder);
+    return {
+      date: e.period.slice(0, 10),
+      ...(e.recorderSet
+        ? { document: e.recorderSet.replace(/^Document_/, ""), documentTitle: documentTitle(e.recorderSet) }
+        : {}),
+      ...(doc.number ? { number: doc.number } : {}),
+      ...(e.recorder ? { documentRef: e.recorder } : {}),
+      ...(createdAt(e.recorder) ? { documentCreatedAt: createdAt(e.recorder) } : {}),
+      ...(e.content ? { content: e.content } : {}),
+      account: code(e.account),
+      ...(e.dims.length ? { analytics: e.dims.map(names.name) } : {}),
+      ...(e.side === "debit" ? { debit: rub(e.cents) } : { credit: rub(e.cents) }),
+      ...(e.corrAccount ? { corrAccount: code(e.corrAccount) } : {}),
+      ...(e.corrDims.length ? { corrAnalytics: e.corrDims.map(names.name) } : {}),
+      balance: rub(b),
+    };
+  });
+  const groups = groupBy.length ? groupEntries(entries, groupBy, names.name, code) : undefined;
+  if (groups && elementChars(groups) > MAX_GROUP_CHARS) {
+    throw new InputError(
+      `Группировка ${groupBy.join(", ")} дала ${groups.length} групп — в ответ не поместится. ` +
+        "Сократите groupBy или сузьте период, отбор — counterpartyRef или dimensionRef.",
+    );
+  }
 
-  const notes: string[] = [];
-  if (entries.length > shown.length) {
-    notes.push(
-      `Показаны первые ${shown.length} из ${entries.length} движений — итоги посчитаны по всем. ` +
-        "Сузьте период или увеличьте limit.",
-    );
-  }
-  if (balance !== expectedClosing) {
-    notes.push(
-      `Остаток по движениям (${rub(balance)}) не совпал с сальдо регистра на конец периода ` +
-        `(${rub(expectedClosing)}) — возможно, движения изменились во время выборки; повторите запрос.`,
-    );
-  }
-  return {
+  const head = {
     database: conn.cfg.name,
     ...(org ? { organization: org.name } : {}),
     account: o.account,
@@ -198,25 +310,35 @@ async function accountCard(
     closingBalance: rub(balance),
     consistent: balance === expectedClosing,
     count: entries.length,
-    entries: shown.map(({ e, balance: b }) => {
-      const doc = names.doc(e.recorderSet, e.recorder);
-      return {
-        date: e.period.slice(0, 10),
-        ...(e.recorderSet
-          ? { document: e.recorderSet.replace(/^Document_/, ""), documentTitle: documentTitle(e.recorderSet) }
-          : {}),
-        ...(doc.number ? { number: doc.number } : {}),
-        ...(e.recorder ? { documentRef: e.recorder } : {}),
-        ...(createdAt(e.recorder) ? { documentCreatedAt: createdAt(e.recorder) } : {}),
-        ...(e.content ? { content: e.content } : {}),
-        account: code(e.account),
-        ...(e.dims.length ? { analytics: e.dims.map(names.name) } : {}),
-        ...(e.side === "debit" ? { debit: rub(e.cents) } : { credit: rub(e.cents) }),
-        ...(e.corrAccount ? { corrAccount: code(e.corrAccount) } : {}),
-        ...(e.corrDims.length ? { corrAnalytics: e.corrDims.map(names.name) } : {}),
-        balance: rub(b),
-      };
-    }),
+    ...(groups ? { groups } : {}),
+  };
+  const shown = fitToChars(rows, JSON.stringify(head, null, 2).length);
+  const nextOffset = o.offset + shown.length;
+  const truncated = !o.summaryOnly && nextOffset < entries.length;
+
+  const notes: string[] = [];
+  if (truncated) {
+    notes.push(
+      `Показаны движения ${o.offset + 1}–${nextOffset} из ${entries.length}, итоги посчитаны по всем. ` +
+        `Следующая страница: offset=${nextOffset}. Сводка без строк: summaryOnly=true и groupBy.`,
+    );
+  }
+  if (!o.summaryOnly && o.offset > 0 && o.offset >= entries.length) {
+    notes.push(`offset=${o.offset} за пределами карточки: всего движений ${entries.length}.`);
+  }
+  if (balance !== expectedClosing) {
+    notes.push(
+      `Остаток по движениям (${rub(balance)}) не совпал с сальдо регистра на конец периода ` +
+        `(${rub(expectedClosing)}) — возможно, движения изменились во время выборки; повторите запрос.`,
+    );
+  }
+  return {
+    ...head,
+    offset: o.offset,
+    returned: shown.length,
+    truncated,
+    ...(truncated ? { nextOffset } : {}),
+    entries: shown,
     ...(notes.length ? { note: notes.join(" ") } : {}),
     scan: { rowsScanned: moves.meta.rowsScanned, windows: moves.meta.chunks, elapsedMs: Date.now() - t0 },
   };
@@ -679,7 +801,13 @@ export function registerCardTools(server: McpServer, ctx: ServerContext): void {
         "dimensionRef — любое другое субконто (договор, номенклатура, банковский счёт, документ " +
         "расчётов). Сторно приходит отрицательной суммой в debit/credit. documentCreatedAt — когда документ " +
         "создан (по ссылке): помогает найти документы, внесённые после закрытия месяца. Если остаток сложился " +
-        "до периода — возьмите период шире. Для разбора: откуда остаток на 26, кто дал красное сальдо, как сложился долг.",
+        "до периода — возьмите период шире. Для разбора: откуда остаток на 26, кто дал красное сальдо, как сложился долг. " +
+        "Ответ постраничный: count — всего движений, returned — сколько в этом ответе; при truncated=true " +
+        "читайте дальше с offset=nextOffset, пока truncated не станет false. За один ответ не больше " +
+        `${MAX_CARD_PAGE} строк и примерно ${MAX_CARD_CHARS} символов, что бы ни стояло в limit. Обороты и остатки всегда по всему периоду. ` +
+        "Итоги по месяцам, корреспондирующим счетам, контрагентам или договорам: groupBy, сумма групп равна " +
+        "оборотам карточки; с summaryOnly=true строк нет и ответ быстрее. Для этого не нужно читать все страницы. " +
+        "Не отдаёт обороты по субсчетам (это get_account_turnover) и не разбирает текст назначений платежей.",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
@@ -696,11 +824,47 @@ export function registerCardTools(server: McpServer, ctx: ServerContext): void {
         dimensionRef: guidField(
           "Ref_Key другого субконто: договор, номенклатура, банковский счёт",
         ).optional(),
-        limit: z.number().int().positive().max(2000).default(200).describe("Сколько движений показать"),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .max(2000)
+          .default(200)
+          .describe(`Сколько движений показать, в одном ответе не больше ${MAX_CARD_PAGE}`),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .default(0)
+          .describe("С какого движения начать (0 — с начала); значение из nextOffset прошлого ответа"),
+        groupBy: z
+          .array(z.enum(CARD_GROUPS))
+          .max(CARD_GROUPS.length)
+          .optional()
+          .describe(
+            "Итоги по всем движениям периода: month — месяц, corrAccount — корреспондирующий счёт, " +
+              "counterparty — контрагент, contract — договор (субконто счёта карточки, с их Ref_Key). Можно сочетать",
+          ),
+        summaryOnly: z
+          .boolean()
+          .default(false)
+          .describe("Только сальдо, обороты и groups, без строк движений"),
       }),
       outputSchema: accountCardResultSchema,
     },
-    ({ database, organization, account, from, to, counterpartyRef, dimensionRef, limit }) =>
+    ({
+      database,
+      organization,
+      account,
+      from,
+      to,
+      counterpartyRef,
+      dimensionRef,
+      limit,
+      offset,
+      groupBy,
+      summaryOnly,
+    }) =>
       guard("read.accounting.get_account_card", async () => {
         if (from > to) return fail(`Период задан наоборот: from (${from}) позже to (${to}).`);
         return ok(
@@ -712,6 +876,9 @@ export function registerCardTools(server: McpServer, ctx: ServerContext): void {
             counterpartyRef,
             dimensionRef,
             limit,
+            offset,
+            groupBy: groupBy ?? [],
+            summaryOnly,
           }),
         );
       }),
