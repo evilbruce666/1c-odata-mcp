@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CallToolResult } from "@modelcontextprotocol/server";
-import { fetchMovements, STABLE_MOVEMENT_ORDER, type CardEntry } from "../src/odata/account-card.js";
+import { fetchMovements, type CardEntry } from "../src/odata/account-card.js";
+import { fetchAll, stableOrderBy } from "../src/odata/pagination.js";
 import { resolveAccounts } from "../src/odata/accounting.js";
 import { createServer } from "../src/mcp/server.js";
 import { fitToChars, groupDims, groupEntries, MAX_CARD_PAGE } from "../src/tools/card.js";
@@ -18,46 +19,83 @@ const row = (doc: string, line = 1) => ({
 });
 const args = { accountKeys: [ACC], from: "2026-01-01", to: "2026-01-31" };
 
-function replyWith(conn: ReturnType<typeof fake1C>["conn"], reply: (sorted: boolean) => object[]) {
-  return vi.spyOn(conn.client, "getCollection").mockImplementation(async (url: string) => ({
-    value: reply(decodeURIComponent(url).includes("$orderby")) as never[],
-  }));
-}
-
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
-describe("fetchMovements: сбой листания 1С не превращается в тихий недосчёт", () => {
-  it("без повторов — один запрос, без сортировки", async () => {
-    const { conn } = fake1C();
-    const spy = replyWith(conn, () => [row("a"), row("b")]);
-    const { rows } = await fetchMovements(conn, args);
-    expect(rows).toHaveLength(2);
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(decodeURIComponent(String(spy.mock.calls[0]![0]))).not.toContain("$orderby");
+describe("fetchAll: листание не теряет строк", () => {
+  const client = (rows: Record<string, unknown>[]) => {
+    const urls: string[] = [];
+    return {
+      urls,
+      client: {
+        getCollection: async (url: string) => {
+          const u = decodeURIComponent(url);
+          urls.push(u);
+          const top = Number(/\$top=(\d+)/.exec(u)?.[1] ?? rows.length);
+          const skip = Number(/\$skip=(\d+)/.exec(u)?.[1] ?? 0);
+          return { value: rows.slice(skip, skip + top) };
+        },
+      } as never,
+    };
+  };
+  const rows = (n: number) => Array.from({ length: n }, (_, i) => ({ Ref_Key: `r${i}` }));
+
+  it.each([
+    [undefined, "Ref_Key asc"],
+    ["Date asc", "Date asc,Ref_Key asc"],
+    ["Date desc,Ref_Key asc", "Date desc,Ref_Key asc"],
+  ])("порядок %j → %j", (given, expected) => {
+    expect(stableOrderBy(given)).toBe(expected);
   });
 
-  it("повтор вместо пропущенной строки — перечитывает с устойчивой сортировкой", async () => {
-    const { conn } = fake1C();
-    const spy = replyWith(conn, (sorted) => (sorted ? [row("a"), row("b")] : [row("a"), row("a")]));
-    const { rows, meta } = await fetchMovements(conn, args);
-    expect(rows.map((r) => r["Recorder"])).toEqual(["a", "b"]);
-    expect(spy).toHaveBeenCalledTimes(2);
-    expect(decodeURIComponent(String(spy.mock.calls[1]![0]))).toContain(STABLE_MOVEMENT_ORDER);
-    expect(meta.chunks).toBe(2);
+  it.each(["Catalog_Контрагенты", "Document_ПоступлениеНаРасчетныйСчет", "ChartOfAccounts_Хозрасчетный"])(
+    "%s: страницы с однозначной сортировкой, все строки",
+    async (set) => {
+      const c = client(rows(25));
+      const r = await fetchAll(c.client, set, { select: ["Ref_Key"] }, 10, 100);
+      expect(r).toMatchObject({ truncated: false });
+      expect(r.rows).toHaveLength(25);
+      expect(c.urls).toHaveLength(3);
+      for (const u of c.urls) expect(u).toContain("$orderby=Ref_Key asc");
+    },
+  );
+
+  it.each([
+    "AccountingRegister_Хозрасчетный/BalanceAndTurnovers(StartPeriod=datetime'2026-01-01T00:00:00')",
+    "AccountingRegister_Хозрасчетный/RecordsWithExtDimensions(StartPeriod=datetime'2026-01-01T00:00:00')",
+    "AccountingRegister_Хозрасчетный/Balance",
+    "InformationRegister_ОплатаСчетов",
+  ])("%s: один запрос без листания и без Ref_Key", async (set) => {
+    const c = client(rows(25));
+    const r = await fetchAll(c.client, set, {}, 10, 100);
+    expect(r.rows).toHaveLength(25);
+    expect(c.urls).toHaveLength(1);
+    expect(c.urls[0]).toContain("$top=100");
+    expect(c.urls[0]).not.toContain("Ref_Key");
   });
 
-  it("повторы и с сортировкой — отказ, а не неполная сумма", async () => {
-    const { conn } = fake1C();
-    replyWith(conn, () => [row("a"), row("a")]);
-    await expect(fetchMovements(conn, args)).rejects.toThrow("с повторами");
+  it("регистр упёрся в лимит — усечение видно", async () => {
+    const c = client(rows(30));
+    const r = await fetchAll(c.client, "AccumulationRegister_Товары/Balance", {}, 10, 30);
+    expect(r).toMatchObject({ truncated: true });
   });
 
-  it("разные строки одного документа — не повтор", async () => {
+  it("таблица со ссылкой упёрлась в лимит — усечение видно", async () => {
+    const c = client(rows(30));
+    const r = await fetchAll(c.client, "Catalog_Контрагенты", {}, 10, 20);
+    expect(r.rows).toHaveLength(20);
+    expect(r.truncated).toBe(true);
+  });
+});
+
+describe("fetchMovements", () => {
+  it("один запрос на пачку счетов, движение из двух пачек — один раз", async () => {
     const { conn } = fake1C();
-    const spy = replyWith(conn, () => [row("a", 1), row("a", 2)]);
+    const spy = vi.spyOn(conn.client, "getCollection").mockResolvedValue({
+      value: [row("a"), row("a", 2)] as never[],
+    });
     const { rows } = await fetchMovements(conn, args);
     expect(rows).toHaveLength(2);
     expect(spy).toHaveBeenCalledTimes(1);

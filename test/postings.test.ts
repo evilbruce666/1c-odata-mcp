@@ -425,15 +425,14 @@ describe("read.accounting.get_document_postings", () => {
     await expect(getDocumentPostings(conn, DOC, DOC_REF)).rejects.toThrow(/другого регистратора/);
   });
 
-  it("пагинация: 2350 записей при странице 1000 — все выбраны, без потерь и дублей", async () => {
+  it("2350 записей: все выбраны одним запросом, без потерь и дублей", async () => {
     const records = Array.from({ length: 2350 }, (_, i) => rec(i + 1, A9021, A20, 1));
     const { conn, calls } = setup({ records });
     const res = await getDocumentPostings(conn, DOC, DOC_REF);
     expect(res.postingsCount).toBe(2350);
     expect(res.debitTotal).toBe(2350);
-    const reg = regCalls(calls);
-    expect(reg).toHaveLength(3);
-    expect(reg.map((c) => /\$skip=(\d+)/.exec(c.path)?.[1])).toEqual(["0", "1000", "2000"]);
+    // Регистр читается одним запросом: $skip без однозначной сортировки теряет строки.
+    expect(regCalls(calls)).toHaveLength(1);
   });
 
   it("переполнение потолка — AggregateOverflowError, частичного набора нет", async () => {

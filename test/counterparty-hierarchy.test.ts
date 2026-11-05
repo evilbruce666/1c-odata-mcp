@@ -79,13 +79,13 @@ describe("current bounded counterparty ancestors", () => {
   });
   it("queries only current ancestors and refuses truncated register rows", async () => {
     const f = fixture();
-    f.getCollection.mockResolvedValue({ value: Array.from({ length: 100 }, () => ({})) });
+    f.getCollection.mockResolvedValue({ value: Array.from({ length: 500 }, () => ({})) });
     await expect(
       settlementAccountsFor(f.conn, { contractRef: CP }, { contract: f.contract }),
     ).rejects.toThrow("усечён");
     const query = decodeURIComponent(f.getCollection.mock.calls[0]![0] ?? "");
     expect(query).toContain(G);
     expect(query).toContain(FAR);
-    expect(f.getCollection).toHaveBeenCalledTimes(5);
+    expect(f.getCollection).toHaveBeenCalledTimes(1);
   });
 });
