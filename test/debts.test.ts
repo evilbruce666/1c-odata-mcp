@@ -1,13 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, afterEach } from "vitest";
 import {
   addDays,
   ageCounterparty,
   contractTermDays,
+  nonCalendarTermKind,
   daysBetween,
   settlementRows,
   type DocInfo,
 } from "../src/odata/settlements-aging.js";
-import { cashKind, invoiceStatus } from "../src/tools/debts.js";
+import { cashKind, contractInfo, invoiceStatus } from "../src/tools/debts.js";
+import { fake1C } from "./helpers/fake-1c.js";
 
 const CP = "11111111-1111-1111-1111-111111111111";
 const CONTRACT = "22222222-2222-2222-2222-222222222222";
@@ -152,4 +154,58 @@ describe("cashKind", () => {
     expect(cashKind("57.03")).toBe("transit");
     expect(cashKind("58")).toBe("other");
   });
+});
+
+describe("nonCalendarTermKind: срок не в календарных днях", () => {
+  const term = { УстановленСрокОплаты: true, СрокОплаты: 10 };
+  it.each([
+    ["Рабочие", "Рабочие"],
+    ["Банковские", "Банковские"],
+    ["Календарные", undefined],
+    ["календарных", undefined],
+    ["", undefined],
+    ["  ", undefined],
+  ])("%j → %j", (kind, expected) => {
+    expect(nonCalendarTermKind({ ...term, ВидДнейСрокаОплаты: kind })).toBe(expected);
+  });
+  it("без флага срока и без договора — не считается", () => {
+    expect(
+      nonCalendarTermKind({ УстановленСрокОплаты: false, ВидДнейСрокаОплаты: "Рабочие" }),
+    ).toBeUndefined();
+    expect(nonCalendarTermKind({ ...term })).toBeUndefined();
+    expect(nonCalendarTermKind(undefined)).toBeUndefined();
+  });
+});
+
+describe("contractInfo: договоры со сроком не в календарных днях", () => {
+  const CONTRACT = "11111111-1111-4111-8111-111111111111";
+  const row = { contract: CONTRACT, contractSet: "Catalog_ДоговорыКонтрагентов", cents: 100 } as never;
+  const run = async (contract: Record<string, unknown>) => {
+    const { conn } = fake1C();
+    const spy = vi.spyOn(conn.client, "getCollection").mockResolvedValue({
+      value: [{ Ref_Key: CONTRACT, Description: "Договор №1", ...contract }] as never[],
+    });
+    return { info: await contractInfo(conn, [row]), url: decodeURIComponent(String(spy.mock.calls[0]![0])) };
+  };
+
+  it("рабочие дни: договор назван, срок остаётся как есть", async () => {
+    const { info, url } = await run({
+      УстановленСрокОплаты: true,
+      СрокОплаты: 10,
+      ВидДнейСрокаОплаты: "Рабочие",
+    });
+    expect(url).toContain("ВидДнейСрокаОплаты");
+    expect(info.nonCalendar).toEqual([{ contract: "Договор №1", dayKind: "Рабочие" }]);
+    expect(info.terms.get(CONTRACT)).toBe(10);
+  });
+
+  it("пустое поле, как в живых базах: без предупреждения", async () => {
+    const { info } = await run({ УстановленСрокОплаты: true, СрокОплаты: 10, ВидДнейСрокаОплаты: "" });
+    expect(info.nonCalendar).toEqual([]);
+  });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });

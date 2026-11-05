@@ -251,6 +251,18 @@ export function ageCounterparty(
  * Срок оплаты из договора в днях: только если в договоре стоит флаг «Установлен срок
  * оплаты». Без флага — undefined (срок не задан), даже если число дней заполнено.
  */
+/**
+ * Вид дней срока из договора, если он не календарный. Срок считается в календарных днях: рабочие
+ * без производственного календаря не посчитать, поэтому такой договор только называется в ответе.
+ * Значения поля на живых базах не встречались (оно пустое), поэтому сравнение только со словом
+ * «календарный»; пустое считаем обычным сроком.
+ */
+export function nonCalendarTermKind(contract: ODataEntity | undefined): string | undefined {
+  if (!contract || contract["УстановленСрокОплаты"] !== true) return undefined;
+  const kind = String(contract["ВидДнейСрокаОплаты"] ?? "").trim();
+  return kind && !/календ/i.test(kind) ? kind : undefined;
+}
+
 export function contractTermDays(contract: ODataEntity | undefined): number | undefined {
   if (!contract || contract["УстановленСрокОплаты"] !== true) return undefined;
   const n = Number(contract["СрокОплаты"]);

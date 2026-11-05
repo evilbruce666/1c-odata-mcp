@@ -21,6 +21,7 @@ import {
   AGE_BUCKETS,
   ageCounterparty,
   contractTermDays,
+  nonCalendarTermKind,
   daysBetween,
   localToday,
   OVERDUE_BUCKETS,
@@ -84,10 +85,15 @@ async function documentInfo(conn: Connection, rows: readonly SettlementRow[]): P
 }
 
 /** Сроки оплаты и наименования договоров. termsPublished=false — полей срока в базе нет. */
-async function contractInfo(
+export async function contractInfo(
   conn: Connection,
   rows: readonly SettlementRow[],
-): Promise<{ terms: Map<string, number | undefined>; names: Map<string, string>; termsPublished: boolean }> {
+): Promise<{
+  terms: Map<string, number | undefined>;
+  names: Map<string, string>;
+  termsPublished: boolean;
+  nonCalendar: Array<{ contract: string; dayKind: string }>;
+}> {
   const bySet = new Map<string, string[]>();
   for (const r of rows) {
     if (!r.contract || !r.contractSet || r.cents <= 0) continue;
@@ -95,18 +101,26 @@ async function contractInfo(
   }
   const terms = new Map<string, number | undefined>();
   const names = new Map<string, string>();
+  const nonCalendar: Array<{ contract: string; dayKind: string }> = [];
   let termsPublished = bySet.size === 0;
   for (const [set, refs] of bySet) {
     const props = await propertiesOf(conn, set);
     const hasTerms = props.has("УстановленСрокОплаты") && props.has("СрокОплаты");
     termsPublished ||= hasTerms;
-    const select = ["Ref_Key", "Description", ...(hasTerms ? ["УстановленСрокОплаты", "СрокОплаты"] : [])];
+    const select = [
+      "Ref_Key",
+      "Description",
+      ...(hasTerms ? ["УстановленСрокОплаты", "СрокОплаты"] : []),
+      ...(hasTerms && props.has("ВидДнейСрокаОплаты") ? ["ВидДнейСрокаОплаты"] : []),
+    ];
     for (const [ref, c] of await readByRefs(conn, set, refs, select)) {
       names.set(ref, String(c["Description"] ?? ""));
       terms.set(ref, hasTerms ? contractTermDays(c) : undefined);
+      const dayKind = nonCalendarTermKind(c);
+      if (dayKind) nonCalendar.push({ contract: String(c["Description"] ?? ref), dayKind });
     }
   }
-  return { terms, names, termsPublished };
+  return { terms, names, termsPublished, nonCalendar };
 }
 
 interface SettlementsOptions {
@@ -247,6 +261,12 @@ async function settlementsReport(conn: Connection, side: SettlementSide, o: Sett
         "в noTerm, с возрастом от даты документа (ageDays). Если у компании общий срок, передайте defaultTermDays.",
     );
   }
+  if (contracts.nonCalendar.length) {
+    notes.push(
+      `В договорах ${contracts.nonCalendar.map((c) => `«${c.contract}»`).join(", ")} срок оплаты задан не в ` +
+        "календарных днях (nonCalendarTerms). Дата оплаты посчитана в календарных, поэтому просрочка по ним приблизительная.",
+    );
+  }
   if (fallback) {
     notes.unshift(
       "Просрочку не посчитать: в договорах не задан срок оплаты. Вместо неё показаны контрагенты с долгом " +
@@ -309,6 +329,7 @@ async function settlementsReport(conn: Connection, side: SettlementSide, o: Sett
       aging: {
         asOf,
         ...(o.defaultTermDays !== undefined ? { defaultTermDays: o.defaultTermDays } : {}),
+        ...(contracts.nonCalendar.length ? { nonCalendarTerms: contracts.nonCalendar } : {}),
         totalOverdue: rub(sum((a) => a.overdueCents)),
         overdueByDays: bucketsOut(OVERDUE_BUCKETS, totalBuckets),
         byAge: bucketsOut(AGE_BUCKETS, totalAge),
