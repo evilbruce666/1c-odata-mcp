@@ -504,7 +504,9 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
       title: "Продажи за период",
       description:
         "Сумма выручки по проведённым документам реализации за период (по полю СуммаДокумента). " +
-        "Можно ограничить организацией. Период задаётся датами YYYY-MM-DD.",
+        "Можно ограничить организацией. Период задаётся датами YYYY-MM-DD. " +
+        "Не разбивает по способу оплаты: реализация в 1С с картой, СБП или банком не связана. Поступившие деньги по каналам — " +
+        "read.accounting.get_account_card по счёту 62 с groupBy corrAccount (кредит с 51, 50, 57), это оплаты, а не выручка периода.",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
