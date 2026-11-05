@@ -152,6 +152,38 @@ describe("get_account_card: страницы, предел размера, гр�
     ]);
   });
 
+  it("corrCounterparty и corrContract: группы по корреспондирующей стороне, своя не мешает", () => {
+    const buyer = "aaaaaaaa-1111-4111-8111-111111111111";
+    const buyerContract = "aaaaaaaa-2222-4222-8222-222222222222";
+    const sale = (i: number, corr: CardEntry["corrDims"]) => ({ ...entry(i), corrDims: corr });
+    const corr = [
+      { ref: buyer, set: "Catalog_Контрагенты" },
+      { ref: buyerContract, set: "Catalog_ДоговорыКонтрагентов" },
+    ];
+    const names = (d: { ref: string }) =>
+      ({ [buyer]: "Покупатели", [buyerContract]: "Комиссия" })[d.ref] ?? name(d);
+    const groups = groupEntries(
+      [sale(1, corr), sale(2, corr), sale(4, [])],
+      ["corrCounterparty", "corrContract"],
+      names,
+      code,
+    );
+    expect(groups).toEqual([
+      { debit: 5, credit: 0, count: 1 },
+      {
+        corrCounterparty: "Покупатели",
+        corrCounterpartyRef: buyer,
+        corrContract: "Комиссия",
+        corrContractRef: buyerContract,
+        debit: 5,
+        credit: 0,
+        count: 2,
+      },
+    ]);
+    expect(groupDims([sale(1, corr)], ["corrContract"]).map((d) => d.ref)).toEqual([buyerContract]);
+    expect(groupDims([sale(1, corr)], ["contract"]).map((d) => d.ref)).toEqual([CONTRACT]);
+  });
+
   it("groupDims: без группировки по субконто наименования не запрашиваются", () => {
     expect(groupDims([entry(1)], ["month", "corrAccount"])).toEqual([]);
     expect(groupDims([entry(1)], ["contract"]).map((d) => d.ref)).toEqual([CONTRACT]);

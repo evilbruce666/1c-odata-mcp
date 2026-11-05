@@ -7,7 +7,7 @@
 
 ### Добавлено
 
-- `read.accounting.get_account_card`: страницы (`offset`; в ответе `returned`, `truncated`, `nextOffset`) и сводка по всем движениям периода — `groupBy`: `month`, `corrAccount`, `counterparty`, `contract` в любом сочетании, с `summaryOnly` — без строк и намного быстрее. Сумма групп равна оборотам карточки, одноимённые договоры разных контрагентов не склеиваются. Групп больше, чем помещается в ответ, — отказ с подсказкой, а не обрезанная сводка.
+- `read.accounting.get_account_card`: страницы (`offset`; в ответе `returned`, `truncated`, `nextOffset`) и сводка по всем движениям периода — `groupBy`: `month`, `corrAccount`, `counterparty`, `contract`, `corrCounterparty`, `corrContract` в любом сочетании, с `summaryOnly` — без строк и намного быстрее. Сумма групп равна оборотам карточки, одноимённые договоры разных контрагентов не склеиваются. Групп больше, чем помещается в ответ, — отказ с подсказкой, а не обрезанная сводка.
 
 ### Изменено
 

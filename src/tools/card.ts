@@ -119,7 +119,14 @@ export const MAX_CARD_PAGE = 100;
 /** Группы карточки занимают не больше этого; иначе отказ — обрезанная сводка хуже её отсутствия. */
 const MAX_GROUP_CHARS = 40_000;
 
-export const CARD_GROUPS = ["month", "corrAccount", "counterparty", "contract"] as const;
+export const CARD_GROUPS = [
+  "month",
+  "corrAccount",
+  "counterparty",
+  "contract",
+  "corrCounterparty",
+  "corrContract",
+] as const;
 export type CardGroup = (typeof CARD_GROUPS)[number];
 
 /** Символов, которые значение занимает в ответе ok() как элемент массива верхнего уровня. */
@@ -145,13 +152,24 @@ const isContract = (d: Dim) => !!d.set?.startsWith("Catalog_Договор");
 
 /** Субконто, по которым идёт группировка: их наименования нужны и для строк вне страницы. */
 export function groupDims(entries: readonly CardEntry[], groupBy: readonly CardGroup[]): Dim[] {
-  return entries.flatMap((e) =>
-    e.dims.filter(
+  return entries.flatMap((e) => [
+    ...e.dims.filter(
       (d) =>
         (groupBy.includes("counterparty") && isCounterparty(d)) ||
         (groupBy.includes("contract") && isContract(d)),
     ),
-  );
+    ...e.corrDims.filter(
+      (d) =>
+        (groupBy.includes("corrCounterparty") && isCounterparty(d)) ||
+        (groupBy.includes("corrContract") && isContract(d)),
+    ),
+  ]);
+}
+
+/** Субконто строки для группы: своя сторона проводки или корреспондирующая. */
+function dimFor(e: CardEntry, g: CardGroup): Dim | undefined {
+  const dims = g.startsWith("corr") ? e.corrDims : e.dims;
+  return dims.find(g === "counterparty" || g === "corrCounterparty" ? isCounterparty : isContract);
 }
 
 /**
@@ -180,7 +198,7 @@ export function groupEntries(
         ids.push(value ?? "");
         continue;
       }
-      const d = e.dims.find(g === "counterparty" ? isCounterparty : isContract);
+      const d = dimFor(e, g);
       if (d) {
         fields[g] = name(d);
         fields[`${g}Ref`] = d.ref;
@@ -824,7 +842,7 @@ export function registerCardTools(server: McpServer, ctx: ServerContext): void {
         "Ответ постраничный: count — всего движений, returned — сколько в этом ответе; при truncated=true " +
         "читайте дальше с offset=nextOffset, пока truncated не станет false. За один ответ не больше " +
         `${MAX_CARD_PAGE} строк и примерно ${MAX_CARD_CHARS} символов, что бы ни стояло в limit. Обороты и остатки всегда по всему периоду. ` +
-        "Итоги по месяцам, корреспондирующим счетам, контрагентам или договорам: groupBy, сумма групп равна " +
+        "Итоги по месяцам, корреспондирующим счетам, контрагентам или договорам (своей или корреспондирующей стороны): groupBy, сумма групп равна " +
         "оборотам карточки; с summaryOnly=true строк нет и ответ быстрее. Для этого не нужно читать все страницы. " +
         "balanceTracked=false — отбор по субконто только с оборотами (статья ДДС на 51, статья затрат на 91): " +
         "сальдо по нему в 1С нет, верны только обороты. " +
@@ -864,7 +882,8 @@ export function registerCardTools(server: McpServer, ctx: ServerContext): void {
           .optional()
           .describe(
             "Итоги по всем движениям периода: month — месяц, corrAccount — корреспондирующий счёт, " +
-              "counterparty — контрагент, contract — договор (субконто счёта карточки, с их Ref_Key). Можно сочетать",
+              "counterparty и contract — контрагент и договор на счёте карточки, corrCounterparty и corrContract — " +
+              "на корреспондирующем счёте (покупатель проводки по 76.09, получатель платежа по 51). С их Ref_Key. Можно сочетать",
           ),
         summaryOnly: z
           .boolean()
