@@ -60,7 +60,10 @@ function search(ctx: ReturnType<typeof fake1C>["ctx"]) {
     }
   )._registeredTools;
   return (args: object) =>
-    tools["read.document.search_documents"]!.handler({ postedOnly: false, limit: 50, ...args }, {});
+    tools["read.document.search_documents"]!.handler(
+      { postedOnly: false, limit: 50, offset: 0, ...args },
+      {},
+    );
 }
 const urls = (spy: { mock: { calls: unknown[][] } }) =>
   spy.mock.calls.map((c) => decodeURIComponent(String(c[0])));

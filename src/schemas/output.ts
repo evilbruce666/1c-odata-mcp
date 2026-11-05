@@ -221,6 +221,12 @@ export const listEntitiesResultSchema = z
   .object({
     database: z.string(),
     odataVersion: z.string().optional(),
+    total: z.number(),
+    countsByClass: z.record(z.string(), z.number()),
+    offset: z.number(),
+    returned: z.number(),
+    truncated: z.boolean(),
+    nextOffset: z.number().optional(),
     groups: z.record(
       z.string(),
       z.array(z.object({ entitySet: z.string(), name: z.string() }).passthrough()),
@@ -245,7 +251,10 @@ export const counterpartyHistoryResultSchema = z
     period: z.object({ from: z.string().optional(), to: z.string().optional() }).passthrough(),
     rows: z.array(documentSummarySchema),
     count: z.number(),
+    offset: z.number(),
+    returned: z.number(),
     truncated: z.boolean(),
+    nextOffset: z.number().optional(),
     note: z.string().optional(),
   })
   .passthrough();
@@ -454,6 +463,10 @@ export const reconciliationResultSchema = z
     closing: favorSchema,
     consistent: z.boolean(),
     count: z.number(),
+    offset: z.number(),
+    returned: z.number(),
+    truncated: z.boolean(),
+    nextOffset: z.number().optional(),
     lines: z.array(z.object({ date: z.string() }).passthrough()),
     byContract: z.array(z.object({ contract: z.string() }).passthrough()),
     scan: scanSchema,
@@ -698,6 +711,10 @@ export const dealHistoryResultSchema = z
     inflow: z.number(),
     outflow: z.number(),
     net: z.number(),
+    offset: z.number(),
+    returned: z.number(),
+    truncated: z.boolean(),
+    nextOffset: z.number().optional(),
     items: z.array(
       z
         .object({

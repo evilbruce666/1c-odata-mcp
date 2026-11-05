@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
-import { ok, guard, withTruncationNote, databaseField, organizationField } from "./_shared.js";
+import { ok, guard, offsetField, pageOf, databaseField, organizationField } from "./_shared.js";
 import { fetchAll } from "../odata/pagination.js";
 import { and, cmp, contains, odataGuid, odataString, or, buildQuery } from "../odata/query.js";
 import { DOC_FIELDS, DOCUMENTS, resolveEntity } from "../config/mapping.js";
@@ -70,7 +70,7 @@ interface SearchParams {
 
 /** Итог по одному типу: строки или причина, по которой фильтр к типу неприменим. */
 type SetResult =
-  | { set: string; rows: DocumentSummary[]; truncated: boolean; counterpartyNote?: string }
+  | { set: string; rows: DocumentSummary[]; capHit: boolean; counterpartyNote?: string }
   | { set: string; skipped: string };
 
 async function searchSet(conn: Connection, set: string, p: SearchParams): Promise<SetResult> {
@@ -162,7 +162,8 @@ async function searchSet(conn: Connection, set: string, p: SearchParams): Promis
   return {
     set,
     rows: summaries,
-    truncated: truncated || matched.length > p.limit,
+    // Лимит выборки важен только при отборе на стороне коннектора: иначе limit и есть размер страницы.
+    capHit: clientSide && truncated,
     ...(counterpartyNote ? { counterpartyNote } : {}),
   };
 }
@@ -202,6 +203,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
         postedOnly: z.boolean().default(false).describe("Только проведённые документы"),
         minAmount: z.number().optional().describe("Минимальная сумма документа"),
         limit: z.number().int().positive().max(500).default(50).describe("Сколько документов вернуть"),
+        offset: offsetField,
       }),
       outputSchema: searchDocumentsResultSchema,
     },
@@ -217,6 +219,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
       postedOnly,
       minAmount,
       limit,
+      offset,
     }) =>
       guard("read.document.search_documents", async () => {
         if (entitySet && kind) throw new InputError("Задайте либо entitySet, либо kind, не оба.");
@@ -234,7 +237,8 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
           postedOnly,
           minAmount,
           number: q,
-          limit,
+          // Строка сверх страницы показывает, что есть продолжение.
+          limit: offset + limit + 1,
         };
 
         if (entitySet) {
@@ -244,10 +248,15 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
             throw new InputError(
               `В документе ${entitySet} ${r.skipped}. Уберите фильтр; поля документа — в read.schema.describe_entity.`,
             );
-          return ok({
-            ...withTruncationNote(r.rows.sort(byNumberMatchThenDate).slice(0, limit), r.truncated, limit),
-            ...(r.counterpartyNote ? { counterpartyFilter: r.counterpartyNote } : {}),
+          const head = { ...(r.counterpartyNote ? { counterpartyFilter: r.counterpartyNote } : {}) };
+          const { items, page, note } = pageOf(r.rows.sort(byNumberMatchThenDate), {
+            offset,
+            limit,
+            head,
+            capHit: r.capHit,
+            unit: "документы",
           });
+          return ok({ ...head, ...page, count: items.length, rows: items, ...(note ? { note } : {}) });
         }
 
         const keys = kind ? KINDS[kind] : (Object.values(KINDS).flat() as Array<keyof typeof DOCUMENTS>);
@@ -275,9 +284,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
         if (found.length === 0 && failed.length > 0)
           throw new InputError(`Поиск не удался ни по одному виду документов: ${failed[0]!.error}`);
         const merged = found.flatMap((r) => r.rows).sort(byNumberMatchThenDate);
-        const truncated = found.some((r) => r.truncated) || merged.length > limit;
-        return ok({
-          ...withTruncationNote(merged.slice(0, limit), truncated, limit),
+        const head = {
           searched: found.map((r) => ({ entitySet: r.set, found: r.rows.length })),
           ...(results.some((r) => "skipped" in r)
             ? {
@@ -288,9 +295,17 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
             : {}),
           ...(failed.length ? { failed: failed.map((r) => ({ entitySet: r.set, error: r.error })) } : {}),
           scope:
-            "Просмотрены основные виды документов (searched). Прочие типы — зарплата, регламентные " +
+            "Просмотрены основные виды документов (searched). Прочие типы — кассовые чеки, начисления, " +
             "операции, уведомления — ищутся через entitySet.",
+        };
+        const { items, page, note } = pageOf(merged, {
+          offset,
+          limit,
+          head,
+          capHit: found.some((r) => r.capHit),
+          unit: "документы",
         });
+        return ok({ ...head, ...page, count: items.length, rows: items, ...(note ? { note } : {}) });
       }),
   );
 

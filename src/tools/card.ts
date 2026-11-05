@@ -1,7 +1,21 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
-import { ok, fail, guard, databaseField, organizationField, dateField } from "./_shared.js";
+import {
+  ok,
+  fail,
+  guard,
+  databaseField,
+  organizationField,
+  dateField,
+  elementChars,
+  fitToChars,
+  MAX_RESPONSE_CHARS,
+  offsetField,
+  pageOf,
+} from "./_shared.js";
+
+export { fitToChars };
 import { accountPrefixes } from "../config/accounting.js";
 import { CATALOGS, DOC_FIELDS, resolveEntity } from "../config/mapping.js";
 import {
@@ -109,11 +123,7 @@ async function codesOf(conn: Connection, known: readonly Account[], entries: rea
 
 // ─── Карточка счёта ──────────────────────────────────────────────────────────
 
-/**
- * Предел текста ответа карточки — с запасом к норме 50 000 символов (MAX_RESPONSE_CHARS в тестах):
- * больший ответ клиент уносит в файл или обрезает, и конец периода теряется уже у него.
- */
-export const MAX_CARD_CHARS = 45_000;
+export const MAX_CARD_CHARS = MAX_RESPONSE_CHARS;
 /** Строк на страницу: наименования разрешаются запросами, незачем разрешать те, что не поместятся. */
 export const MAX_CARD_PAGE = 100;
 /** Группы карточки занимают не больше этого; иначе отказ — обрезанная сводка хуже её отсутствия. */
@@ -128,24 +138,6 @@ export const CARD_GROUPS = [
   "corrContract",
 ] as const;
 export type CardGroup = (typeof CARD_GROUPS)[number];
-
-/** Символов, которые значение занимает в ответе ok() как элемент массива верхнего уровня. */
-const elementChars = (v: unknown): number => {
-  const text = JSON.stringify(v, null, 2);
-  return text.length + text.split("\n").length * 4 + 2;
-};
-
-/** Сколько первых строк поместится в остаток предела. Хотя бы одна — иначе offset не сдвинется. */
-export function fitToChars<T>(items: readonly T[], usedChars: number, maxChars = MAX_CARD_CHARS): T[] {
-  let used = usedChars;
-  let n = 0;
-  for (const item of items) {
-    used += elementChars(item);
-    if (used > maxChars && n > 0) break;
-    n += 1;
-  }
-  return items.slice(0, n);
-}
 
 const isCounterparty = (d: Dim) => d.set === "Catalog_Контрагенты";
 const isContract = (d: Dim) => !!d.set?.startsWith("Catalog_Договор");
@@ -436,6 +428,7 @@ async function reconciliation(
     contractRef?: string | undefined;
     from: string;
     to: string;
+    offset: number;
   },
 ) {
   const t0 = Date.now();
@@ -542,7 +535,21 @@ async function reconciliation(
   if (!lines.length && opening === 0)
     notes.push("За период нет ни движений, ни остатков по расчётам с контрагентом.");
 
-  return {
+  const allLines = lines.map((l) => {
+    const doc = names.doc(l.recorderSet, l.recorder);
+    return {
+      date: doc.date ?? l.date,
+      ...(l.recorderSet
+        ? { document: l.recorderSet.replace(/^Document_/, ""), documentTitle: documentTitle(l.recorderSet) }
+        : {}),
+      ...(doc.number ? { number: doc.number, printNumber: printNumber(doc.number) } : {}),
+      ...(l.recorder ? { documentRef: l.recorder } : {}),
+      ...(l.contract ? { contract: names.name(l.contract) } : {}),
+      ...(l.debit ? { debit: rub(l.debit) } : {}),
+      ...(l.credit ? { credit: rub(l.credit) } : {}),
+    };
+  });
+  const head = {
     database: conn.cfg.name,
     ...(org ? { organization: org.name } : orgsInData.length === 1 ? { organization: orgsInData[0] } : {}),
     ...(!org && orgsInData.length > 1 ? { organizations: orgsInData } : {}),
@@ -563,20 +570,6 @@ async function reconciliation(
     closing: { amount: rub(Math.abs(closing)), inFavorOf: inFavorOf(closing) ?? null },
     consistent: closing === closingRegister,
     count: lines.length,
-    lines: lines.map((l) => {
-      const doc = names.doc(l.recorderSet, l.recorder);
-      return {
-        date: doc.date ?? l.date,
-        ...(l.recorderSet
-          ? { document: l.recorderSet.replace(/^Document_/, ""), documentTitle: documentTitle(l.recorderSet) }
-          : {}),
-        ...(doc.number ? { number: doc.number, printNumber: printNumber(doc.number) } : {}),
-        ...(l.recorder ? { documentRef: l.recorder } : {}),
-        ...(l.contract ? { contract: names.name(l.contract) } : {}),
-        ...(l.debit ? { debit: rub(l.debit) } : {}),
-        ...(l.credit ? { credit: rub(l.credit) } : {}),
-      };
-    }),
     byContract: [...perContract.entries()].map(([k, v]) => ({
       contract: k ? (contractNames.get(k) ?? k) : "(без договора)",
       ...(k ? { contractRef: k } : {}),
@@ -585,6 +578,13 @@ async function reconciliation(
       credit: rub(v.credit),
       closing: rub(v.closing),
     })),
+  };
+  const { items, page, note: pageNote } = pageOf(allLines, { offset: o.offset, head, unit: "строки акта" });
+  if (pageNote) notes.push(pageNote);
+  return {
+    ...head,
+    ...page,
+    lines: items,
     note: notes.join(" "),
     scan: { rowsScanned: moves.meta.rowsScanned, windows: moves.meta.chunks, elapsedMs: Date.now() - t0 },
   };
@@ -981,7 +981,8 @@ export function registerCardTools(server: McpServer, ctx: ServerContext): void {
         "Проверяются счета 60, 62 и 76 (без 76.АВ/76.ВА), в accounts — те, где есть движения или остатки; зачёт аванса " +
         "внутри расчётов с тем же контрагентом в строки не попадает, как в акте сверки 1С. counterpartyRef — " +
         "Ref_Key из find_counterparty, contractRef — только один договор. Сам документ «Акт сверки» " +
-        "печатается из 1С.",
+        "печатается из 1С. Сальдо, обороты и byContract — по всему периоду; строки большого акта идут страницами: " +
+        "при truncated=true читайте дальше с offset=nextOffset.",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
@@ -989,14 +990,22 @@ export function registerCardTools(server: McpServer, ctx: ServerContext): void {
         contractRef: guidField("Ref_Key договора — сверка по одному договору").optional(),
         from: dateField("Дата начала периода"),
         to: dateField("Дата конца периода"),
+        offset: offsetField,
       }),
       outputSchema: reconciliationResultSchema,
     },
-    ({ database, organization, counterpartyRef, contractRef, from, to }) =>
+    ({ database, organization, counterpartyRef, contractRef, from, to, offset }) =>
       guard("read.counterparty.get_reconciliation", async () => {
         if (from > to) return fail(`Период задан наоборот: from (${from}) позже to (${to}).`);
         return ok(
-          await reconciliation(ctx.db(database), { organization, counterpartyRef, contractRef, from, to }),
+          await reconciliation(ctx.db(database), {
+            organization,
+            counterpartyRef,
+            contractRef,
+            from,
+            to,
+            offset,
+          }),
         );
       }),
   );

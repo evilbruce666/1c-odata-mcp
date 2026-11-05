@@ -12,7 +12,10 @@ function searchDocuments(ctx: ReturnType<typeof fake1C>["ctx"]) {
   )._registeredTools;
   // Значения по умолчанию из схемы (MCP подставляет их до вызова обработчика).
   return (args: object) =>
-    tools["read.document.search_documents"]!.handler({ postedOnly: false, limit: 50, ...args }, {});
+    tools["read.document.search_documents"]!.handler(
+      { postedOnly: false, limit: 50, offset: 0, ...args },
+      {},
+    );
 }
 const textOf = (r: CallToolResult) => JSON.stringify(r.content);
 afterEach(() => {

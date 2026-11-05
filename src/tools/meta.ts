@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { ServerContext } from "../context.js";
-import { ok, fail, guard, databaseField } from "./_shared.js";
+import { ok, fail, guard, databaseField, offsetField, pageOf } from "./_shared.js";
 import { listOrganizations } from "../odata/orgs.js";
 import type { EntityClass } from "../types/odata.js";
 import {
@@ -122,7 +122,7 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
         "Возвращает карту бизнес-объектов 1С, сгруппированную по классам: " +
         "справочники, документы, регистры, перечисления и т.д. " +
         "Используйте, чтобы понять, какие данные доступны в базе. " +
-        "Можно отфильтровать по классу и/или подстроке имени.",
+        "В базе тысячи объектов: укажите class или search, countsByClass показывает, сколько их; ответ постраничный (offset, nextOffset). Можно отфильтровать по классу и/или подстроке имени.",
       inputSchema: z.object({
         database: databaseField,
         class: z
@@ -138,23 +138,41 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
           .optional()
           .describe("Ограничить одним классом объектов"),
         search: z.string().optional().describe("Подстрока в имени объекта (без учёта регистра)"),
+        offset: offsetField,
       }),
       outputSchema: listEntitiesResultSchema,
     },
-    ({ database, class: cls, search }) =>
+    ({ database, class: cls, search, offset }) =>
       guard("read.schema.list_entities", async () => {
-        const meta = await ctx.db(database).getMetadata();
+        const conn = ctx.db(database);
+        const meta = await conn.getMetadata();
         const needle = search?.toLowerCase();
-        const grouped: Record<string, Array<{ entitySet: string; name: string }>> = {};
-
+        const matched: Array<{ label: string; entitySet: string; name: string }> = [];
+        const countsByClass: Record<string, number> = {};
         for (const e of meta.entities.values()) {
           if (cls && e.class !== cls) continue;
           if (needle && !e.entitySet.toLowerCase().includes(needle)) continue;
           const label = CLASS_LABEL[e.class];
-          (grouped[label] ??= []).push({ entitySet: e.entitySet, name: e.shortName });
+          countsByClass[label] = (countsByClass[label] ?? 0) + 1;
+          matched.push({ label, entitySet: e.entitySet, name: e.shortName });
         }
-
-        return ok({ database: ctx.db(database).cfg.name, odataVersion: meta.odataVersion, groups: grouped });
+        // Страницы — по классам подряд, чтобы группы в ответе не перемешивались.
+        const ordered = Object.keys(countsByClass).flatMap((l) => matched.filter((m) => m.label === l));
+        const head = {
+          database: conn.cfg.name,
+          odataVersion: meta.odataVersion,
+          total: matched.length,
+          countsByClass,
+        };
+        const { items, page, note } = pageOf(ordered, { offset, head, unit: "объекты" });
+        const groups: Record<string, Array<{ entitySet: string; name: string }>> = {};
+        for (const { label, ...e } of items) (groups[label] ??= []).push(e);
+        return ok({
+          ...head,
+          ...page,
+          groups,
+          ...(note ? { note: `${note} Короче: укажите class или search.` } : {}),
+        });
       }),
   );
 

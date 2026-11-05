@@ -1,7 +1,16 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
-import { ok, fail, guard, databaseField, organizationField, dateField } from "./_shared.js";
+import {
+  ok,
+  fail,
+  guard,
+  databaseField,
+  organizationField,
+  dateField,
+  offsetField,
+  pageOf,
+} from "./_shared.js";
 import { and, cmp, contains, odataGuid } from "../odata/query.js";
 import { CATALOGS, DOC_FIELDS, DOCUMENTS, resolveEntity } from "../config/mapping.js";
 import { resolveOrganization } from "../odata/orgs.js";
@@ -336,10 +345,11 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
         from: dateField("Дата начала").optional(),
         to: dateField("Дата конца").optional(),
         limit: z.number().int().positive().max(1000).default(200).describe("Сколько событий вернуть"),
+        offset: offsetField,
       }),
       outputSchema: dealHistoryResultSchema,
     },
-    ({ database, organization, dealKey, contractRef, from, to, limit }) =>
+    ({ database, organization, dealKey, contractRef, from, to, limit, offset }) =>
       guard("read.analytics.get_deal_history", async () => {
         const t0 = Date.now();
         if (!dealKey && !contractRef) return fail("Укажите dealKey или contractRef.");
@@ -443,7 +453,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
         events.sort((a, b) => a.date.localeCompare(b.date));
         const inflowC = events.filter((e) => e.direction === "in").reduce((s, e) => s + e.cents, 0);
         const outflowC = events.filter((e) => e.direction === "out").reduce((s, e) => s + e.cents, 0);
-        const items = events.slice(0, limit).map((e) => ({
+        const allItems = events.map((e) => ({
           date: e.date.slice(0, 10),
           entitySet: e.entitySet,
           number: e.number,
@@ -453,7 +463,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           counterparty: e.counterpartyRef ? (cpNames.get(e.counterpartyRef) ?? e.counterpartyRef) : undefined,
           purpose: e.purpose,
         }));
-        return ok({
+        const head = {
           database: conn.cfg.name,
           organization: org?.name,
           ...(from || to ? { period: { from, to } } : {}),
@@ -462,8 +472,13 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           inflow: fromCents(inflowC),
           outflow: fromCents(outflowC),
           net: fromCents(inflowC - outflowC),
+        };
+        const { items, page, note } = pageOf(allItems, { offset, limit, head, unit: "события" });
+        return ok({
+          ...head,
+          ...page,
           items,
-          ...(events.length > limit ? { note: `Показаны первые ${limit} событий из ${events.length}.` } : {}),
+          ...(note ? { note: `${note} Итоги посчитаны по всем событиям.` } : {}),
           scan: { documentsScanned: meta.rowsScanned, windows: meta.chunks, elapsedMs: Date.now() - t0 },
         });
       }),

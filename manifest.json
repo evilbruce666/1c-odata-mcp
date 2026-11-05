@@ -309,7 +309,7 @@
     {
       "name": "read.schema.list_entities",
       "title": "Карта объектов базы",
-      "description": "Возвращает карту бизнес-объектов 1С, сгруппированную по классам: справочники, документы, регистры, перечисления и т.д. Используйте, чтобы понять, какие данные доступны в базе. Можно отфильтровать по классу и/или подстроке имени.",
+      "description": "Возвращает карту бизнес-объектов 1С, сгруппированную по классам: справочники, документы, регистры, перечисления и т.д. Используйте, чтобы понять, какие данные доступны в базе. В базе тысячи объектов: укажите class или search, countsByClass показывает, сколько их; ответ постраничный (offset, nextOffset). Можно отфильтровать по классу и/или подстроке имени.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -333,6 +333,13 @@
           "search": {
             "description": "Подстрока в имени объекта (без учёта регистра)",
             "type": "string"
+          },
+          "offset": {
+            "default": 0,
+            "description": "С какой строки начать (0 — с начала); значение из nextOffset прошлого ответа",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema"
@@ -345,6 +352,30 @@
           },
           "odataVersion": {
             "type": "string"
+          },
+          "total": {
+            "type": "number"
+          },
+          "countsByClass": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "offset": {
+            "type": "number"
+          },
+          "returned": {
+            "type": "number"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "nextOffset": {
+            "type": "number"
           },
           "groups": {
             "type": "object",
@@ -374,6 +405,11 @@
         },
         "required": [
           "database",
+          "total",
+          "countsByClass",
+          "offset",
+          "returned",
+          "truncated",
           "groups"
         ],
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -744,8 +780,17 @@
           "count": {
             "type": "number"
           },
+          "offset": {
+            "type": "number"
+          },
+          "returned": {
+            "type": "number"
+          },
           "truncated": {
             "type": "boolean"
+          },
+          "nextOffset": {
+            "type": "number"
           },
           "note": {
             "type": "string"
@@ -756,6 +801,8 @@
           "period",
           "rows",
           "count",
+          "offset",
+          "returned",
           "truncated"
         ],
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -871,8 +918,17 @@
           "count": {
             "type": "number"
           },
+          "offset": {
+            "type": "number"
+          },
+          "returned": {
+            "type": "number"
+          },
           "truncated": {
             "type": "boolean"
+          },
+          "nextOffset": {
+            "type": "number"
           },
           "note": {
             "type": "string"
@@ -883,6 +939,8 @@
           "period",
           "rows",
           "count",
+          "offset",
+          "returned",
           "truncated"
         ],
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -957,6 +1015,13 @@
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 500
+          },
+          "offset": {
+            "default": 0,
+            "description": "С какой строки начать (0 — с начала); значение из nextOffset прошлого ответа",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema"
@@ -3050,7 +3115,7 @@
     {
       "name": "read.counterparty.get_reconciliation",
       "title": "Данные для акта сверки",
-      "description": "Взаиморасчёты с контрагентом за период для акта сверки — по данным организации: сальдо на начало и конец «в пользу организации / контрагента», строки по документам (дата, документ, номер, договор, дебет, кредит; printNumber — номер как в печатной форме), обороты, разбивка по договорам, организация. Проверяются счета 60, 62 и 76 (без 76.АВ/76.ВА), в accounts — те, где есть движения или остатки; зачёт аванса внутри расчётов с тем же контрагентом в строки не попадает, как в акте сверки 1С. counterpartyRef — Ref_Key из find_counterparty, contractRef — только один договор. Сам документ «Акт сверки» печатается из 1С.",
+      "description": "Взаиморасчёты с контрагентом за период для акта сверки — по данным организации: сальдо на начало и конец «в пользу организации / контрагента», строки по документам (дата, документ, номер, договор, дебет, кредит; printNumber — номер как в печатной форме), обороты, разбивка по договорам, организация. Проверяются счета 60, 62 и 76 (без 76.АВ/76.ВА), в accounts — те, где есть движения или остатки; зачёт аванса внутри расчётов с тем же контрагентом в строки не попадает, как в акте сверки 1С. counterpartyRef — Ref_Key из find_counterparty, contractRef — только один договор. Сам документ «Акт сверки» печатается из 1С. Сальдо, обороты и byContract — по всему периоду; строки большого акта идут страницами: при truncated=true читайте дальше с offset=nextOffset.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3081,6 +3146,13 @@
             "type": "string",
             "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
             "description": "Дата конца периода (YYYY-MM-DD)"
+          },
+          "offset": {
+            "default": 0,
+            "description": "С какой строки начать (0 — с начала); значение из nextOffset прошлого ответа",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
           }
         },
         "required": [
@@ -3187,6 +3259,18 @@
           "count": {
             "type": "number"
           },
+          "offset": {
+            "type": "number"
+          },
+          "returned": {
+            "type": "number"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "nextOffset": {
+            "type": "number"
+          },
           "lines": {
             "type": "array",
             "items": {
@@ -3250,6 +3334,9 @@
           "closing",
           "consistent",
           "count",
+          "offset",
+          "returned",
+          "truncated",
           "lines",
           "byContract",
           "scan"
@@ -3504,6 +3591,13 @@
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 1000
+          },
+          "offset": {
+            "default": 0,
+            "description": "С какой строки начать (0 — с начала); значение из nextOffset прошлого ответа",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema"
@@ -3546,6 +3640,18 @@
             "type": "number"
           },
           "net": {
+            "type": "number"
+          },
+          "offset": {
+            "type": "number"
+          },
+          "returned": {
+            "type": "number"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "nextOffset": {
             "type": "number"
           },
           "items": {
@@ -3619,6 +3725,9 @@
           "inflow",
           "outflow",
           "net",
+          "offset",
+          "returned",
+          "truncated",
           "items",
           "scan"
         ],

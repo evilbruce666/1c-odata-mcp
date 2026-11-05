@@ -99,6 +99,71 @@ export async function guard(toolName: string, fn: () => Promise<CallToolResult>)
   }
 }
 
+/**
+ * Предел текста ответа — с запасом к норме 50 000 символов (MAX_RESPONSE_CHARS в тестах): больший ответ
+ * клиент уносит в файл или обрезает, и конец теряется уже у него.
+ */
+export const MAX_RESPONSE_CHARS = 45_000;
+
+/** Символов, которые значение занимает в ответе ok() как элемент массива верхнего уровня. */
+export const elementChars = (v: unknown): number => {
+  const text = JSON.stringify(v, null, 2);
+  return text.length + text.split("\n").length * 4 + 2;
+};
+
+/** Сколько первых строк поместится в остаток предела. Хотя бы одна — иначе offset не сдвинется. */
+export function fitToChars<T>(items: readonly T[], usedChars: number, maxChars = MAX_RESPONSE_CHARS): T[] {
+  let used = usedChars;
+  let n = 0;
+  for (const item of items) {
+    used += elementChars(item);
+    if (used > maxChars && n > 0) break;
+    n += 1;
+  }
+  return items.slice(0, n);
+}
+
+/**
+ * Страница ответа: не больше limit строк и столько, сколько поместится рядом с head. truncated значит
+ * «есть ещё», nextOffset есть, только если продолжение можно прочитать; capHit — данные упёрлись в
+ * лимит выборки, дальше читать нечего, и об этом нужно сказать.
+ */
+export function pageOf<T>(
+  all: readonly T[],
+  o: { offset: number; limit?: number; head: unknown; capHit?: boolean; unit?: string },
+): { items: T[]; page: Record<string, unknown>; note?: string } {
+  const candidates = all.slice(o.offset, o.limit === undefined ? undefined : o.offset + o.limit);
+  const items = fitToChars(candidates, JSON.stringify(o.head, null, 2).length);
+  const next = o.offset + items.length;
+  const more = next < all.length;
+  const unit = o.unit ?? "строки";
+  const note = more
+    ? `Показаны ${unit} ${o.offset + 1}–${next}. Следующая страница: offset=${next}.`
+    : o.capHit
+      ? `Выборка упёрлась в лимит строк: показаны не все. Уточните фильтр или период.`
+      : o.offset > 0 && o.offset >= all.length
+        ? `offset=${o.offset} за пределами: всего ${all.length}.`
+        : undefined;
+  return {
+    items,
+    page: {
+      offset: o.offset,
+      returned: items.length,
+      truncated: more || !!o.capHit,
+      ...(more ? { nextOffset: next } : {}),
+    },
+    ...(note ? { note } : {}),
+  };
+}
+
+/** Поле offset для инструментов со страницами. */
+export const offsetField = z
+  .number()
+  .int()
+  .min(0)
+  .default(0)
+  .describe("С какой строки начать (0 — с начала); значение из nextOffset прошлого ответа");
+
 /** Помечает усечённый по лимиту результат, чтобы модель это видела. */
 export function withTruncationNote<T>(
   rows: T[],
