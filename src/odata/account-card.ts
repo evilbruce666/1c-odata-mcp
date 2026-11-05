@@ -5,6 +5,7 @@ import { requireEntity } from "./publication.js";
 import { fetchAllForAggregation, type ScanMeta, emptyMeta, addMeta } from "./aggregate.js";
 import { and, cmp, odataGuid, or } from "./query.js";
 import { num } from "./accounting.js";
+import { InputError } from "../errors.js";
 import { entitySetOfType, refOf } from "./settlements-aging.js";
 
 /**
@@ -17,6 +18,13 @@ import { entitySetOfType, refOf } from "./settlements-aging.js";
  */
 
 export const RECORDS_WITH_DIMS = "RecordsWithExtDimensions";
+/**
+ * Сортировка, при которой листание этой таблицы не теряет строк. Без неё 1С между страницами
+ * отдаёт одни строки повторно, а другие пропускает: на живой базе $top=200 по 76.09 дал 912 строк,
+ * из них 123 повтора вместо пропущенных; только по Period — 4. Дороже примерно вдвое, поэтому
+ * применяется лишь при обнаруженных повторах.
+ */
+export const STABLE_MOVEMENT_ORDER = "Period asc,Recorder asc,LineNumber asc";
 /** Счетов в одном $filter: каждый даёт два условия (Дт и Кт), 1С ограничивает вложенность. */
 export const MOVEMENT_ACCOUNT_BATCH = 10;
 
@@ -107,10 +115,16 @@ export function cardEntries(
   );
 }
 
+const movementKey = (r: ODataEntity): string =>
+  `${String(r["Recorder"])}|${String(r["Recorder_Type"])}|${String(r["LineNumber"])}`;
+const hasRepeats = (rows: readonly ODataEntity[]): boolean =>
+  new Set(rows.map(movementKey)).size !== rows.length;
+
 /**
  * Все движения по счетам за период (с отбором по организации и контрагенту — на стороне 1С).
  * Счета — пачками по ACCOUNT_FILTER_BATCH; движение, попавшее в две пачки (Дт и Кт из разных),
- * берётся один раз.
+ * берётся один раз. Повтор внутри одной выборки значит, что листание сбилось и какие-то строки
+ * пропущены: такая выборка перечитывается с устойчивой сортировкой, а не молча схлопывается.
  */
 export async function fetchMovements(
   conn: Connection,
@@ -152,15 +166,26 @@ export async function fetchMovements(
   const rows: ODataEntity[] = [];
   let meta = emptyMeta();
   for (const filter of filters) {
-    const part = await fetchAllForAggregation(
-      conn,
-      path,
-      { filter: filter || undefined },
-      `движения ${p.from}..${p.to}`,
-    );
+    const label = `движения ${p.from}..${p.to}`;
+    let part = await fetchAllForAggregation(conn, path, { filter: filter || undefined }, label);
     meta = addMeta(meta, part.meta);
+    if (hasRepeats(part.rows)) {
+      part = await fetchAllForAggregation(
+        conn,
+        path,
+        { filter: filter || undefined, orderby: STABLE_MOVEMENT_ORDER },
+        label,
+      );
+      meta = addMeta(meta, part.meta);
+      if (hasRepeats(part.rows)) {
+        throw new InputError(
+          `1С вернула движения за ${p.from}..${p.to} с повторами, точный итог посчитать нельзя. ` +
+            "Сузьте период или повторите запрос.",
+        );
+      }
+    }
     for (const r of part.rows) {
-      const k = `${String(r["Recorder"])}|${String(r["Recorder_Type"])}|${String(r["LineNumber"])}`;
+      const k = movementKey(r);
       if (seen.has(k)) continue;
       seen.add(k);
       rows.push(r);
