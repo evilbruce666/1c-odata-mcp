@@ -13,7 +13,14 @@ import {
   resolveNames,
   type Account,
 } from "../odata/accounting.js";
-import { cardEntries, fetchMovements, netBalance, type CardEntry, type Dim } from "../odata/account-card.js";
+import {
+  cardEntries,
+  fetchMovements,
+  isTurnoversOnlyFilter,
+  netBalance,
+  type CardEntry,
+  type Dim,
+} from "../odata/account-card.js";
 import { addDays, localToday } from "../odata/settlements-aging.js";
 import { listOrganizations, resolveOrganization } from "../odata/orgs.js";
 import { createdAt, documentTitle, printNumber } from "../odata/names.js";
@@ -290,6 +297,12 @@ async function accountCard(
     );
   }
 
+  // Субконто только с оборотами: расхождения нет, сальдо по нему в 1С просто не бывает.
+  const untrackedBalance =
+    balance !== expectedClosing &&
+    refs.length > 0 &&
+    (await isTurnoversOnlyFilter(conn, moves.rows, new Set(keys), refs));
+
   const head = {
     database: conn.cfg.name,
     ...(org ? { organization: org.name } : {}),
@@ -308,7 +321,8 @@ async function accountCard(
     debitTurnover: rub(dr),
     creditTurnover: rub(cr),
     closingBalance: rub(balance),
-    consistent: balance === expectedClosing,
+    consistent: balance === expectedClosing || untrackedBalance,
+    ...(untrackedBalance ? { balanceTracked: false } : {}),
     count: entries.length,
     ...(groups ? { groups } : {}),
   };
@@ -326,7 +340,12 @@ async function accountCard(
   if (!o.summaryOnly && o.offset > 0 && o.offset >= entries.length) {
     notes.push(`offset=${o.offset} за пределами карточки: всего движений ${entries.length}.`);
   }
-  if (balance !== expectedClosing) {
+  if (untrackedBalance) {
+    notes.push(
+      "Это субконто ведётся только по оборотам: сальдо по нему в 1С нет. Обороты верны; " +
+        "closingBalance и balance в строках — накопленный итог движений за период, а не остаток.",
+    );
+  } else if (balance !== expectedClosing) {
     notes.push(
       `Остаток по движениям (${rub(balance)}) не совпал с сальдо регистра на конец периода ` +
         `(${rub(expectedClosing)}) — возможно, движения изменились во время выборки; повторите запрос.`,
@@ -807,6 +826,8 @@ export function registerCardTools(server: McpServer, ctx: ServerContext): void {
         `${MAX_CARD_PAGE} строк и примерно ${MAX_CARD_CHARS} символов, что бы ни стояло в limit. Обороты и остатки всегда по всему периоду. ` +
         "Итоги по месяцам, корреспондирующим счетам, контрагентам или договорам: groupBy, сумма групп равна " +
         "оборотам карточки; с summaryOnly=true строк нет и ответ быстрее. Для этого не нужно читать все страницы. " +
+        "balanceTracked=false — отбор по субконто только с оборотами (статья ДДС на 51, статья затрат на 91): " +
+        "сальдо по нему в 1С нет, верны только обороты. " +
         "Не отдаёт обороты по субсчетам (это get_account_turnover) и не разбирает текст назначений платежей.",
       inputSchema: z.object({
         database: databaseField,

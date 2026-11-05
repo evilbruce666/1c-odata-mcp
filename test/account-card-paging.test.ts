@@ -333,3 +333,128 @@ describe("get_account_card: страницы, предел размера, гр�
     expect(c.note).toContain("за пределами");
   });
 });
+
+describe("get_account_card: субконто только с оборотами", () => {
+  const ITEM = "88888888-8888-4888-8888-888888888888";
+  const OTHER = "99999999-9999-4999-8999-999999999999";
+  const T = "StandardODATA.Catalog_СтатьиДвиженияДенежныхСредств";
+
+  async function run(turnoversOnly: boolean, chartFails = false, dimensionRef = ITEM) {
+    const f = fake1C();
+    const acc = (await resolveAccounts(f.conn, ["62.01"]))[0]!.key;
+    const realGet = f.conn.client.getCollection.bind(f.conn.client);
+    const rows = [1, 2].map((i) => ({
+      Period: `2026-0${i}-15T00:00:00`,
+      Recorder: `doc-${i}`,
+      LineNumber: "1",
+      AccountCr_Key: acc,
+      ExtDimensionCr1: OTHER,
+      ExtDimensionCr1_Type: "StandardODATA.Catalog_Контрагенты",
+      ExtDimensionCr2: ITEM,
+      ExtDimensionCr2_Type: T,
+      Сумма: 100,
+    }));
+    vi.spyOn(f.conn.client, "getCollection").mockImplementation(async (url: string, ...rest: never[]) => {
+      const u = decodeURIComponent(url);
+      if (u.includes("RecordsWithExtDimensions")) return { value: rows as never[] };
+      if (u.includes("/Balance")) return { value: [] };
+      return realGet(url, ...rest);
+    });
+    const chart = vi.spyOn(f.conn.client, "getEntity").mockImplementation(async () => {
+      if (chartFails) throw new Error("сеть");
+      return {
+        ExtDimensionTypes: [
+          { LineNumber: "1", TurnoversOnly: false },
+          { LineNumber: "2", TurnoversOnly: turnoversOnly },
+        ],
+      } as never;
+    });
+    const tool = (
+      createServer(f.ctx) as unknown as {
+        _registeredTools: Record<
+          string,
+          {
+            inputSchema: { parse: (a: object) => object };
+            handler: (a: object, e: object) => Promise<CallToolResult>;
+          }
+        >;
+      }
+    )._registeredTools["read.accounting.get_account_card"]!;
+    const r = await tool.handler(
+      tool.inputSchema.parse({ account: "62.01", from: "2026-01-01", to: "2026-03-31", dimensionRef }),
+      {},
+    );
+    return {
+      c: r.structuredContent as {
+        consistent: boolean;
+        balanceTracked?: boolean;
+        creditTurnover: number;
+        closingBalance: number;
+        note?: string;
+      },
+      chart,
+    };
+  }
+
+  it("статья только с оборотами: consistent, balanceTracked=false, обороты верны", async () => {
+    const { c } = await run(true);
+    expect(c).toMatchObject({ consistent: true, balanceTracked: false, creditTurnover: 200 });
+    expect(c.note).toContain("только по оборотам");
+    expect(c.note).not.toContain("повторите запрос");
+  });
+
+  it("субконто с сальдо и расхождением: настоящая несверка остаётся", async () => {
+    const { c } = await run(false);
+    expect(c.consistent).toBe(false);
+    expect(c.balanceTracked).toBeUndefined();
+    expect(c.note).toContain("повторите запрос");
+  });
+
+  it("план счетов не прочитался: обычное расхождение, а не отказ", async () => {
+    const { c } = await run(true, true);
+    expect(c.consistent).toBe(false);
+    expect(c.creditTurnover).toBe(200);
+  });
+
+  it("отбор по первой позиции (не только оборотной) не считается оборотным", async () => {
+    const { c } = await run(true, false, OTHER);
+    expect(c.consistent).toBe(false);
+    expect(c.balanceTracked).toBeUndefined();
+  });
+});
+
+describe("get_payments_breakdown: groupBy month", () => {
+  it("месяцы идут по порядку, а не по сумме", async () => {
+    const f = fake1C();
+    const realGet = f.conn.client.getCollection.bind(f.conn.client);
+    vi.spyOn(f.conn.client, "getCollection").mockImplementation(async (url: string, ...rest: never[]) => {
+      if (!decodeURIComponent(url).includes("Document_ПоступлениеНаРасчетныйСчет")) {
+        return /Document_/.test(decodeURIComponent(url)) ? { value: [] } : realGet(url, ...rest);
+      }
+      return {
+        value: [
+          { Ref_Key: "a", Date: "2026-07-10T00:00:00", СуммаДокумента: 100, Posted: true },
+          { Ref_Key: "b", Date: "2026-08-10T00:00:00", СуммаДокумента: 300, Posted: true },
+          { Ref_Key: "c", Date: "2026-09-10T00:00:00", СуммаДокумента: 200, Posted: true },
+        ] as never[],
+      };
+    });
+    const tool = (
+      createServer(f.ctx) as unknown as {
+        _registeredTools: Record<
+          string,
+          {
+            inputSchema: { parse: (a: object) => object };
+            handler: (a: object, e: object) => Promise<CallToolResult>;
+          }
+        >;
+      }
+    )._registeredTools["read.analytics.get_payments_breakdown"]!;
+    const r = await tool.handler(
+      tool.inputSchema.parse({ from: "2026-07-01", to: "2026-09-30", direction: "in", groupBy: "month" }),
+      {},
+    );
+    const groups = (r.structuredContent as { groups: Array<{ label: string }> }).groups;
+    expect(groups.map((g) => g.label)).toEqual(["2026-07", "2026-08", "2026-09"]);
+  });
+});

@@ -1,6 +1,6 @@
 import type { Connection } from "../context.js";
 import type { ODataEntity } from "../types/odata.js";
-import { accountingRegister } from "../config/accounting.js";
+import { accountingChart, accountingRegister } from "../config/accounting.js";
 import { requireEntity } from "./publication.js";
 import { fetchAllForAggregation, type ScanMeta, emptyMeta, addMeta } from "./aggregate.js";
 import { and, cmp, odataGuid, or } from "./query.js";
@@ -192,6 +192,50 @@ export async function fetchMovements(
     }
   }
   return { rows, meta };
+}
+
+/**
+ * Отбор по субконто, которое на этом счёте ведётся только по оборотам (статья ДДС на 51, статья
+ * затрат на 91.02): сальдо по нему в регистре нет, сверять движения не с чем. Признак — TurnoversOnly
+ * в плане счетов на той позиции, где субконто стоит в движениях. Истина, если есть ref, у которого
+ * все такие позиции только оборотные. План счетов не прочитался — обычное расхождение, а не отказ.
+ */
+export async function isTurnoversOnlyFilter(
+  conn: Connection,
+  rows: readonly ODataEntity[],
+  accounts: ReadonlySet<string>,
+  refs: readonly string[],
+): Promise<boolean> {
+  const positions = new Map<string, Set<string>>();
+  for (const r of rows) {
+    for (const side of ["Dr", "Cr"] as const) {
+      const account = refOf(r[`Account${side}_Key`]);
+      if (!account || !accounts.has(account)) continue;
+      for (const i of [1, 2, 3]) {
+        const ref = refOf(r[`ExtDimension${side}${i}`]);
+        if (ref && refs.includes(ref)) {
+          positions.set(ref, (positions.get(ref) ?? new Set()).add(`${account}|${i}`));
+        }
+      }
+    }
+  }
+  if (!positions.size) return false;
+  const chart = await requireEntity(conn, accountingChart(conn.cfg), "План счетов «Хозрасчётный»");
+  const turnoversOnly = new Set<string>();
+  try {
+    const keys = new Set([...positions.values()].flatMap((s) => [...s].map((k) => k.split("|")[0]!)));
+    for (const key of keys) {
+      const a = await conn.client.getEntity<ODataEntity>(
+        `${chart}(guid'${key}')?$select=Ref_Key,ExtDimensionTypes`,
+      );
+      for (const t of (a["ExtDimensionTypes"] ?? []) as ODataEntity[]) {
+        if (t["TurnoversOnly"] === true) turnoversOnly.add(`${key}|${Number(t["LineNumber"])}`);
+      }
+    }
+  } catch {
+    return false;
+  }
+  return [...positions.values()].some((s) => [...s].every((k) => turnoversOnly.has(k)));
 }
 
 /** Чистое сальдо (Дт − Кт, копейки) строк Balance, где среди субконто есть все refs. */

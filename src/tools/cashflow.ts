@@ -274,7 +274,8 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
             sum: fromCents(b.cents),
             ...(direction === "both" ? { inflow: fromCents(b.inCents), outflow: fromCents(b.outCents) } : {}),
           }))
-          .sort((a, b) => b.sum - a.sum);
+          // Месяцы — по порядку: это ряд во времени, а не рейтинг.
+          .sort((a, b) => (groupBy === "month" ? a.label.localeCompare(b.label) : b.sum - a.sum));
 
         return ok({
           database: conn.cfg.name,

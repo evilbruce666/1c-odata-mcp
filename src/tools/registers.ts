@@ -587,7 +587,11 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         "сальдо на конец Дт/Кт — итогом и по субсчетам. account — код счёта или префикс " +
         "(«51», «60», «62», «90.01»): берутся все субсчета, код которых начинается с него. " +
         "Сальдо развёрнутое по аналитике (измерения и субконто), как в стандартной ОСВ по счёту. " +
-        "Можно ограничить организацией. Период — даты YYYY-MM-DD включительно.",
+        "Можно ограничить организацией. Период — даты YYYY-MM-DD включительно. " +
+        "Не отбирает по аналитике и не разбивает по месяцам. Оборот по контрагенту, договору или другому субконто, " +
+        "по месяцам или корреспондирующим счетам — read.accounting.get_account_card с counterpartyRef или " +
+        "dimensionRef, groupBy и summaryOnly=true; ссылку договора дают его группы (groupBy: contract). " +
+        "Деньги по статье ДДС — read.analytics.get_payments_breakdown с cashflowItem.",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,

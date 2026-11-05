@@ -381,6 +381,7 @@ export const accountCardResultSchema = z
     creditTurnover: z.number(),
     closingBalance: z.number(),
     consistent: z.boolean(),
+    balanceTracked: z.boolean().optional(),
     count: z.number(),
     offset: z.number(),
     returned: z.number(),
