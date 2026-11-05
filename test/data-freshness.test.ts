@@ -134,6 +134,29 @@ describe("read.system.data_freshness", () => {
   });
 });
 
+describe("data_freshness: окно регламентных операций", () => {
+  it("операций больше окна — об этом сказано, и список закрытий остаётся", async () => {
+    const f = fake1C();
+    const realGet = f.conn.client.getCollection.bind(f.conn.client);
+    vi.spyOn(f.conn.client, "getCollection").mockImplementation(async (url: string, ...rest: never[]) => {
+      const u = decodeURIComponent(url);
+      if (u.startsWith("Document_РегламентнаяОперация")) {
+        return {
+          value: Array.from({ length: 300 }, () => ({
+            Date: "2026-09-30T23:59:59",
+            ВидОперации: "РасчетНалогаУСН",
+            Состояние: "Выполнено",
+          })) as never[],
+        };
+      }
+      return u.startsWith("Document_") ? { value: [] } : realGet(url, ...rest);
+    });
+    const tool = toolsOf(f.ctx)["read.system.data_freshness"]!;
+    const r = await tool.handler(tool.inputSchema.parse({}), {});
+    expect((r.structuredContent as { closingNote: string }).closingNote).toContain("300");
+  });
+});
+
 describe("lastClosedMonths: те же правила, что check_month_close", () => {
   const op = (month: string, kind: string, state: string, org = "A"): ClosingOp => ({
     month,

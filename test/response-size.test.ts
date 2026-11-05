@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CallToolResult } from "@modelcontextprotocol/server";
-import { createServer } from "../src/mcp/server.js";
+import { createServer, limitResponseSize } from "../src/mcp/server.js";
 import { resolveAccounts } from "../src/odata/accounting.js";
 import { fitToChars, pageOf } from "../src/tools/_shared.js";
 import { fake1C } from "./helpers/fake-1c.js";
@@ -216,5 +216,45 @@ describe("большие ответы укладываются в норму, н
     );
     expect(first).toMatchObject({ count: 800, debitTurnover: 800, truncated: true });
     expect(new Set(out.map((l) => l.documentRef)).size).toBe(800);
+  });
+});
+
+describe("limitResponseSize: страховка для инструментов без своих страниц", () => {
+  const answer = (data: Record<string, unknown>): CallToolResult => ({
+    content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    structuredContent: data,
+  });
+  const rows = Array.from({ length: 2000 }, (_, i) => ({ n: i, text: "строка ".repeat(10) }));
+
+  it("режет самый большой список, называет это, итоги и другие поля остаются", () => {
+    const r = limitResponseSize(answer({ total: 2000, small: [1, 2], rows, note: "итоги верны" }));
+    const text = (r.content[0] as { text: string }).text;
+    expect(text.length).toBeLessThanOrEqual(NORM);
+    const s = r.structuredContent as {
+      total: number;
+      small: number[];
+      rows: unknown[];
+      note: string;
+      responseTrimmed: { field: string; returned: number; total: number };
+    };
+    expect(s.total).toBe(2000);
+    expect(s.small).toEqual([1, 2]);
+    expect(s.responseTrimmed).toMatchObject({ field: "rows", total: 2000, returned: s.rows.length });
+    expect(s.rows.length).toBeLessThan(2000);
+    expect(s.note).toContain("итоги верны");
+    expect(s.note).toContain("укорочен");
+    expect(JSON.parse(text)).toEqual(s);
+  });
+
+  it("в пределах нормы и ошибки не меняются", () => {
+    const ok = answer({ rows: rows.slice(0, 3) });
+    expect(limitResponseSize(ok)).toBe(ok);
+    const err: CallToolResult = { content: [{ type: "text", text: "x".repeat(60_000) }], isError: true };
+    expect(limitResponseSize(err)).toBe(err);
+  });
+
+  it("без списка ответ не трогает", () => {
+    const big = answer({ text: "x".repeat(60_000) });
+    expect(limitResponseSize(big)).toBe(big);
   });
 });

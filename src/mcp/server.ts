@@ -24,7 +24,16 @@ import { registerOrganizationTools } from "../tools/organization.js";
 import { registerWriteTools } from "../tools/write.js";
 import { registerAuditTools } from "../tools/audit.js";
 import { registerFreshnessTools } from "../tools/freshness.js";
-import { READ_HINTS, WRITE_HINTS, DESTRUCTIVE_HINTS, fail, guard, ok } from "../tools/_shared.js";
+import {
+  READ_HINTS,
+  WRITE_HINTS,
+  DESTRUCTIVE_HINTS,
+  elementChars,
+  fail,
+  fitToChars,
+  guard,
+  ok,
+} from "../tools/_shared.js";
 
 /** Версия берётся из package.json (в собранном пакете он на два уровня выше dist/mcp/). */
 function readVersion(): string {
@@ -118,6 +127,41 @@ export function withDatabaseInfo(
   return { ...result, content, structuredContent };
 }
 
+/** Норма ответа: больше клиент уносит в файл и теряет конец. */
+export const RESPONSE_CHARS_NORM = 50_000;
+
+/**
+ * Страховка для инструментов без своих страниц (долги, остатки, истории, разбивки): слишком длинный
+ * ответ укорачивается по самому большому списку верхнего уровня, и это названо в responseTrimmed. Итоги
+ * рядом со списком считает сам инструмент по всем строкам, поэтому они остаются верными.
+ */
+export function limitResponseSize(result: CallToolResult): CallToolResult {
+  const data = result.structuredContent as Record<string, unknown> | undefined;
+  const first = result.content[0];
+  if (result.isError || !data || first?.type !== "text" || first.text.length <= RESPONSE_CHARS_NORM) {
+    return result;
+  }
+  const field = Object.keys(data)
+    .filter((k) => Array.isArray(data[k]))
+    .sort((a, b) => elementChars(data[b]) - elementChars(data[a]))[0];
+  if (!field) return result;
+  const list = data[field] as unknown[];
+  const { [field]: _list, ...rest } = data;
+  const kept = fitToChars(list, JSON.stringify(rest, null, 2).length + 500);
+  const trimmed = `Ответ укорочен: показаны ${kept.length} из ${list.length} строк списка ${field}, больше не помещается. Уточните отбор, уменьшите период или limit.`;
+  const structuredContent = {
+    ...rest,
+    [field]: kept,
+    responseTrimmed: { field, returned: kept.length, total: list.length },
+    note: typeof data["note"] === "string" ? `${data["note"]} ${trimmed}` : trimmed,
+  };
+  return {
+    ...result,
+    content: [{ type: "text", text: JSON.stringify(structuredContent, null, 2) }, ...result.content.slice(1)],
+    structuredContent,
+  };
+}
+
 /**
  * Запись при нескольких настроенных базах — только с явной базой, и предпросмотр тоже: иначе
  * документ можно создать не в той организации, а предпросмотр и подтверждение разойдутся по аргументам.
@@ -168,7 +212,7 @@ export function createServer(ctx: ServerContext): McpServer {
     const isCreateTool = name.startsWith("write.") && config.outputSchema === createResultSchema;
     if (name.startsWith("read.") && name !== "read.system.list_databases") {
       return original(name, annotatedConfig, async (args, extra) =>
-        withDatabaseInfo(ctx, args, await cb(args, extra)),
+        limitResponseSize(withDatabaseInfo(ctx, args, await cb(args, extra))),
       );
     }
     if (!isCreateTool && !JOURNALED_UPDATE_TOOLS.has(name)) {

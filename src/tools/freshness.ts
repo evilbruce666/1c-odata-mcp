@@ -119,10 +119,14 @@ async function closingStatus(conn: Connection, orgKey: string | undefined, today
     state: String(r["Состояние"] ?? ""),
   }));
   const names = new Map((await listOrganizations(conn)).map((o) => [o.ref, o.name]));
-  return [...lastClosedMonths(ops)].map(([org, month]) => ({
-    ...(org ? { organization: names.get(org) ?? org } : {}),
-    lastClosedMonth: month,
-  }));
+  return {
+    months: [...lastClosedMonths(ops)].map(([org, month]) => ({
+      ...(org ? { organization: names.get(org) ?? org } : {}),
+      lastClosedMonth: month,
+    })),
+    // Операций больше окна: организация без закрытого месяца в окне могла закрыться раньше него.
+    partial: rows.length >= CLOSING_OPS_TOP,
+  };
 }
 
 export function registerFreshnessTools(server: McpServer, ctx: ServerContext): void {
@@ -170,7 +174,12 @@ export function registerFreshnessTools(server: McpServer, ctx: ServerContext): v
           asOf: today,
           windowDays: FRESHNESS_WINDOW_DAYS,
           documents,
-          ...(closing ? { closing } : {}),
+          ...(closing ? { closing: closing.months } : {}),
+          ...(closing?.partial
+            ? {
+                closingNote: `Просмотрены последние ${CLOSING_OPS_TOP} регламентных операций: более раннее закрытие здесь не видно, точно — check_month_close.`,
+              }
+            : {}),
           ...(notPublished.length ? { notPublished } : {}),
           ...(failed.length ? { failed } : {}),
           scan: { elapsedMs: Date.now() - t0 },
