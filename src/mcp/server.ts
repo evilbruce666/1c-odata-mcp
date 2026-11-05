@@ -23,6 +23,7 @@ import { registerSalesTools } from "../tools/sales.js";
 import { registerOrganizationTools } from "../tools/organization.js";
 import { registerWriteTools } from "../tools/write.js";
 import { registerAuditTools } from "../tools/audit.js";
+import { registerFreshnessTools } from "../tools/freshness.js";
 import { READ_HINTS, WRITE_HINTS, DESTRUCTIVE_HINTS, fail, guard, ok } from "../tools/_shared.js";
 
 /** Версия берётся из package.json (в собранном пакете он на два уровня выше dist/mcp/). */
@@ -45,7 +46,10 @@ const INSTRUCTIONS =
   "(см. read.system.list_databases) и organization (см. read.system.list_organizations). " +
   "Для создания объекта при подтверждении передавайте operationId из предпросмотра; " +
   "при таймауте повторяйте подтверждение с тем же id и теми же аргументами, а не с новым предпросмотром. " +
-  "Это защищает от дубликата, если ответ 1С потерялся.";
+  "Это защищает от дубликата, если ответ 1С потерялся. " +
+  "Если настроено несколько баз и из вопроса неясно какая, спросите пользователя или проверьте " +
+  "read.system.data_freshness, а не полагайтесь на базу по умолчанию: при её подстановке в ответе есть " +
+  "databaseDefaulted. Ref_Key действуют только в своей базе: чужая ссылка даёт пустой результат, а не ошибку.";
 
 /**
  * Правки документа, которые нельзя слепо повторять: инструмент перечитывает документ, и повтор
@@ -76,6 +80,43 @@ function annotationsFor(name: string) {
   return WRITE_HINTS;
 }
 
+/**
+ * Ответ чтения всегда называет базу, а подставленная по умолчанию при нескольких настроенных базах
+ * помечена: пустой результат в чужой базе выглядит как «данных нет». Опрашивать другие базы здесь
+ * нельзя: это лишние запросы, разные юрлица и ложные подсказки там, где пусто законно.
+ */
+export function withDatabaseInfo(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+  result: CallToolResult,
+): CallToolResult {
+  const data = result.structuredContent;
+  if (result.isError || !data || typeof data !== "object") return result;
+  const requested = typeof args.database === "string" ? args.database : undefined;
+  const name = ctx.db(requested).cfg.name;
+  const others = ctx
+    .databases()
+    .map((d) => d.name)
+    .filter((n) => n !== name);
+  const structuredContent = {
+    database: name,
+    ...data,
+    ...(!requested && others.length
+      ? {
+          databaseDefaulted: true,
+          databaseNote: `Использована база по умолчанию ${name}. Также доступны: ${others.join(", ")}.`,
+        }
+      : {}),
+  };
+  const text = JSON.stringify(data, null, 2);
+  const content = result.content.map((item) =>
+    item.type === "text" && item.text === text
+      ? { ...item, text: JSON.stringify(structuredContent, null, 2) }
+      : item,
+  );
+  return { ...result, content, structuredContent };
+}
+
 /** Создаёт MCP-сервер и регистрирует все инструменты (чтение + гейтованная запись). */
 export function createServer(ctx: ServerContext): McpServer {
   const server = new McpServer(
@@ -104,6 +145,11 @@ export function createServer(ctx: ServerContext): McpServer {
       ...(appMeta ? { _meta: { ...(config._meta as Record<string, unknown> | undefined), ...appMeta } } : {}),
     };
     const isCreateTool = name.startsWith("write.") && config.outputSchema === createResultSchema;
+    if (name.startsWith("read.") && name !== "read.system.list_databases") {
+      return original(name, annotatedConfig, async (args, extra) =>
+        withDatabaseInfo(ctx, args, await cb(args, extra)),
+      );
+    }
     if (!isCreateTool && !JOURNALED_UPDATE_TOOLS.has(name)) return original(name, annotatedConfig, cb);
 
     // v2: inputSchema — z.object(...); добавляем operationId через extend (разворот zod-объекта
@@ -205,6 +251,7 @@ export function createServer(ctx: ServerContext): McpServer {
   registerSalesTools(server, ctx);
   registerOrganizationTools(server, ctx);
   registerAuditTools(server, ctx);
+  registerFreshnessTools(server, ctx);
   registerWriteTools(server, ctx);
   registerExistingBankSettlementTools(server, ctx);
   registerSettlementSettingsTools(server, ctx);

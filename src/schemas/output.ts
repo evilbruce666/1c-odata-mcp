@@ -151,6 +151,31 @@ export const postDocumentResultSchema = z
 
 // ─── Чтение: по одной bespoke-схеме на инструмент ───
 
+export const dataFreshnessResultSchema = z
+  .object({
+    database: z.string(),
+    organization: z.string().optional(),
+    asOf: z.string(),
+    windowDays: z.number(),
+    documents: z.array(
+      z
+        .object({
+          entitySet: z.string(),
+          title: z.string(),
+          lastDate: z.string().nullable(),
+          countInWindow: z.number(),
+          unpostedInWindow: z.number(),
+          futureDatedUntil: z.string().optional(),
+        })
+        .passthrough(),
+    ),
+    closing: z
+      .array(z.object({ organization: z.string().optional(), lastClosedMonth: z.string() }))
+      .optional(),
+    scan: z.object({ elapsedMs: z.number() }).passthrough(),
+  })
+  .passthrough();
+
 export const listDatabasesResultSchema = z
   .object({
     default: z.string().optional(),

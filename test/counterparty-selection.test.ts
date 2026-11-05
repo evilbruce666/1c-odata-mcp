@@ -13,12 +13,13 @@ function fixture() {
   };
   const getCollection = vi.fn(async () => ({ value: [row] }));
   const conn = {
+    cfg: { name: "test" },
     available: async () => new Set(["Catalog_Контрагенты"]),
     behavior: { pageSize: 100, maxRows: 100 },
     client: { getCollection, getEntity: async () => row },
   };
   const tools = (
-    createServer({ db: () => conn } as never) as unknown as {
+    createServer({ db: () => conn, databases: () => [] } as never) as unknown as {
       _registeredTools: Record<
         string,
         { handler: (args: object, extra: object) => Promise<{ structuredContent?: Record<string, unknown> }> }
@@ -72,12 +73,13 @@ function combinedFixture() {
     };
   });
   const conn = {
+    cfg: { name: "test" },
     available: async () => new Set([CAT, CONTRACTS]),
     behavior: { pageSize: 100, maxRows: 100 },
     client: { getCollection },
   };
   const tools = (
-    createServer({ db: () => conn } as never) as unknown as {
+    createServer({ db: () => conn, databases: () => [] } as never) as unknown as {
       _registeredTools: Record<
         string,
         { handler: (args: object, extra: object) => Promise<{ structuredContent?: Record<string, unknown> }> }

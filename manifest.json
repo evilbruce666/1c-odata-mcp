@@ -4,7 +4,7 @@
   "display_name": "1С:Предприятие через OData",
   "version": "0.12.0",
   "description": "MCP-сервер для 1С:Предприятие через OData: аналитика (дебиторка, остатки, продажи, деньги, ОСВ, проводки) и создание/изменение документов — на естественном языке.",
-  "long_description": "Подключает любой MCP-клиент (Claude, Cursor, VS Code и др.) к базе 1С:Предприятие через стандартный интерфейс OData. Ничего не устанавливается внутри 1С. По умолчанию только чтение — 75 инструментов и 3 готовых сценария: аналитика (дебиторка и кредиторка по срокам, деньги на счетах, неоплаченные счета, проверка закрытия месяца, карточка счёта, акт сверки, остатки, продажи, движение денег, налоги, ОСВ по счёту, проводки документа, хронология для аудита), справочники и документы. Запись включается отдельно (readOnly=false) и всегда работает в режиме предпросмотра — сначала показывает, что будет создано/изменено, и пишет только после подтверждения.",
+  "long_description": "Подключает любой MCP-клиент (Claude, Cursor, VS Code и др.) к базе 1С:Предприятие через стандартный интерфейс OData. Ничего не устанавливается внутри 1С. По умолчанию только чтение — 76 инструментов и 3 готовых сценария: аналитика (дебиторка и кредиторка по срокам, деньги на счетах, неоплаченные счета, проверка закрытия месяца, карточка счёта, акт сверки, остатки, продажи, движение денег, налоги, ОСВ по счёту, проводки документа, хронология для аудита), справочники и документы. Запись включается отдельно (readOnly=false) и всегда работает в режиме предпросмотра — сначала показывает, что будет создано/изменено, и пишет только после подтверждения.",
   "author": {
     "name": "evilbruce666",
     "url": "https://github.com/evilbruce666"
@@ -150,7 +150,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           }
         },
@@ -259,7 +259,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           }
         },
@@ -314,7 +314,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "class": {
@@ -392,7 +392,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "entitySet": {
@@ -473,7 +473,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "query": {
@@ -580,7 +580,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "ref": {
@@ -647,7 +647,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -774,7 +774,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -901,7 +901,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -1042,7 +1042,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "entitySet": {
@@ -1079,7 +1079,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -1185,7 +1185,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -1299,7 +1299,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -1488,7 +1488,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "documentEntity": {
@@ -1841,7 +1841,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -1960,7 +1960,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -2091,7 +2091,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -2222,7 +2222,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -2386,7 +2386,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -2498,7 +2498,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -2672,7 +2672,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -2906,7 +2906,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -3055,7 +3055,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -3270,7 +3270,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -3473,7 +3473,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -3638,7 +3638,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -3795,7 +3795,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -3978,7 +3978,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -4161,7 +4161,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -4342,7 +4342,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "documentEntity": {
@@ -4589,6 +4589,122 @@
       }
     },
     {
+      "name": "read.system.data_freshness",
+      "title": "Свежесть данных",
+      "description": "По какую дату внесены данные в базу: по основным видам документов (реализации, поступления, банк, касса, счета-фактуры, отчёты комитенту) — дата и номер последнего документа не позже сегодня, сколько документов за последние 30 дней и сколько из них не проведено, будущие даты отдельно; последний закрытый месяц. Для вопросов «есть ли данные за октябрь», «по какое число разнесён банк», а также чтобы выбрать базу, когда их несколько. Только показывает факты: старая дата не значит, что данных не хватает, вид документа может не использоваться. Полная проверка месяца — check_month_close.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
+            "type": "string"
+          },
+          "organization": {
+            "description": "Организация (юрлицо) для фильтра: часть названия, ИНН или Ref_Key из list_organizations. Без указания — все организации базы.",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "asOf": {
+            "type": "string"
+          },
+          "windowDays": {
+            "type": "number"
+          },
+          "documents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "entitySet": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "lastDate": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "countInWindow": {
+                  "type": "number"
+                },
+                "unpostedInWindow": {
+                  "type": "number"
+                },
+                "futureDatedUntil": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "entitySet",
+                "title",
+                "lastDate",
+                "countInWindow",
+                "unpostedInWindow"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "closing": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "organization": {
+                  "type": "string"
+                },
+                "lastClosedMonth": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "lastClosedMonth"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "scan": {
+            "type": "object",
+            "properties": {
+              "elapsedMs": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "elapsedMs"
+            ],
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "database",
+          "asOf",
+          "windowDays",
+          "documents",
+          "scan"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
       "name": "write.operation.status",
       "title": "Статус операции записи",
       "description": "Состояние операции записи по operationId из предпросмотра. После потери ответа созданный объект сверяется по назначенной ссылке (старые операции — по метке), строки документа — по числу строк, настройка регистра — по точному составному ключу и отпечатку проверяемых полей. Совпадение фиксирует успех без повторной отправки. Для изменения группы, Post/Unpost и неподтверждённого результата регистра ответ unverifiable удерживает повтор и требует ручной сверки. Отсутствие объекта само по себе не разрешает новый запрос: 1С могла ещё выполнять его, сколько бы времени ни прошло, — ответ not_found. Закрыть операцию как not_applied можно только с markNotApplied=true после того, как человек сам сверил базу. Новый предпросмотр допустим после not_applied либо rejected с устранённой причиной. Ничего не записывает в 1С.",
@@ -4596,7 +4712,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "operationId": {
@@ -4676,7 +4792,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "name": {
@@ -4809,7 +4925,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "entitySet": {
@@ -4886,7 +5002,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "name": {
@@ -5000,7 +5116,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -5140,7 +5256,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -5305,7 +5421,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "entitySet": {
@@ -5451,7 +5567,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "entitySet": {
@@ -5562,7 +5678,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "ref": {
@@ -5684,7 +5800,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "ref": {
@@ -5786,7 +5902,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -5951,7 +6067,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -6128,7 +6244,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -6323,7 +6439,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -6508,7 +6624,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "entitySet": {
@@ -6659,7 +6775,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -6840,7 +6956,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -7005,7 +7121,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -7144,7 +7260,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -7281,7 +7397,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -7418,7 +7534,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -7557,7 +7673,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "entitySet": {
@@ -7710,7 +7826,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "entitySet": {
@@ -7864,7 +7980,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "entitySet": {
@@ -7972,7 +8088,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -8159,7 +8275,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -8341,7 +8457,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -8466,7 +8582,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -8600,7 +8716,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -8734,7 +8850,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organization": {
@@ -8868,7 +8984,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "baseDocumentRef": {
@@ -8976,7 +9092,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "baseDocumentRef": {
@@ -9088,7 +9204,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "ownerRef": {
@@ -9209,7 +9325,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "ownerRef": {
@@ -9328,7 +9444,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "entitySet": {
@@ -9434,7 +9550,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "entitySet": {
@@ -9534,7 +9650,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "entitySet": {
@@ -9608,7 +9724,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "entitySet": {
@@ -9662,7 +9778,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organizationRef": {
@@ -9762,7 +9878,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organizationRef": {
@@ -9921,7 +10037,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organizationRef": {
@@ -10029,7 +10145,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "organizationRef": {
@@ -10196,7 +10312,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "name": {
@@ -10298,7 +10414,7 @@
         "type": "object",
         "properties": {
           "database": {
-            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию.",
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
             "type": "string"
           },
           "ref": {

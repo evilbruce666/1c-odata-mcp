@@ -68,7 +68,7 @@ export function monthBounds(month: string): { from: string; to: string } {
 
 // ─── 1. Закрытие месяца ──────────────────────────────────────────────────────
 
-const CLOSING_SET = ["Document_РегламентнаяОперация"];
+export const CLOSING_SET = ["Document_РегламентнаяОперация"];
 /** Без этой операции месяц в БП не закрыт: она формирует финансовый результат. */
 export const KEY_CLOSING_OPERATION = "ЗакрытиеСчетов90_91";
 const DONE_STATES = new Set(["Выполнено", "Пропущено"]);

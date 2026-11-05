@@ -10,7 +10,9 @@ import { logger } from "../logger.js";
 export const databaseField = z
   .string()
   .optional()
-  .describe("Имя базы 1С из list_databases. Без указания — база по умолчанию.");
+  .describe(
+    "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
+  );
 
 /** Общее поле фильтра по организации (юрлицу) внутри базы. */
 export const organizationField = z
