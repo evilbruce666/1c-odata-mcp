@@ -14,6 +14,7 @@
 
 ### Изменено
 
+- MCP SDK (`@modelcontextprotocol/server`, `client`) обновлён до 2.4.0.
 - Ответ чтения длиннее 50 000 символов укорачивается по самому большому списку с пометкой `responseTrimmed` и подсказкой в `note`: страховка для инструментов без своих страниц (долги, остатки, истории, разбивки) на больших базах. Итоги рядом со списком считаются по всем строкам.
 - `read.schema.list_entities`, `read.analytics.get_deal_history`, `read.document.search_documents` и `read.counterparty.get_reconciliation`: один ответ не больше примерно 45 000 символов, продолжение — `offset` и `nextOffset`, в ответе `returned` и `truncated`. Раньше `list_entities` без фильтра отдавал больше 220 000 символов, а `search_documents` с большим `limit` больше 170 000. `list_entities` показывает `total` и `countsByClass`. Вызов, ждавший всё разом, получит первую страницу и `truncated: true`.
 - **Запись при нескольких настроенных базах требует явного `database`,** включая предпросмотр и `write.operation.status`: без него отказ, ничего не записано. Раньше молча бралась база по умолчанию. С одной базой ничего не меняется.
