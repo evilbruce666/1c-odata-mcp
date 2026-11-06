@@ -505,8 +505,11 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
       description:
         "Сумма выручки по проведённым документам реализации за период (по полю СуммаДокумента). " +
         "Можно ограничить организацией. Период задаётся датами YYYY-MM-DD. " +
+        "Это сумма документов, а не выручка в учёте: при агентской схеме сюда входят деньги комитентов. Выручка компании — " +
+        "кредитовый оборот счёта 90.01 (read.accounting.get_account_turnover). " +
         "Не разбивает по способу оплаты: реализация в 1С с картой, СБП или банком не связана. Поступившие деньги по каналам — " +
-        "read.accounting.get_account_card по счёту 62 с groupBy corrAccount (кредит с 51, 50, 57), это оплаты, а не выручка периода.",
+        "read.accounting.get_account_card по счёту 62 с groupBy corrAccount (кредит с 51, 50, 57) и по счёту 57.03: " +
+        "это оплаты, а не выручка периода, и эквайринг, ещё не отнесённый на покупателей, виден только на 57.03.",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
@@ -531,6 +534,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           period: { from, to },
           total: fromCents(r.totalCents),
           byDocument: r.perSet,
+          note: "Сумма документов реализации, включая деньги комитентов при агентской схеме. Выручка в учёте — кредитовый оборот 90.01.",
           scan: { documentsScanned: r.meta.rowsScanned, windows: r.meta.chunks, elapsedMs: Date.now() - t0 },
         });
       }),
