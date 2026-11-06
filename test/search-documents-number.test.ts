@@ -204,7 +204,7 @@ describe("search_documents: номер, вид и поиск по основны
   it("отбор на стороне коннектора упёрся в лимит: вид назван, продолжения нет", async () => {
     const f = fake1C();
     const CP = "11111111-1111-4111-8111-111111111111";
-    const rows = Array.from({ length: f.conn.behavior.maxRows }, (_, i) => ({
+    const rows = Array.from({ length: f.conn.behavior.analyticsMaxRows }, (_, i) => ({
       Ref_Key: `d${i}`,
       Контрагент: "22222222-2222-4222-8222-222222222222",
       Date: "2026-01-01T00:00:00",

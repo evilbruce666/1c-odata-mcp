@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
 import { ok, guard, offsetField, pageOf, databaseField, organizationField } from "./_shared.js";
+import { ANALYTICS_PAGE } from "../odata/aggregate.js";
 import { fetchAll } from "../odata/pagination.js";
 import { and, cmp, contains, odataGuid, odataString, or, buildQuery } from "../odata/query.js";
 import { DOC_FIELDS, DOCUMENTS, resolveEntity } from "../config/mapping.js";
@@ -142,8 +143,9 @@ async function searchSet(conn: Connection, set: string, p: SearchParams): Promis
     conn.client,
     set,
     { select, filter: filter || undefined, orderby: `${DOC_FIELDS.date} desc` },
-    conn.behavior.pageSize,
-    clientSide ? conn.behavior.maxRows : p.limit,
+    // Отбор у себя: читаем весь период крупными страницами, иначе нужный документ может оказаться за лимитом.
+    clientSide ? ANALYTICS_PAGE : conn.behavior.pageSize,
+    clientSide ? conn.behavior.analyticsMaxRows : p.limit,
   );
   const matched = rows.filter(
     (r) =>
@@ -183,7 +185,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
         "по одному номеру обычно несколько документов разных лет; уточняйте период. Редкие виды " +
         "(зарплата, регламентные операции) — только через entitySet. " +
         "Ответ постраничный: count и returned — строк на этой странице, а не всего, страница короче limit, если не помещается. " +
-        "При nextOffset читайте дальше; truncated без nextOffset значит, что в видах из cappedSets выборка упёрлась в ODATA_MAX_ROWS " +
+        "При nextOffset читайте дальше; truncated без nextOffset значит, что в видах из cappedSets выборка упёрлась в ODATA_ANALYTICS_MAX_ROWS " +
         "при отборе на стороне коннектора (контрагент, номер): сузьте период или укажите entitySet. Посчитать сумму за период проще " +
         "get_payments_breakdown и get_sales_breakdown: там итог сразу, но только по проведённым; здесь по умолчанию и непроведённые.",
       inputSchema: z.object({
