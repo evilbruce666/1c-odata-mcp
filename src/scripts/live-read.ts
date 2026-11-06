@@ -19,6 +19,7 @@ process.env["ODATA_WRITE_JOURNAL_DIR"] = mkdtempSync(join(tmpdir(), "1c-odata-li
 type Json = Record<string, unknown>;
 type Tool = {
   inputSchema?: { safeParse: (v: unknown) => { success: boolean; data?: Json; error?: unknown } };
+  outputSchema?: { safeParse: (v: unknown) => { success: boolean; error?: { issues?: unknown } } };
   handler: (
     args: Json,
     extra: Json,
@@ -67,6 +68,16 @@ async function main(): Promise<number> {
     const parsed = tool.inputSchema ? tool.inputSchema.safeParse(a) : { success: true, data: a };
     if (!parsed.success) return { err: true, sc: {} as Json, text: "входные данные не прошли схему" };
     const r = await tool.handler(parsed.data!, {});
+    // Настоящий MCP-клиент отвергает ответ, не прошедший outputSchema; прямой вызов обработчика — нет.
+    if (!r.isError && tool.outputSchema) {
+      const out = tool.outputSchema.safeParse(r.structuredContent);
+      if (!out.success)
+        return {
+          err: true,
+          sc: {},
+          text: `ответ не проходит outputSchema: ${JSON.stringify(out.error?.issues).slice(0, 300)}`,
+        };
+    }
     return { err: !!r.isError, sc: r.structuredContent ?? {}, text: r.content?.[0]?.text ?? "" };
   };
   const noArgReads = Object.entries(tools)

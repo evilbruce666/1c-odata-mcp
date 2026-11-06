@@ -29,6 +29,7 @@ type Handler = (
 }>;
 type Tool = {
   inputSchema: { safeParse: (v: unknown) => { success: boolean; data?: Json; error?: unknown } };
+  outputSchema?: { safeParse: (v: unknown) => { success: boolean; error?: { issues?: unknown } } };
   handler: Handler;
 };
 
@@ -70,6 +71,16 @@ async function main(): Promise<number> {
     if (!parsed.success)
       return { err: true, sc: {}, text: `входные данные: ${JSON.stringify(parsed.error)}` };
     const r = await tool.handler(parsed.data!, {});
+    // Настоящий MCP-клиент отвергает ответ, не прошедший outputSchema; прямой вызов обработчика — нет.
+    if (!r.isError && tool.outputSchema) {
+      const out = tool.outputSchema.safeParse(r.structuredContent);
+      if (!out.success)
+        return {
+          err: true,
+          sc: {},
+          text: `ответ не проходит outputSchema: ${JSON.stringify(out.error?.issues).slice(0, 300)}`,
+        };
+    }
     return { err: !!r.isError, sc: r.structuredContent ?? {}, text: r.content?.[0]?.text ?? "" };
   };
 
