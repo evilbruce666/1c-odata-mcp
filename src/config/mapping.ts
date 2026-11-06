@@ -31,6 +31,7 @@ export const DOCUMENTS = {
   paymentOrder: ["Document_ПлатежноеПоручение"],
   cashIn: ["Document_ПриходныйКассовыйОрдер"],
   cashOut: ["Document_РасходныйКассовыйОрдер"],
+  cardPayment: ["Document_ОплатаПлатежнойКартой"],
   // Счета-фактуры (фаза 3) — создаются на основании реализации/поступления.
   issuedInvoice: ["Document_СчетФактураВыданный"],
   commissionReport: ["Document_ОтчетКомитентуОПродажах"],

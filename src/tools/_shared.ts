@@ -173,7 +173,7 @@ export function pageOf<T>(
   const note = more
     ? `Показаны ${unit} ${o.offset + 1}–${next}. Следующая страница: offset=${next}.`
     : o.capHit
-      ? `Выборка упёрлась в лимит строк: показаны не все. Уточните фильтр или период.`
+      ? `Выборка упёрлась в лимит строк, продолжения нет: показаны не все. Уточните фильтр или период.`
       : o.offset > 0 && o.offset >= all.length
         ? `offset=${o.offset} за пределами: всего ${all.length}.`
         : undefined;

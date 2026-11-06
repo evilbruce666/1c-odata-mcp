@@ -32,7 +32,7 @@ const KINDS = {
   purchases: ["purchases"],
   supplier_invoices: ["supplierInvoice"],
   bank: ["bankIn", "bankOut", "paymentOrder"],
-  cash: ["cashIn", "cashOut"],
+  cash: ["cashIn", "cashOut", "cardPayment"],
   vat_invoices: ["issuedInvoice", "receivedInvoice"],
   warehouse: ["returnFromCustomer", "returnToSupplier", "transfer", "surplus", "writeoff", "inventory"],
 } as const satisfies Record<string, ReadonlyArray<keyof typeof DOCUMENTS>>;
@@ -96,7 +96,8 @@ async function searchSet(conn: Connection, set: string, p: SearchParams): Promis
       counterpartyNote =
         "Контрагент в этом документе хранится полиморфно — фильтр применён на стороне коннектора.";
     } else if (p.ignoreMissingCounterparty) {
-      counterpartyNote = "В этом типе документа нет поля контрагента — фильтр по контрагенту проигнорирован.";
+      counterpartyNote =
+        "ФИЛЬТР НЕ ПРИМЕНЁН: в ответе документы всех контрагентов. В этом типе документа нет поля контрагента — фильтр по контрагенту проигнорирован.";
     } else {
       return { set, skipped: "нет поля контрагента — фильтр по контрагенту неприменим" };
     }
@@ -180,7 +181,11 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
         "«документ №33»). number — номер как его называет человек: «33» находит 0000-000033, а также " +
         "входящий номер документа контрагента (накладной поставщика). Нумерация в 1С каждый год своя — " +
         "по одному номеру обычно несколько документов разных лет; уточняйте период. Редкие виды " +
-        "(зарплата, регламентные операции) — только через entitySet.",
+        "(зарплата, регламентные операции) — только через entitySet. " +
+        "Ответ постраничный: count и returned — строк на этой странице, а не всего, страница короче limit, если не помещается. " +
+        "При nextOffset читайте дальше; truncated без nextOffset значит, что в видах из cappedSets выборка упёрлась в ODATA_MAX_ROWS " +
+        "при отборе на стороне коннектора (контрагент, номер): сузьте период или укажите entitySet. Посчитать сумму за период проще " +
+        "get_payments_breakdown и get_sales_breakdown: там итог сразу, но только по проведённым; здесь по умолчанию и непроведённые.",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
@@ -194,7 +199,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
           .describe(
             "Вид документа: sales — реализации и акты, customer_invoices — счета покупателям, purchases — " +
               "поступления, supplier_invoices — счета поставщиков, bank — банк (поступления, списания, " +
-              "платёжки), cash — касса (ПКО, РКО), vat_invoices — счета-фактуры, warehouse — складские",
+              "платёжки), cash — касса и оплаты платёжной картой (ПКО, РКО, ОплатаПлатежнойКартой), vat_invoices — счета-фактуры, warehouse — складские",
           ),
         number: z.string().optional().describe("Номер документа: «33», «№ 0000-000033», входящий «ГК-22537»"),
         from: z.string().optional().describe("Дата начала (YYYY-MM-DD)"),
@@ -256,7 +261,14 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
             capHit: r.capHit,
             unit: "документы",
           });
-          return ok({ ...head, ...page, count: items.length, rows: items, ...(note ? { note } : {}) });
+          return ok({
+            ...head,
+            ...page,
+            count: items.length,
+            rows: items,
+            ...(r.capHit ? { cappedSets: [entitySet] } : {}),
+            ...(note ? { note } : {}),
+          });
         }
 
         const keys = kind ? KINDS[kind] : (Object.values(KINDS).flat() as Array<keyof typeof DOCUMENTS>);
@@ -305,7 +317,15 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
           capHit: found.some((r) => r.capHit),
           unit: "документы",
         });
-        return ok({ ...head, ...page, count: items.length, rows: items, ...(note ? { note } : {}) });
+        const capped = found.filter((r) => r.capHit).map((r) => r.set);
+        return ok({
+          ...head,
+          ...page,
+          count: items.length,
+          rows: items,
+          ...(capped.length ? { cappedSets: capped } : {}),
+          ...(note ? { note } : {}),
+        });
       }),
   );
 

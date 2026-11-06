@@ -191,6 +191,35 @@ describe("search_documents: номер, вид и поиск по основны
     expect(r.isError).toBeFalsy();
     const sc = r.structuredContent as { failed: Array<{ entitySet: string }>; searched: unknown[] };
     expect(sc.failed.map((x) => x.entitySet)).toEqual(["Document_ПриходныйКассовыйОрдер"]);
-    expect(sc.searched).toHaveLength(1);
+    expect(sc.searched).toHaveLength(2);
+  });
+
+  it("оплата платёжной картой входит в касс и в основные виды", async () => {
+    const f = fake1C();
+    const cash = await search(f.ctx)({ kind: "cash" });
+    const sets = (cash.structuredContent as { searched: Array<{ entitySet: string }> }).searched;
+    expect(sets.map((x) => x.entitySet)).toContain("Document_ОплатаПлатежнойКартой");
+  });
+
+  it("отбор на стороне коннектора упёрся в лимит: вид назван, продолжения нет", async () => {
+    const f = fake1C();
+    const CP = "11111111-1111-4111-8111-111111111111";
+    const rows = Array.from({ length: f.conn.behavior.maxRows }, (_, i) => ({
+      Ref_Key: `d${i}`,
+      Контрагент: "22222222-2222-4222-8222-222222222222",
+      Date: "2026-01-01T00:00:00",
+    }));
+    vi.spyOn(f.conn.client, "getCollection").mockImplementation(async (url: string) => {
+      const u = decodeURIComponent(url);
+      const top = Number(/\$top=(\d+)/.exec(u)?.[1] ?? rows.length);
+      const skip = Number(/\$skip=(\d+)/.exec(u)?.[1] ?? 0);
+      return { value: rows.slice(skip, skip + top) as never[] };
+    });
+    const r = await search(f.ctx)({ entitySet: "Document_ПоступлениеНаРасчетныйСчет", counterpartyRef: CP });
+    expect(r.structuredContent).toMatchObject({
+      truncated: true,
+      cappedSets: ["Document_ПоступлениеНаРасчетныйСчет"],
+    });
+    expect((r.structuredContent as { nextOffset?: number }).nextOffset).toBeUndefined();
   });
 });
