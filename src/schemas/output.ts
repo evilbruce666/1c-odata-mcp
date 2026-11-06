@@ -251,10 +251,7 @@ export const counterpartyHistoryResultSchema = z
     period: z.object({ from: z.string().optional(), to: z.string().optional() }).passthrough(),
     rows: z.array(documentSummarySchema),
     count: z.number(),
-    offset: z.number(),
-    returned: z.number(),
     truncated: z.boolean(),
-    nextOffset: z.number().optional(),
     note: z.string().optional(),
   })
   .passthrough();
@@ -264,7 +261,10 @@ export const searchDocumentsResultSchema = z
   .object({
     rows: z.array(documentSummarySchema),
     count: z.number(),
+    offset: z.number(),
+    returned: z.number(),
     truncated: z.boolean(),
+    nextOffset: z.number().optional(),
     note: z.string().optional(),
     counterpartyFilter: z.string().optional(),
   })
@@ -421,6 +421,8 @@ export const accountCardResultSchema = z
     returned: z.number(),
     truncated: z.boolean(),
     nextOffset: z.number().optional(),
+    snapshot: z.string().optional(),
+    dataChanged: z.boolean().optional(),
     groups: z
       .array(z.object({ debit: z.number(), credit: z.number(), count: z.number() }).passthrough())
       .optional(),

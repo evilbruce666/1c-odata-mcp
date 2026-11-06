@@ -10,6 +10,7 @@ import {
   dateField,
   offsetField,
   pageOf,
+  snapshotField,
 } from "./_shared.js";
 import { and, cmp, contains, odataGuid } from "../odata/query.js";
 import { CATALOGS, DOC_FIELDS, DOCUMENTS, resolveEntity } from "../config/mapping.js";
@@ -348,10 +349,11 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
         to: dateField("Дата конца").optional(),
         limit: z.number().int().positive().max(1000).default(200).describe("Сколько событий вернуть"),
         offset: offsetField,
+        snapshot: snapshotField,
       }),
       outputSchema: dealHistoryResultSchema,
     },
-    ({ database, organization, dealKey, contractRef, from, to, limit, offset }) =>
+    ({ database, organization, dealKey, contractRef, from, to, limit, offset, snapshot }) =>
       guard("read.analytics.get_deal_history", async () => {
         const t0 = Date.now();
         if (!dealKey && !contractRef) return fail("Укажите dealKey или contractRef.");
@@ -475,7 +477,14 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           outflow: fromCents(outflowC),
           net: fromCents(inflowC - outflowC),
         };
-        const { items, page, note } = pageOf(allItems, { offset, limit, head, unit: "события" });
+        const { items, page, note } = pageOf(allItems, {
+          offset,
+          limit,
+          head,
+          unit: "события",
+          snapshot,
+          tracksChanges: true,
+        });
         return ok({
           ...head,
           ...page,

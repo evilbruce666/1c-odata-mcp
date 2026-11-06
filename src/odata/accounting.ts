@@ -227,13 +227,37 @@ export async function balanceByAccounts(
   const balancePath = asOf ? `${reg}/Balance(Period=datetime'${nextDay(asOf)}T00:00:00')` : `${reg}/Balance`;
   // Через безопасную выборку: сальдо берём ПОЛНОСТЬЮ (иначе дебиторка/остатки
   // занижаются), с громким переполнением вместо тихой обрезки.
-  const { rows } = await fetchAllForAggregation(
-    conn,
-    balancePath,
-    { filter },
-    `сальдо на ${asOf ?? "сейчас"}`,
+  const read = (f: string | undefined) =>
+    fetchAllForAggregation(conn, balancePath, { filter: f }, `сальдо на ${asOf ?? "сейчас"}`);
+  if (!accountKeys) return (await read(filter)).rows;
+  const { rows } = await bySplittingAccounts(accountKeys, (keys) =>
+    read(
+      and(
+        or(...keys.map((k) => cmp("Account_Key", "eq", odataGuid(k)))),
+        orgKey ? cmp("Организация_Key", "eq", odataGuid(orgKey)) : undefined,
+      ) || undefined,
+    ),
   );
   return rows;
+}
+
+/**
+ * Выборка по счетам: не успела за таймаут — читаем половинами и складываем. Счета не пересекаются,
+ * поэтому строки не задваиваются. Один счёт не успел — настоящая ошибка таймаута.
+ */
+export async function bySplittingAccounts(
+  keys: readonly string[],
+  read: (keys: readonly string[]) => Promise<{ rows: ODataEntity[]; meta: ScanMeta }>,
+): Promise<{ rows: ODataEntity[]; meta: ScanMeta }> {
+  try {
+    return await read(keys);
+  } catch (e) {
+    if (!(e instanceof ODataError) || e.kind !== "timeout" || keys.length <= 1) throw e;
+    const middle = Math.ceil(keys.length / 2);
+    const a = await bySplittingAccounts(keys.slice(0, middle), read);
+    const b = await bySplittingAccounts(keys.slice(middle), read);
+    return { rows: [...a.rows, ...b.rows], meta: addMeta(a.meta, b.meta) };
+  }
 }
 
 /**
@@ -370,11 +394,8 @@ export async function turnoversByAccounts(
     // Без $select: 1С группирует виртуальную таблицу по выбранным полям, и
     // $select=Account_Key,… свернул бы сальдо по субконто. Нужны строки по всем
     // измерениям/субконто — как развёрнутое сальдо в стандартной ОСВ.
-    const part = await fetchAllForAggregation(
-      conn,
-      path,
-      { filter: accountsOrgFilter(batch, orgKey) },
-      period,
+    const part = await bySplittingAccounts(batch, (keys) =>
+      fetchAllForAggregation(conn, path, { filter: accountsOrgFilter(keys, orgKey) }, period),
     );
     rows = rows.concat(part.rows);
     meta = addMeta(meta, part.meta);

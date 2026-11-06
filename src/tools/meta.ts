@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { ServerContext } from "../context.js";
-import { ok, fail, guard, databaseField, offsetField, pageOf } from "./_shared.js";
+import { ok, fail, guard, databaseField, offsetField, pageOf, snapshotField } from "./_shared.js";
 import { listOrganizations } from "../odata/orgs.js";
 import type { EntityClass } from "../types/odata.js";
 import {
@@ -139,10 +139,11 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
           .describe("Ограничить одним классом объектов"),
         search: z.string().optional().describe("Подстрока в имени объекта (без учёта регистра)"),
         offset: offsetField,
+        snapshot: snapshotField,
       }),
       outputSchema: listEntitiesResultSchema,
     },
-    ({ database, class: cls, search, offset }) =>
+    ({ database, class: cls, search, offset, snapshot }) =>
       guard("read.schema.list_entities", async () => {
         const conn = ctx.db(database);
         const meta = await conn.getMetadata();
@@ -164,7 +165,13 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
           total: matched.length,
           countsByClass,
         };
-        const { items, page, note } = pageOf(ordered, { offset, head, unit: "объекты" });
+        const { items, page, note } = pageOf(ordered, {
+          offset,
+          head,
+          unit: "объекты",
+          snapshot,
+          tracksChanges: true,
+        });
         const groups: Record<string, Array<{ entitySet: string; name: string }>> = {};
         for (const { label, ...e } of items) (groups[label] ??= []).push(e);
         return ok({

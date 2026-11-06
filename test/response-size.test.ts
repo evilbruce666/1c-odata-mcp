@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { createServer, limitResponseSize } from "../src/mcp/server.js";
-import { resolveAccounts } from "../src/odata/accounting.js";
+import { bySplittingAccounts, resolveAccounts } from "../src/odata/accounting.js";
+import { fetchMovements } from "../src/odata/account-card.js";
+import { ODataError } from "../src/odata/errors.js";
 import { fitToChars, pageOf } from "../src/tools/_shared.js";
 import { fake1C } from "./helpers/fake-1c.js";
 
@@ -219,31 +221,62 @@ describe("большие ответы укладываются в норму, н
   });
 });
 
-describe("limitResponseSize: страховка для инструментов без своих страниц", () => {
+describe("limitResponseSize: страницы для инструментов без своих", () => {
   const answer = (data: Record<string, unknown>): CallToolResult => ({
     content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
     structuredContent: data,
   });
   const rows = Array.from({ length: 2000 }, (_, i) => ({ n: i, text: "строка ".repeat(10) }));
+  type Cut = {
+    total: number;
+    small: number[];
+    rows: Array<{ n: number }>;
+    note: string;
+    listField: string;
+    listTotal: number;
+    returned: number;
+    truncated: boolean;
+    nextOffset?: number;
+  };
 
   it("режет самый большой список, называет это, итоги и другие поля остаются", () => {
-    const r = limitResponseSize(answer({ total: 2000, small: [1, 2], rows, note: "итоги верны" }));
+    const r = limitResponseSize(answer({ total: 2000, small: [1, 2], rows, note: "итоги верны" }), {
+      continuable: true,
+    });
     const text = (r.content[0] as { text: string }).text;
     expect(text.length).toBeLessThanOrEqual(NORM);
-    const s = r.structuredContent as {
-      total: number;
-      small: number[];
-      rows: unknown[];
-      note: string;
-      responseTrimmed: { field: string; returned: number; total: number };
-    };
+    const s = r.structuredContent as unknown as Cut;
     expect(s.total).toBe(2000);
     expect(s.small).toEqual([1, 2]);
-    expect(s.responseTrimmed).toMatchObject({ field: "rows", total: 2000, returned: s.rows.length });
-    expect(s.rows.length).toBeLessThan(2000);
+    expect(s).toMatchObject({
+      listField: "rows",
+      listTotal: 2000,
+      truncated: true,
+      nextOffset: s.rows.length,
+    });
     expect(s.note).toContain("итоги верны");
-    expect(s.note).toContain("укорочен");
+    expect(s.note).toContain(`offset=${s.nextOffset}`);
     expect(JSON.parse(text)).toEqual(s);
+  });
+
+  it("все страницы вместе — каждая строка ровно один раз", () => {
+    const seen: number[] = [];
+    let offset = 0;
+    for (let i = 0; i < 50; i++) {
+      const s = limitResponseSize(answer({ rows }), { offset, continuable: true })
+        .structuredContent as unknown as Cut;
+      seen.push(...s.rows.map((x) => x.n));
+      if (!s.truncated) break;
+      offset = s.nextOffset!;
+    }
+    expect(seen).toEqual(rows.map((x) => x.n));
+  });
+
+  it("инструмент без offset: усечение названо, продолжения не обещает", () => {
+    const s = limitResponseSize(answer({ rows })).structuredContent as unknown as Cut;
+    expect(s.truncated).toBe(true);
+    expect(s.nextOffset).toBeUndefined();
+    expect(s.note).toContain("Уточните");
   });
 
   it("в пределах нормы и ошибки не меняются", () => {
@@ -256,5 +289,149 @@ describe("limitResponseSize: страховка для инструментов 
   it("без списка ответ не трогает", () => {
     const big = answer({ text: "x".repeat(60_000) });
     expect(limitResponseSize(big)).toBe(big);
+  });
+});
+
+describe("offset у инструментов со списком по limit", () => {
+  const tools = () => {
+    const f = fake1C();
+    return {
+      f,
+      all: (
+        createServer(f.ctx) as unknown as {
+          _registeredTools: Record<string, Tool & { inputSchema: { shape: Record<string, unknown> } }>;
+        }
+      )._registeredTools,
+    };
+  };
+  it("есть у всех инструментов чтения с limit, запись не затронута", () => {
+    const { all } = tools();
+    for (const [name, t] of Object.entries(all)) {
+      if (name.startsWith("read.") && "limit" in t.inputSchema.shape) {
+        expect(Object.keys(t.inputSchema.shape), name).toContain("offset");
+      }
+    }
+    expect(Object.keys(all["read.system.health_check"]!.inputSchema.shape)).not.toContain("offset");
+  });
+
+  it("find_counterparty: вторая страница читает limit+offset строк и отдаёт продолжение", async () => {
+    const { f, all } = tools();
+    const rows = Array.from({ length: 30 }, (_, i) => ({
+      Ref_Key: `cccccccc-0000-4000-8000-${String(i).padStart(12, "0")}`,
+      Description: `Контрагент ${i}`,
+      IsFolder: false,
+    }));
+    const spy = vi.spyOn(f.conn.client, "getCollection").mockImplementation(async (url: string) => {
+      const u = decodeURIComponent(url);
+      const top = Number(/\$top=(\d+)/.exec(u)?.[1] ?? 1000);
+      const skip = Number(/\$skip=(\d+)/.exec(u)?.[1] ?? 0);
+      return { value: (u.startsWith("Catalog_Контрагенты") ? rows.slice(skip, skip + top) : []) as never[] };
+    });
+    const tool = all["read.counterparty.find_counterparty"]!;
+    const r = await tool.handler(tool.inputSchema.parse({ query: "Контрагент", limit: 10, offset: 10 }), {});
+    if (r.isError) throw new Error(JSON.stringify(r.content));
+    const s = r.structuredContent as { rows: Array<{ ref: string }>; offset: number; returned: number };
+    expect(s).toMatchObject({ offset: 10, returned: 10 });
+    expect(s.rows[0]!.ref).toBe("cccccccc-0000-4000-8000-000000000010");
+    expect(r.structuredContent).toMatchObject({ count: 10, listTotal: 20 });
+    expect(decodeURIComponent(String(spy.mock.calls[0]![0]))).toContain("Контрагент");
+  });
+});
+
+describe("snapshot: данные изменились между страницами", () => {
+  const items = Array.from({ length: 5 }, (_, i) => i);
+  it("те же итоги — метка та же, без dataChanged", () => {
+    const a = pageOf(items, { offset: 0, limit: 2, head: { total: 5 }, tracksChanges: true });
+    const b = pageOf(items, {
+      offset: 2,
+      limit: 2,
+      head: { total: 5 },
+      tracksChanges: true,
+      snapshot: a.page["snapshot"] as string,
+    });
+    expect(b.page["snapshot"]).toBe(a.page["snapshot"]);
+    expect(b.page["dataChanged"]).toBeUndefined();
+  });
+  it("итоги изменились — dataChanged и совет читать заново", () => {
+    const a = pageOf(items, { offset: 0, limit: 2, head: { total: 5 }, tracksChanges: true });
+    const b = pageOf(items, {
+      offset: 2,
+      limit: 2,
+      head: { total: 6 },
+      tracksChanges: true,
+      snapshot: a.page["snapshot"] as string,
+    });
+    expect(b.page["dataChanged"]).toBe(true);
+    expect(b.note).toContain("offset=0");
+  });
+  it("search_documents не ставит метку: его head меняется от страницы к странице", () => {
+    const p = pageOf(items, { offset: 0, limit: 2, head: { searched: 1 } });
+    expect(p.page["snapshot"]).toBeUndefined();
+  });
+});
+
+describe("таймаут большой выборки: разбиение вместо отказа", () => {
+  const ACC = "aaaaaaaa-0000-4000-8000-000000000001";
+  const timeout = () => new ODataError({ kind: "timeout", message: "Превышен таймаут запроса" });
+  const row = (doc: string, acc: string) => ({
+    Period: "2026-01-10T00:00:00",
+    Recorder: doc,
+    Recorder_Type: "StandardODATA.Document_РеализацияТоваровУслуг",
+    LineNumber: "1",
+    AccountDr_Key: acc,
+    Сумма: 1,
+  });
+
+  it("движения: период делится по месяцам, строки складываются", async () => {
+    const { conn } = fake1C();
+    const acc = ACC;
+    const spy = vi.spyOn(conn.client, "getCollection").mockImplementation(async (url: string) => {
+      const u = decodeURIComponent(url);
+      const whole =
+        u.includes("StartPeriod=datetime'2026-01-01") && u.includes("EndPeriod=datetime'2026-03-31");
+      if (whole) throw timeout();
+      const m = /StartPeriod=datetime'(\d{4}-\d{2})/.exec(u)![1];
+      return { value: [row(`doc-${m}`, acc)] as never[] };
+    });
+    const { rows } = await fetchMovements(conn, { accountKeys: [acc], from: "2026-01-01", to: "2026-03-31" });
+    expect(rows.map((r) => r["Recorder"])).toEqual(["doc-2026-01", "doc-2026-02", "doc-2026-03"]);
+    expect(spy).toHaveBeenCalledTimes(4);
+  });
+
+  it("движения: один месяц не успел — ошибка таймаута, а не пустой результат", async () => {
+    const { conn } = fake1C();
+    vi.spyOn(conn.client, "getCollection").mockRejectedValue(timeout());
+    await expect(
+      fetchMovements(conn, { accountKeys: [ACC], from: "2026-01-01", to: "2026-01-31" }),
+    ).rejects.toThrow("таймаут");
+  });
+
+  it("другая ошибка не разбивается", async () => {
+    const { conn } = fake1C();
+    const spy = vi
+      .spyOn(conn.client, "getCollection")
+      .mockRejectedValue(new ODataError({ kind: "bad_request", message: "плохо" }));
+    await expect(
+      fetchMovements(conn, { accountKeys: [ACC], from: "2026-01-01", to: "2026-03-31" }),
+    ).rejects.toThrow("плохо");
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("счета: не успели — читаются половинами, строки не задваиваются", async () => {
+    const seen: string[][] = [];
+    const r = await bySplittingAccounts(["a", "b", "c", "d"], async (keys) => {
+      seen.push([...keys]);
+      if (keys.length > 1) throw timeout();
+      return { rows: [{ k: keys[0] }], meta: { rowsScanned: 1, chunks: 1 } };
+    });
+    expect(r.rows.map((x) => x["k"])).toEqual(["a", "b", "c", "d"]);
+    expect(r.meta.rowsScanned).toBe(4);
+    expect(seen[0]).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("счёт один и не успел — ошибка", async () => {
+    await expect(bySplittingAccounts(["a"], async () => Promise.reject(timeout()))).rejects.toThrow(
+      "таймаут",
+    );
   });
 });

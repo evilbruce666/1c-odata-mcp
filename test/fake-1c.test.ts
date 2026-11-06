@@ -177,10 +177,13 @@ type Tools = Record<
   string,
   {
     inputSchema?: { parse: (a: unknown) => Record<string, unknown> };
+    outputSchema?: {
+      safeParse: (a: unknown) => { success: boolean; error?: { issues: unknown } };
+    };
     handler: (
       a: Record<string, unknown>,
       e: unknown,
-    ) => Promise<{ isError?: boolean; content?: { text?: string }[] }>;
+    ) => Promise<{ isError?: boolean; content?: { text?: string }[]; structuredContent?: unknown }>;
   }
 >;
 
@@ -197,6 +200,14 @@ async function call(name: string, raw: Record<string, unknown>) {
     text.length,
     `${name}: ответ ${text.length} символов — больше ${MAX_RESPONSE_CHARS}, в контекст модели не поместится`,
   ).toBeLessThanOrEqual(MAX_RESPONSE_CHARS);
+  // Настоящий MCP-клиент отвергает ответ, не прошедший outputSchema, а прямой вызов обработчика — нет.
+  if (!r.isError && registered.outputSchema) {
+    const parsed = registered.outputSchema.safeParse(r.structuredContent);
+    expect(
+      parsed.success,
+      `${name}: ответ не проходит outputSchema: ${JSON.stringify(parsed.error?.issues)}`,
+    ).toBe(true);
+  }
   return { fake, r, text };
 }
 

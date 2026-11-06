@@ -32,6 +32,7 @@ import {
   fail,
   fitToChars,
   guard,
+  offsetField,
   ok,
 } from "../tools/_shared.js";
 
@@ -60,6 +61,7 @@ const INSTRUCTIONS =
   "read.system.data_freshness, а не полагайтесь на базу по умолчанию: при её подстановке в ответе чтения есть " +
   "databaseDefaulted, а запись без database при нескольких базах отказывает. " +
   "Ref_Key действуют только в своей базе: чужая ссылка даёт пустой результат, а не ошибку. " +
+  "Длинный ответ приходит частями: при truncated=true читайте дальше с offset=nextOffset. " +
   "Вызывайте инструменты по одному: 1С обрабатывает запросы одной учётной записи по очереди, и при параллельных " +
   "вызовах тяжёлые (check_month_close, data_freshness, акт сверки, карточка) упираются в таймаут клиента, а соседние " +
   "получают Connection closed. После такой ошибки повторите вызов один, это не значит, что данных нет.";
@@ -134,29 +136,44 @@ export function withDatabaseInfo(
 export const RESPONSE_CHARS_NORM = 50_000;
 
 /**
- * Страховка для инструментов без своих страниц (долги, остатки, истории, разбивки): слишком длинный
- * ответ укорачивается по самому большому списку верхнего уровня, и это названо в responseTrimmed. Итоги
- * рядом со списком считает сам инструмент по всем строкам, поэтому они остаются верными.
+ * Страницы для инструментов без своих: длинный ответ режется по самому большому списку верхнего уровня,
+ * с продолжением по offset. Инструмент считает всё заново, поэтому порядок и итоги рядом со списком те же.
  */
-export function limitResponseSize(result: CallToolResult): CallToolResult {
+export function limitResponseSize(
+  result: CallToolResult,
+  o: { offset?: number; continuable?: boolean } = {},
+): CallToolResult {
+  const offset = o.offset ?? 0;
   const data = result.structuredContent as Record<string, unknown> | undefined;
   const first = result.content[0];
-  if (result.isError || !data || first?.type !== "text" || first.text.length <= RESPONSE_CHARS_NORM) {
-    return result;
-  }
+  if (result.isError || !data || first?.type !== "text") return result;
+  if (offset === 0 && first.text.length <= RESPONSE_CHARS_NORM) return result;
   const field = Object.keys(data)
     .filter((k) => Array.isArray(data[k]))
     .sort((a, b) => elementChars(data[b]) - elementChars(data[a]))[0];
   if (!field) return result;
   const list = data[field] as unknown[];
   const { [field]: _list, ...rest } = data;
-  const kept = fitToChars(list, JSON.stringify(rest, null, 2).length + 500);
-  const trimmed = `Ответ укорочен: показаны ${kept.length} из ${list.length} строк списка ${field}, больше не помещается. Уточните отбор, уменьшите период или limit.`;
+  const kept = fitToChars(list.slice(offset), JSON.stringify(rest, null, 2).length + 500);
+  const next = offset + kept.length;
+  const more = next < list.length;
+  const hint = !more
+    ? ""
+    : o.continuable
+      ? `Показаны строки ${offset + 1}–${next} из ${list.length} списка ${field}. Следующая страница: offset=${next}.`
+      : `Показаны строки ${offset + 1}–${next} из ${list.length} списка ${field}, больше не помещается. Уточните отбор или период.`;
+  const note = [data["note"], hint].filter(Boolean).join(" ");
   const structuredContent = {
     ...rest,
     [field]: kept,
-    responseTrimmed: { field, returned: kept.length, total: list.length },
-    note: typeof data["note"] === "string" ? `${data["note"]} ${trimmed}` : trimmed,
+    listField: field,
+    listTotal: list.length,
+    ...(data["count"] === list.length ? { count: kept.length } : {}),
+    offset,
+    returned: kept.length,
+    truncated: more || data["truncated"] === true,
+    ...(more && o.continuable ? { nextOffset: next } : {}),
+    ...(note ? { note } : {}),
   };
   return {
     ...result,
@@ -214,9 +231,27 @@ export function createServer(ctx: ServerContext): McpServer {
     };
     const isCreateTool = name.startsWith("write.") && config.outputSchema === createResultSchema;
     if (name.startsWith("read.") && name !== "read.system.list_databases") {
-      return original(name, annotatedConfig, async (args, extra) =>
-        limitResponseSize(withDatabaseInfo(ctx, args, await cb(args, extra))),
-      );
+      const input = config.inputSchema;
+      const shape = input instanceof z.ZodObject ? (input.shape as Record<string, unknown>) : {};
+      // Свои страницы есть — обёртка только страхует. У инструмента со списком по limit появляется offset.
+      const continuable = "limit" in shape && !("offset" in shape);
+      const offsetSchema = continuable
+        ? {
+            inputSchema: (input as z.ZodObject<z.ZodRawShape>).extend({
+              offset: offsetField,
+            }),
+          }
+        : {};
+      return original(name, { ...annotatedConfig, ...offsetSchema }, async (args, extra) => {
+        const offset = continuable && typeof args.offset === "number" ? args.offset : 0;
+        // Инструмент считает с начала: чтобы дойти до этой страницы, ему нужно offset + limit строк.
+        const toolArgs =
+          offset > 0 && typeof args.limit === "number" ? { ...args, limit: args.limit + offset } : args;
+        return limitResponseSize(withDatabaseInfo(ctx, args, await cb(toolArgs, extra)), {
+          offset,
+          continuable,
+        });
+      });
     }
     if (!isCreateTool && !JOURNALED_UPDATE_TOOLS.has(name)) {
       return original(name, annotatedConfig, name.startsWith("write.") ? requireDatabase(ctx, cb) : cb);

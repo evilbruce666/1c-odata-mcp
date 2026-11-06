@@ -2,7 +2,8 @@ import type { Connection } from "../context.js";
 import type { ODataEntity } from "../types/odata.js";
 import { accountingChart, accountingRegister } from "../config/accounting.js";
 import { requireEntity } from "./publication.js";
-import { fetchAllForAggregation, type ScanMeta, emptyMeta, addMeta } from "./aggregate.js";
+import { fetchAllForAggregation, splitByMonth, type ScanMeta, emptyMeta, addMeta } from "./aggregate.js";
+import { ODataError } from "./errors.js";
 import { and, cmp, odataGuid, or } from "./query.js";
 import { num } from "./accounting.js";
 import { entitySetOfType, refOf } from "./settlements-aging.js";
@@ -116,6 +117,27 @@ const movementKey = (r: ODataEntity): string =>
  * берётся один раз.
  */
 export async function fetchMovements(
+  conn: Connection,
+  p: { accountKeys: readonly string[]; from: string; to: string; orgKey?: string; counterpartyRef?: string },
+): Promise<{ rows: ODataEntity[]; meta: ScanMeta }> {
+  try {
+    return await fetchMovementsOnce(conn, p);
+  } catch (e) {
+    // Большой период не успел за таймаут: движения складываются по месяцам без потерь.
+    const months = splitByMonth(p.from, p.to);
+    if (!(e instanceof ODataError) || e.kind !== "timeout" || months.length <= 1) throw e;
+    const rows: ODataEntity[] = [];
+    let meta = emptyMeta();
+    for (const m of months) {
+      const part = await fetchMovements(conn, { ...p, ...m });
+      rows.push(...part.rows);
+      meta = addMeta(meta, part.meta);
+    }
+    return { rows, meta };
+  }
+}
+
+async function fetchMovementsOnce(
   conn: Connection,
   p: { accountKeys: readonly string[]; from: string; to: string; orgKey?: string; counterpartyRef?: string },
 ): Promise<{ rows: ODataEntity[]; meta: ScanMeta }> {

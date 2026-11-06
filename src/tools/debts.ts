@@ -565,7 +565,7 @@ async function unpaidInvoices(
           `${shipmentsScanned} реализаций за период. Нет поля shipped — отгрузка не определена, а не «не отгружено».`,
   );
   if (picked.length > shown.length)
-    notes.push(`Показано ${shown.length} из ${picked.length} — увеличьте limit.`);
+    notes.push(`Показано ${shown.length} из ${picked.length}: остальные — с offset или большим limit.`);
 
   const sum = (f: (i: (typeof picked)[number]) => number) => picked.reduce((s, i) => s + f(i), 0);
   return {

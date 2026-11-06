@@ -13,6 +13,8 @@ import {
   MAX_RESPONSE_CHARS,
   offsetField,
   pageOf,
+  snapshotField,
+  snapshotFields,
 } from "./_shared.js";
 
 export { fitToChars };
@@ -228,6 +230,7 @@ async function accountCard(
     offset: number;
     groupBy: readonly CardGroup[];
     summaryOnly: boolean;
+    snapshot?: string | undefined;
   },
 ) {
   const t0 = Date.now();
@@ -339,8 +342,9 @@ async function accountCard(
   const shown = fitToChars(rows, JSON.stringify(head, null, 2).length);
   const nextOffset = o.offset + shown.length;
   const truncated = !o.summaryOnly && nextOffset < entries.length;
+  const changes = snapshotFields(head, o.snapshot);
 
-  const notes: string[] = [];
+  const notes: string[] = changes.note ? [changes.note] : [];
   if (truncated) {
     notes.push(
       `Показаны движения ${o.offset + 1}–${nextOffset} из ${entries.length}, итоги посчитаны по всем. ` +
@@ -367,6 +371,7 @@ async function accountCard(
     returned: shown.length,
     truncated,
     ...(truncated ? { nextOffset } : {}),
+    ...changes.fields,
     entries: shown,
     ...(notes.length ? { note: notes.join(" ") } : {}),
     scan: { rowsScanned: moves.meta.rowsScanned, windows: moves.meta.chunks, elapsedMs: Date.now() - t0 },
@@ -429,6 +434,7 @@ async function reconciliation(
     from: string;
     to: string;
     offset: number;
+    snapshot?: string | undefined;
   },
 ) {
   const t0 = Date.now();
@@ -579,7 +585,17 @@ async function reconciliation(
       closing: rub(v.closing),
     })),
   };
-  const { items, page, note: pageNote } = pageOf(allLines, { offset: o.offset, head, unit: "строки акта" });
+  const {
+    items,
+    page,
+    note: pageNote,
+  } = pageOf(allLines, {
+    offset: o.offset,
+    head,
+    unit: "строки акта",
+    snapshot: o.snapshot,
+    tracksChanges: true,
+  });
   if (pageNote) notes.push(pageNote);
   return {
     ...head,
@@ -841,7 +857,7 @@ export function registerCardTools(server: McpServer, ctx: ServerContext): void {
         "до периода — возьмите период шире. Для разбора: откуда остаток на 26, кто дал красное сальдо, как сложился долг. " +
         "Сальдо и balance: плюс — дебет, минус — кредит. count — строки карточки (проводка внутри счёта даёт две), scan.rowsScanned — проводки. " +
         "Ответ постраничный: count — всего движений, returned — сколько в этом ответе; при truncated=true " +
-        "читайте дальше с offset=nextOffset, пока truncated не станет false. За один ответ не больше " +
+        "читайте дальше с offset=nextOffset и snapshot из прошлого ответа, пока truncated не станет false; dataChanged — данные изменились, начните заново. За один ответ не больше " +
         `${MAX_CARD_PAGE} строк и примерно ${MAX_CARD_CHARS} символов, что бы ни стояло в limit. Обороты и остатки всегда по всему периоду. ` +
         "Итоги по месяцам, корреспондирующим счетам, контрагентам или договорам (своей или корреспондирующей стороны): groupBy, сумма групп равна " +
         "оборотам карточки; с summaryOnly=true строк нет и ответ быстрее. Для этого не нужно читать все страницы. " +
@@ -890,6 +906,7 @@ export function registerCardTools(server: McpServer, ctx: ServerContext): void {
           .boolean()
           .default(false)
           .describe("Только сальдо, обороты и groups, без строк движений"),
+        snapshot: snapshotField,
       }),
       outputSchema: accountCardResultSchema,
     },
@@ -905,6 +922,7 @@ export function registerCardTools(server: McpServer, ctx: ServerContext): void {
       offset,
       groupBy,
       summaryOnly,
+      snapshot,
     }) =>
       guard("read.accounting.get_account_card", async () => {
         if (from > to) return fail(`Период задан наоборот: from (${from}) позже to (${to}).`);
@@ -920,6 +938,7 @@ export function registerCardTools(server: McpServer, ctx: ServerContext): void {
             offset,
             groupBy: groupBy ?? [],
             summaryOnly,
+            snapshot,
           }),
         );
       }),
@@ -992,10 +1011,11 @@ export function registerCardTools(server: McpServer, ctx: ServerContext): void {
         from: dateField("Дата начала периода"),
         to: dateField("Дата конца периода"),
         offset: offsetField,
+        snapshot: snapshotField,
       }),
       outputSchema: reconciliationResultSchema,
     },
-    ({ database, organization, counterpartyRef, contractRef, from, to, offset }) =>
+    ({ database, organization, counterpartyRef, contractRef, from, to, offset, snapshot }) =>
       guard("read.counterparty.get_reconciliation", async () => {
         if (from > to) return fail(`Период задан наоборот: from (${from}) позже to (${to}).`);
         return ok(
@@ -1006,6 +1026,7 @@ export function registerCardTools(server: McpServer, ctx: ServerContext): void {
             from,
             to,
             offset,
+            snapshot,
           }),
         );
       }),

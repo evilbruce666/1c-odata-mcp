@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { ODataError } from "../odata/errors.js";
@@ -124,13 +125,45 @@ export function fitToChars<T>(items: readonly T[], usedChars: number, maxChars =
 }
 
 /**
+ * Метка итогов ответа. Следующая страница передаёт её обратно: если итоги изменились, в 1С за это время
+ * провели документы, и смещения сдвинулись. Склеивать такие страницы нельзя, читать надо с начала.
+ */
+export function snapshotFields(
+  head: unknown,
+  previous?: string,
+): { fields: Record<string, unknown>; note?: string } {
+  const snapshot = createHash("sha256").update(JSON.stringify(head)).digest("hex").slice(0, 16);
+  const dataChanged = previous !== undefined && previous !== snapshot;
+  return {
+    fields: { snapshot, ...(dataChanged ? { dataChanged: true } : {}) },
+    ...(dataChanged
+      ? { note: "Данные в 1С изменились после прошлой страницы: прочитайте заново с offset=0." }
+      : {}),
+  };
+}
+
+export const snapshotField = z
+  .string()
+  .optional()
+  .describe("snapshot прошлой страницы: если данные изменились, в ответе будет dataChanged");
+
+/**
  * Страница ответа: не больше limit строк и столько, сколько поместится рядом с head. truncated значит
  * «есть ещё», nextOffset есть, только если продолжение можно прочитать; capHit — данные упёрлись в
  * лимит выборки, дальше читать нечего, и об этом нужно сказать.
  */
 export function pageOf<T>(
   all: readonly T[],
-  o: { offset: number; limit?: number; head: unknown; capHit?: boolean; unit?: string },
+  o: {
+    offset: number;
+    limit?: number;
+    head: unknown;
+    capHit?: boolean;
+    unit?: string;
+    /** snapshot прошлой страницы; undefined у инструментов, чей head меняется от страницы к странице. */
+    snapshot?: string | undefined;
+    tracksChanges?: boolean;
+  },
 ): { items: T[]; page: Record<string, unknown>; note?: string } {
   const candidates = all.slice(o.offset, o.limit === undefined ? undefined : o.offset + o.limit);
   const items = fitToChars(candidates, JSON.stringify(o.head, null, 2).length);
@@ -144,6 +177,8 @@ export function pageOf<T>(
       : o.offset > 0 && o.offset >= all.length
         ? `offset=${o.offset} за пределами: всего ${all.length}.`
         : undefined;
+  const changes = o.tracksChanges ? snapshotFields(o.head, o.snapshot) : undefined;
+  const fullNote = [changes?.note, note].filter(Boolean).join(" ");
   return {
     items,
     page: {
@@ -151,8 +186,9 @@ export function pageOf<T>(
       returned: items.length,
       truncated: more || !!o.capHit,
       ...(more ? { nextOffset: next } : {}),
+      ...(changes?.fields ?? {}),
     },
-    ...(note ? { note } : {}),
+    ...(fullNote ? { note: fullNote } : {}),
   };
 }
 
