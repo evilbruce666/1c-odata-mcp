@@ -202,7 +202,8 @@ export function limitResponseSize(
   const field = Object.keys(data)
     .filter((k) => Array.isArray(data[k]))
     .sort((a, b) => elementChars(data[b]) - elementChars(data[a]))[0];
-  const before = field && !o.continuable ? fitNestedLists(data, trigger, field) : undefined;
+  // С запасом к пределу страницы ниже: иначе элемент с урезанным списком всё равно не войдёт в страницу.
+  const before = field && !o.continuable ? fitNestedLists(data, limit - 1_000, field) : undefined;
   const source = before?.fitted ?? data;
   let structured = source;
   let hint = "";

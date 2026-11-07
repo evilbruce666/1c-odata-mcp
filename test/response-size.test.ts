@@ -223,7 +223,7 @@ describe("большие ответы укладываются в норму, н
 
 describe("limitResponseSize: страницы для инструментов без своих", () => {
   const answer = (data: Record<string, unknown>): CallToolResult => ({
-    content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(data) }],
     structuredContent: data,
   });
   const rows = Array.from({ length: 2000 }, (_, i) => ({ n: i, text: "строка ".repeat(10) }));

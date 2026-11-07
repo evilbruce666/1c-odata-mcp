@@ -198,7 +198,7 @@ describe("withDatabaseInfo: какая база ответила", () => {
   const ctx = (names: string[]) =>
     ({ db: () => conn, databases: () => names.map((name) => ({ name })) }) as never;
   const result = (data: object): CallToolResult => ({
-    content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    content: [{ type: "text", text: JSON.stringify(data) }],
     structuredContent: data as Record<string, unknown>,
   });
 

@@ -35,8 +35,11 @@ export function dateField(label: string): z.ZodString {
   return z.string().regex(DATE_RE, "Дата должна быть в формате YYYY-MM-DD").describe(`${label} (YYYY-MM-DD)`);
 }
 
-/** Текст ответа и расчёты размера страницы: единое место, где задан вид JSON в ответах. */
-export const renderJson = (data: unknown): string => JSON.stringify(data, null, 2);
+/**
+ * Текст ответа и расчёты размера страницы: единое место, где задан вид JSON в ответах. Компактный: отступы
+ * занимают около 28% токенов (замер на отчёте о должниках), а точность ответов моделей от них не выигрывает.
+ */
+export const renderJson = (data: unknown): string => JSON.stringify(data);
 
 /**
  * Аннотации инструментов (подсказки клиенту MCP о характере операции).
@@ -128,8 +131,7 @@ export const responseCharsLimit = (): number => callResponseLimit() ?? MAX_RESPO
 
 /** Символов, которые значение занимает в ответе ok() как элемент массива верхнего уровня. */
 export const elementChars = (v: unknown): number => {
-  const text = renderJson(v);
-  return text.length + text.split("\n").length * 4 + 2;
+  return renderJson(v).length + 1;
 };
 
 /** Сколько первых строк поместится в остаток предела. Хотя бы одна — иначе offset не сдвинется. */
