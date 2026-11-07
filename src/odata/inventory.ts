@@ -2,7 +2,8 @@ import type { Connection } from "../context.js";
 import { CATALOGS, resolveEntity } from "../config/mapping.js";
 import { InputError } from "../errors.js";
 import type { ODataEntity } from "../types/odata.js";
-import { fetchAllForAggregation } from "./aggregate.js";
+import { AggregateOverflowError, fetchAllForAggregation } from "./aggregate.js";
+import { cached } from "./cache.js";
 import { num, readByRefs, resolveNames, GUID_RE } from "./accounting.js";
 import { cmp, odataGuid, or } from "./query.js";
 import { entitySetOfType, refOf } from "./settlements-aging.js";
@@ -74,30 +75,41 @@ export interface ItemGroup {
 }
 
 /** Все группы (папки) справочника номенклатуры. */
-export async function loadItemGroups(conn: Connection, set: string): Promise<ItemGroup[]> {
-  const { rows } = await fetchAllForAggregation(
+export function loadItemGroups(conn: Connection, set: string): Promise<ItemGroup[]> {
+  return cached(
     conn,
-    set,
-    { filter: cmp("IsFolder", "eq", "true"), select: ["Ref_Key", "Description", "Parent_Key"] },
-    "группы номенклатуры",
+    `inventory-groups:${set}`,
+    async () => {
+      const { rows } = await fetchAllForAggregation(
+        conn,
+        set,
+        { filter: cmp("IsFolder", "eq", "true"), select: ["Ref_Key", "Description", "Parent_Key"] },
+        "группы номенклатуры",
+      );
+      return rows.map((r) => {
+        const parent = refOf(r["Parent_Key"]);
+        return {
+          ref: String(r["Ref_Key"]),
+          name: String(r["Description"] ?? ""),
+          ...(parent ? { parent } : {}),
+        };
+      });
+    },
+    ITEMS_TTL_MS,
   );
-  return rows.map((r) => {
-    const parent = refOf(r["Parent_Key"]);
-    return { ref: String(r["Ref_Key"]), name: String(r["Description"] ?? ""), ...(parent ? { parent } : {}) };
-  });
 }
 
 /** Группа по Ref_Key или названию: точное совпадение важнее части, неоднозначность — отказ, а не выбор наугад. */
 export function resolveItemGroup(query: string, groups: readonly ItemGroup[]): ItemGroup {
   const q = query.trim();
-  const lower = q.toLowerCase();
-  const byRef = GUID_RE.test(q) ? groups.find((g) => g.ref.toLowerCase() === lower) : undefined;
-  const exact = groups.filter((g) => g.name.toLowerCase() === lower);
+  const folded = foldText(q);
+  const byRef = GUID_RE.test(q) ? groups.find((g) => g.ref.toLowerCase() === q.toLowerCase()) : undefined;
+  const exact = groups.filter((g) => foldText(g.name) === folded);
   const found = byRef
     ? [byRef]
     : exact.length
       ? exact
-      : groups.filter((g) => g.name.toLowerCase().includes(lower));
+      : groups.filter((g) => foldText(g.name).includes(folded));
   if (found.length === 1) return found[0]!;
   if (!found.length) throw new InputError(`Группа номенклатуры "${query}" не найдена.`);
   const shown = found
@@ -155,25 +167,74 @@ export async function readItemAttributes(
   return new Map([...rows].map(([ref, r]) => [ref, toAttributes(r)]));
 }
 
-/**
- * Вся номенклатура без групп. Поиск идёт здесь, а не через substringof: 1С превращает его строку в регулярное
- * выражение, и скобки в названии товара дали бы ошибку 500.
- */
-export async function readAllItems(conn: Connection, set: string): Promise<Map<string, ItemAttributes>> {
-  const { rows } = await fetchAllForAggregation(
-    conn,
-    set,
-    { filter: cmp("IsFolder", "eq", "false"), select: await itemFields(conn, set) },
-    "номенклатура",
-  );
-  return new Map(rows.map((r) => [String(r["Ref_Key"]), toAttributes(r)]));
+/** Сколько держать справочник для соседних страниц одного чтения: на каждую страницу он иначе читался бы заново. */
+const ITEMS_TTL_MS = 60_000;
+
+/** Отказ вместо технического «документов за номенклатура»: периода у справочника нет, сузить его нечем. */
+async function readCatalog<T>(load: () => Promise<T>): Promise<T> {
+  try {
+    return await load();
+  } catch (e) {
+    if (!(e instanceof AggregateOverflowError)) throw e;
+    throw new InputError(
+      `В справочнике номенклатуры больше ${e.cap} строк: поиск и отбор по группе требуют прочитать его целиком. ` +
+        "Увеличьте ODATA_ANALYTICS_MAX_ROWS или запросите остатки без отбора.",
+    );
+  }
 }
 
-/** Все слова запроса есть в названии или артикуле, без учёта регистра: «бумага а4» находит «Бумага офисная A4». */
+/**
+ * Вся номенклатура без групп. Поиск идёт здесь, а не через substringof: ему нужны е/ё и похожие буквы разных раскладок,
+ * а 1С сравнивает строки буквально.
+ */
+export function readAllItems(conn: Connection, set: string): Promise<Map<string, ItemAttributes>> {
+  return readCatalog(() =>
+    cached(
+      conn,
+      `inventory-items:${set}`,
+      async () => {
+        const { rows } = await fetchAllForAggregation(
+          conn,
+          set,
+          { filter: cmp("IsFolder", "eq", "false"), select: await itemFields(conn, set) },
+          "номенклатура",
+        );
+        return new Map(rows.map((r) => [String(r["Ref_Key"]), toAttributes(r)]));
+      },
+      ITEMS_TTL_MS,
+    ),
+  );
+}
+
+/** Опубликован ли артикул: иначе поиск идёт только по названию, и ответ должен это сказать. */
+export async function articlePublished(conn: Connection, set: string): Promise<boolean> {
+  return (await itemFields(conn, set)).includes("Артикул");
+}
+
+const LOOKALIKE: Record<string, string> = {
+  а: "a",
+  в: "b",
+  е: "e",
+  ё: "e",
+  к: "k",
+  м: "m",
+  н: "h",
+  о: "o",
+  р: "p",
+  с: "c",
+  т: "t",
+  у: "y",
+  х: "x",
+};
+
+/** Текст для сравнения: без регистра, ё как е, похожие буквы кириллицы и латиницы одинаковы («А4» и «A4»). */
+export const foldText = (text: string): string =>
+  text.toLowerCase().replace(/[авеёкмнорстух]/g, (c) => LOOKALIKE[c] ?? c);
+
+/** Все части запроса есть в названии или артикуле: «бумаг а4» находит «Бумага офисная (A4)». */
 export function matchesItemQuery(item: ItemAttributes, query: string): boolean {
-  const text = `${item.name ?? ""} ${item.article ?? ""}`.toLowerCase();
-  return query
-    .toLowerCase()
+  const text = foldText(`${item.name ?? ""} ${item.article ?? ""}`);
+  return foldText(query)
     .split(/\s+/)
     .filter(Boolean)
     .every((word) => text.includes(word));
@@ -191,24 +252,35 @@ export async function readItemsInGroups(
   set: string,
   groupRefs: Iterable<string>,
 ): Promise<Map<string, ItemAttributes>> {
-  const select = await itemFields(conn, set);
-  const refs = [...groupRefs];
-  const out = new Map<string, ItemAttributes>();
-  for (let i = 0; i < refs.length; i += GROUP_FILTER_BATCH) {
-    const { rows } = await fetchAllForAggregation(
+  const refs = [...groupRefs].sort();
+  return readCatalog(() =>
+    cached(
       conn,
-      set,
-      {
-        filter: or(
-          ...refs.slice(i, i + GROUP_FILTER_BATCH).map((ref) => cmp("Parent_Key", "eq", odataGuid(ref))),
-        ),
-        select,
+      `inventory-items-in:${set}:${refs.join(",")}`,
+      async () => {
+        const select = await itemFields(conn, set);
+        const out = new Map<string, ItemAttributes>();
+        for (let i = 0; i < refs.length; i += GROUP_FILTER_BATCH) {
+          const { rows } = await fetchAllForAggregation(
+            conn,
+            set,
+            {
+              filter: or(
+                ...refs
+                  .slice(i, i + GROUP_FILTER_BATCH)
+                  .map((ref) => cmp("Parent_Key", "eq", odataGuid(ref))),
+              ),
+              select,
+            },
+            "номенклатура группы",
+          );
+          for (const r of rows) out.set(String(r["Ref_Key"]), toAttributes(r));
+        }
+        return out;
       },
-      "номенклатура группы",
-    );
-    for (const r of rows) out.set(String(r["Ref_Key"]), toAttributes(r));
-  }
-  return out;
+      ITEMS_TTL_MS,
+    ),
+  );
 }
 
 /** Названия складов: справочник берётся из типа значения, в разных конфигурациях он называется по-разному. */

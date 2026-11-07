@@ -20,9 +20,14 @@ export function odataGuid(value: string): string {
   return `guid'${v}'`;
 }
 
-/** Условие «поле содержит подстроку» (OData v3: substringof). */
+/**
+ * Условие «поле содержит подстроку» (OData v3: substringof). 1С выполняет его как ПОДОБНО: % и _ совпадают с чем
+ * угодно, [...] — класс символов, а обратная косая черта без пары даёт 400. На живой базе запрос «_» вернул всех
+ * контрагентов, поэтому такие символы экранируются: их совпадения были бы ложными и молчаливыми.
+ */
 export function contains(field: string, substr: string): string {
-  return `substringof(${odataString(substr)}, ${field})`;
+  const literal = substr.replace(/\\/g, "\\\\").replace(/[%_[]/g, "[$&]");
+  return `substringof(${odataString(literal)}, ${field})`;
 }
 
 export type Comparison = "eq" | "ne" | "gt" | "ge" | "lt" | "le";

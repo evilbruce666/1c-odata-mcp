@@ -128,6 +128,27 @@ async function resolveOrg(
   return { key: o.ref, name: o.name };
 }
 
+/** Сколько совпадений по части названия читать, чтобы найти точное и назвать варианты в отказе. */
+const NAME_MATCH_LIMIT = 20;
+
+/**
+ * Единственный объект из совпавших по части названия. Точное название важнее части; иначе несколько совпадений —
+ * отказ: первое из них дало бы документ с чужим складом или валютой, а заметить это можно только в предпросмотре.
+ */
+function singleByName(rows: readonly ODataEntity[], query: string, label: string): ODataEntity {
+  const wanted = query.trim().toLowerCase();
+  const exact = rows.filter((r) => String(r["Description"] ?? "").toLowerCase() === wanted);
+  if (exact.length === 1) return exact[0] as ODataEntity;
+  if (rows.length === 1) return rows[0] as ODataEntity;
+  const names = rows
+    .slice(0, 10)
+    .map((r) => String(r["Description"] ?? ""))
+    .join(", ");
+  throw new InputError(
+    `${label}: под «${query}» подходит несколько: ${names}. Укажите название точнее. Ничего не записано.`,
+  );
+}
+
 /** Резолвит склад по названию; если не задан и склад один — берёт его; иначе undefined. */
 async function resolveWarehouse(conn: Connection, name: string | undefined): Promise<string | undefined> {
   const set = resolveEntity(CATALOGS.warehouses, await conn.available());
@@ -137,12 +158,12 @@ async function resolveWarehouse(conn: Connection, name: string | undefined): Pro
       conn.client,
       set,
       { filter: contains("Description", name), select: ["Ref_Key", "Description"] },
-      5,
-      5,
+      NAME_MATCH_LIMIT,
+      NAME_MATCH_LIMIT,
     );
-    const first = rows[0];
-    if (!first) throw new InputError(`Склад "${name}" не найден (см. list_entities / справочник Склады).`);
-    return String(first["Ref_Key"]);
+    if (!rows.length)
+      throw new InputError(`Склад "${name}" не найден (см. list_entities / справочник складов).`);
+    return String(singleByName(rows, name, "Склад")["Ref_Key"]);
   }
   const { rows } = await fetchAll(conn.client, set, { select: ["Ref_Key"] }, 2, 2);
   return rows.length === 1 ? String((rows[0] as ODataEntity)["Ref_Key"]) : undefined;
@@ -173,11 +194,11 @@ async function resolveCatalogItem(
           conn.client,
           set,
           { filter: contains("Description", query), select: ["Ref_Key", "Code", "Description"] },
-          5,
-          5,
+          NAME_MATCH_LIMIT,
+          NAME_MATCH_LIMIT,
         )
       ).rows;
-  const first = rows[0];
+  const first = rows.length ? singleByName(rows, query, label) : undefined;
   if (!first) throw new InputError(`${label}: «${query}» не найдено (по коду или наименованию).`);
   return {
     ref: String(first["Ref_Key"]),

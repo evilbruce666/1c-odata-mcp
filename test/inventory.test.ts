@@ -4,6 +4,7 @@ import { createServer } from "../src/mcp/server.js";
 import {
   aggregateStock,
   dimensionOf,
+  foldText,
   matchesItemQuery,
   resolveItemGroup,
   subtreeOf,
@@ -579,5 +580,51 @@ describe("поиск по товару", () => {
     expect(matchesItemQuery(item, "бм-1")).toBe(true);
     expect(matchesItemQuery(item, "(a4)")).toBe(true);
     expect(matchesItemQuery(item, "бумага ручка")).toBe(false);
+  });
+});
+
+describe("поиск без ложных нулей", () => {
+  it("ё как е, похожие буквы разных раскладок", () => {
+    expect(matchesItemQuery({ name: "Щётка" }, "щетка")).toBe(true);
+    expect(matchesItemQuery({ name: "Елка" }, "ёлка")).toBe(true);
+    expect(matchesItemQuery({ name: "Бумага (A4)" }, "бумаг а4")).toBe(true);
+    expect(matchesItemQuery({ name: "Бумага (А4)" }, "бумаг a4")).toBe(true);
+    expect(matchesItemQuery({ article: "KM-5" }, "км-5")).toBe(true);
+    expect(foldText("А4")).toBe(foldText("a4"));
+  });
+  it("словоформы не распознаются, но ответ объясняет пустой результат", async () => {
+    const { call } = await setup([row([[ITEM(1), NOM]], 1, 10)]);
+    const s = (await call({ query: "бумаги" })).structuredContent as unknown as {
+      items: Item[];
+      note: string;
+    };
+    expect(s.items).toEqual([]);
+    expect(s.note).toContain("не значит, что остатка нет");
+    const hit = (await call({ query: "бумаг" })).structuredContent as unknown as { items: Item[] };
+    expect(hit.items).toHaveLength(1);
+  });
+  it("слишком длинный запрос — отказ проверки аргументов", async () => {
+    const { call } = await setup([]);
+    const r = await call({ query: "я".repeat(201) }).catch((e: Error) => ({
+      isError: true,
+      content: [{ text: e.message }],
+    }));
+    expect(r.isError).toBe(true);
+  });
+  it("соседние страницы не перечитывают справочник", async () => {
+    const many = Array.from({ length: 12 }, (_, i) =>
+      row(
+        [
+          [ITEM(1), NOM],
+          [STORE(100 + i), WH],
+        ],
+        1,
+        10,
+      ),
+    );
+    const { call, reads } = await setup(many);
+    await call({ query: "бумаг", groupBy: "warehouse", limit: 5 });
+    await call({ query: "бумаг", groupBy: "warehouse", limit: 5, offset: 5 });
+    expect(reads().filter((u) => u.includes("IsFolder eq false"))).toHaveLength(1);
   });
 });

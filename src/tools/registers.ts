@@ -26,6 +26,7 @@ import {
 import { resolveOrganization } from "../odata/orgs.js";
 import {
   aggregateStock,
+  articlePublished,
   hasSubcontoTypes,
   loadItemGroups,
   nomenclatureSet,
@@ -726,7 +727,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         "groupBy=warehouse разбивает по складам и на первой странице добавляет итоги byWarehouse; если склад в субконто этих счетов не ведётся, " +
         "ответ скажет об этом (warehouseTracked=false), сумму и количество по складам из документов он не выводит. " +
         "Сумма на счетах без номенклатуры в субконто (например, 41.12) — в withoutNomenclature, она входит в totalAmount. " +
-        "query находит товар по названию или артикулу (все слова запроса, без учёта регистра); итоги — только по найденному. count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть. (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
+        "query находит товар по части названия или артикулу: все части запроса, без учёта регистра и раскладки, словоформы не распознаются (пишите основу: «бумаг»). Итоги — только по найденному; пустой ответ не значит, что остатка нет. count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть. (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
@@ -739,6 +740,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           .string()
           .trim()
           .min(1)
+          .max(200)
           .optional()
           .describe(
             "Группа номенклатуры: Ref_Key, название целиком или его часть (несколько совпадений — отказ со списком). Подгруппы входят. Итоги — только по этой группе",
@@ -747,8 +749,11 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           .string()
           .trim()
           .min(1)
+          .max(200)
           .optional()
-          .describe("Поиск товара: слова из названия или артикул. Можно вместе с group"),
+          .describe(
+            "Поиск товара: части слов из названия или артикул (основа слова: «бумаг а4»). Можно вместе с group",
+          ),
         limit: z.number().int().positive().max(1000).default(200).describe("Сколько позиций вернуть"),
       }),
       outputSchema: getInventoryResultSchema,
@@ -847,6 +852,14 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         const noItemCents = noItem.reduce((s, l) => s + l.cents, 0);
         const totalCents = lines.reduce((s, l) => s + l.cents, 0);
         const notes: string[] = [];
+        if (query && nomSet && !(await articlePublished(conn, nomSet))) {
+          notes.push("Артикул не опубликован в OData: поиск шёл только по названию.");
+        }
+        if (query && !lines.length) {
+          notes.push(
+            "По запросу ничего не найдено. Это не значит, что остатка нет: попробуйте основу слова (бумаг, а не бумаги) или другую часть названия.",
+          );
+        }
         if (noItem.length) {
           notes.push(
             "В totalAmount входит withoutNomenclature: сумма строк без номенклатуры в субконто (она не ведётся на счёте, как на 41.12, или не заполнена).",
