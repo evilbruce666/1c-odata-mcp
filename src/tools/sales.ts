@@ -125,7 +125,7 @@ async function aggregate(
   };
   const groups = [...buckets.values()]
     .map((b) => ({ label: labelOf(b), count: b.count, sum: fromCents(b.cents) }))
-    .sort((a, b) => b.sum - a.sum)
+    .sort((a, b) => b.sum - a.sum || a.label.localeCompare(b.label))
     .slice(0, args.limit);
 
   return ok({

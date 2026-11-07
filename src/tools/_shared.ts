@@ -104,6 +104,11 @@ export async function guard(toolName: string, fn: () => Promise<CallToolResult>)
       logger.debug({ tool: toolName }, e.message);
       return fail(e.message, "input");
     }
+    if (e instanceof z.ZodError) {
+      // Проверка аргументов внутри инструмента (например, договор обязателен при scope=contract).
+      logger.info({ tool: toolName, kind: "input" }, "Неверные аргументы вызова");
+      return fail(`Неверные аргументы: ${e.issues.map((i) => i.message).join("; ")}`, "input");
+    }
     if (e instanceof AggregateOverflowError) {
       // Громкий, но аккуратный отказ — лучше явная ошибка, чем неполная сумма.
       logger.warn({ tool: toolName, entitySet: e.entitySet, cap: e.cap }, "aggregate overflow");

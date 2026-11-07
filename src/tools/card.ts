@@ -1003,7 +1003,7 @@ export function registerCardTools(server: McpServer, ctx: ServerContext): void {
         "внутри расчётов с тем же контрагентом в строки не попадает, как в акте сверки 1С. counterpartyRef — " +
         "Ref_Key из find_counterparty, contractRef — только один договор. Сам документ «Акт сверки» " +
         "печатается из 1С. Сальдо, обороты и byContract — по всему периоду; строки большого акта идут страницами: " +
-        "при truncated=true читайте дальше с offset=nextOffset.",
+        "читайте дальше с offset=nextOffset, пока он есть; truncated без nextOffset значит, что продолжения нет.",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,

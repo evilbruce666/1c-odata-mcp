@@ -185,7 +185,8 @@ async function settlementsReport(conn: Connection, side: SettlementSide, o: Sett
   };
 
   if (!o.aging) {
-    const top = positive.sort((a, b) => b[1] - a[1]).slice(0, o.limit);
+    // Вторичный ключ обязателен: каждая страница считается заново, а порядок равных сумм в ответе 1С не гарантирован.
+    const top = positive.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, o.limit);
     const names = cpSet
       ? await resolveNames(
           conn,
@@ -196,6 +197,7 @@ async function settlementsReport(conn: Connection, side: SettlementSide, o: Sett
     return {
       head,
       totalCents,
+      total: positive.length,
       list: top.map(([ref, c]) => ({ counterparty: names.get(ref) ?? ref, ref, amount: rub(c) })),
       extra: {},
       scan: { rowsScanned: raw.length, elapsedMs: Date.now() - t0 },
@@ -227,13 +229,14 @@ async function settlementsReport(conn: Connection, side: SettlementSide, o: Sett
   const old = (a: (typeof aged)[number]["a"]) => a.ageBuckets["61-90"] + a.ageBuckets["90+"];
   const noneOverdue = aged.every((x) => x.a.overdueCents === 0);
   const fallback = o.overdueOnly && noneOverdue && aged.some((x) => x.a.noTermCents > 0 && old(x.a) > 0);
-  const selected = (
-    fallback
-      ? aged.filter((x) => old(x.a) > 0).sort((x, y) => old(y.a) - old(x.a))
-      : o.overdueOnly
-        ? aged.filter((x) => x.a.overdueCents > 0).sort((x, y) => y.a.overdueCents - x.a.overdueCents)
-        : aged.sort((x, y) => y.a.netCents - x.a.netCents)
-  ).slice(0, o.limit);
+  const eligible = fallback
+    ? aged.filter((x) => old(x.a) > 0).sort((x, y) => old(y.a) - old(x.a) || x.cp.localeCompare(y.cp))
+    : o.overdueOnly
+      ? aged
+          .filter((x) => x.a.overdueCents > 0)
+          .sort((x, y) => y.a.overdueCents - x.a.overdueCents || x.cp.localeCompare(y.cp))
+      : aged.sort((x, y) => y.a.netCents - x.a.netCents || x.cp.localeCompare(y.cp));
+  const selected = eligible.slice(0, o.limit);
   const names = cpSet
     ? await resolveNames(
         conn,
@@ -403,7 +406,8 @@ function settlementsTool(
         return ok({
           ...r.head,
           [def.totalKey]: rub(r.totalCents),
-          count: r.list.length,
+          // Всего, а не на странице: сколько в этом ответе — длина списка и returned.
+          count: r.total,
           [def.listKey]: r.list,
           ...r.extra,
           scan: r.scan,
@@ -530,7 +534,9 @@ async function unpaidInvoices(
   });
   const isOpen = (i: (typeof all)[number]) => i.status === "unpaid" || i.status === "partial";
   const picked = o.status === "open" ? all.filter(isOpen) : all;
-  picked.sort((a, b) => a.date.localeCompare(b.date) || a.number.localeCompare(b.number));
+  picked.sort(
+    (a, b) => a.date.localeCompare(b.date) || a.number.localeCompare(b.number) || a.ref.localeCompare(b.ref),
+  );
   const shown = picked.slice(0, o.limit);
 
   const cpSet = resolveEntity(CATALOGS.counterparties, await conn.available());
@@ -544,8 +550,8 @@ async function unpaidInvoices(
 
   // Сверка с 62: платёж без ссылки на счёт его не закрывает, но долг покупателя гасит.
   const balance = await customerBalances(conn, org.key);
-  const openShown = shown.filter(isOpen);
-  const noDebt = openShown.filter((i) => (balance.get(i.counterpartyRef ?? "") ?? 0) <= 0).length;
+  // По всем счетам, а не по показанным: иначе число менялось бы от страницы к странице.
+  const noDebt = picked.filter(isOpen).filter((i) => (balance.get(i.counterpartyRef ?? "") ?? 0) <= 0).length;
 
   const notes = [
     "Оплачено — по регистру «Оплата счетов»: учитываются платежи, в которых указан этот счёт. Платёж " +

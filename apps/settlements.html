@@ -132,7 +132,7 @@ function render(p) {
   const sub = ["база " + (p.database || "—")];
   if (aging && aging.asOf) sub.push("на " + ruDate(aging.asOf));
   else if (p.asOf) sub.push("на " + ruDate(p.asOf));
-  sub.push(list.length + " " + (payable ? "поставщиков" : "покупателей") + " в списке");
+  sub.push(list.length + " " + (payable ? "поставщиков" : "покупателей") + (p.truncated ? " в списке, показана часть" : " в списке"));
   $("sub").textContent = sub.join(" · ");
 
   const tiles = $("tiles");

@@ -141,6 +141,17 @@ export function withDatabaseInfo(
   return { ...result, content, structuredContent };
 }
 
+/** Список страницы, если в ответе есть другие списки; countIsTotal — count означает «всего», а не «в этом ответе». */
+type PageList = { list: string; countIsTotal?: boolean };
+
+/** Угадывать по длине нельзя: список счетов в ответе остатков бывает длиннее самих остатков. */
+const PAGE_LISTS: Record<string, PageList> = {
+  "read.analytics.get_inventory": { list: "items", countIsTotal: true },
+  "read.analytics.get_debtors": { list: "debtors", countIsTotal: true },
+  "read.analytics.get_creditors": { list: "creditors", countIsTotal: true },
+  "read.analytics.get_unpaid_invoices": { list: "invoices", countIsTotal: true },
+};
+
 type NestedList = { path: string; holder: unknown[]; chars: number };
 
 /**
@@ -210,7 +221,7 @@ function fitNestedLists(data: Record<string, unknown>, maxChars: number, skip?: 
  */
 export function limitResponseSize(
   result: CallToolResult,
-  o: { offset?: number; continuable?: boolean; limit?: number | undefined } = {},
+  o: { offset?: number; continuable?: boolean; limit?: number | undefined; page?: PageList | undefined } = {},
 ): CallToolResult {
   const data = result.structuredContent as Record<string, unknown> | undefined;
   const first = result.content[0];
@@ -227,12 +238,23 @@ export function limitResponseSize(
   // Инструмент считает с начала и отдаёт limit+offset строк. Заполненное окно не значит «всё»: дальше могут быть ещё.
   const windowSize = o.continuable && o.limit !== undefined ? o.limit + offset : undefined;
   const windowList =
-    windowSize === undefined ? undefined : lists.find((k) => (data[k] as unknown[]).length === windowSize);
-  if ((ownPage || offset === 0) && first.text.length <= trigger && !windowList) return result;
+    windowSize === undefined
+      ? undefined
+      : o.page
+        ? (data[o.page.list] as unknown[] | undefined)?.length === windowSize
+          ? o.page.list
+          : undefined
+        : lists.find((k) => (data[k] as unknown[]).length === windowSize);
+  // Сколько строк всего, если инструмент это знает: тогда заполненное окно не даёт ложного продолжения.
+  const knownTotal = o.page?.countIsTotal && typeof data["count"] === "number" ? data["count"] : undefined;
+  const moreAfterWindow = !!windowList && (knownTotal === undefined || knownTotal > windowSize!);
+  if ((ownPage || offset === 0) && first.text.length <= trigger && !moreAfterWindow) return result;
   // Своя страница — тот список, длину которого инструмент назвал в returned.
   const field = ownPage
     ? (lists.find((k) => (data[k] as unknown[]).length === data["returned"]) ?? undefined)
-    : (windowList ?? lists[0]);
+    : o.page && Array.isArray(data[o.page.list])
+      ? o.page.list
+      : (windowList ?? lists[0]);
   // С запасом к бюджету страницы ниже: иначе элемент с урезанным списком всё равно не войдёт в неё.
   const before =
     field && !o.continuable && !ownPage
@@ -260,20 +282,22 @@ export function limitResponseSize(
         ...(cut ? { truncated: true, nextOffset: next } : {}),
       };
     } else {
-      const windowFull = field === windowList && kept.length > 0;
-      const more = next < list.length || windowFull;
+      const windowFull = field === windowList && kept.length > 0 && knownTotal === undefined;
+      const total = knownTotal ?? (windowFull || data["truncated"] === true ? undefined : list.length);
+      const more = kept.length > 0 && (next < (knownTotal ?? list.length) || windowFull);
       staleNote = more && !!o.continuable;
+      const range = `${offset + 1}–${next}${total === undefined ? "" : ` из ${total}`} списка ${field}`;
       hint = !more
         ? ""
         : o.continuable
-          ? `Показаны строки ${offset + 1}–${next}${windowFull && next >= list.length ? "" : ` из ${list.length} списка ${field}`}. Следующая страница: offset=${next}.`
-          : `Показаны строки ${offset + 1}–${next} из ${list.length} списка ${field}, больше не помещается. Уточните отбор или период.`;
+          ? `Показаны строки ${range}. Следующая страница: offset=${next}.`
+          : `Показаны строки ${range}, больше не помещается. Уточните отбор или период.`;
       structured = {
         ...rest,
         [field]: kept,
         listField: field,
-        // Заполненное окно не знает, сколько строк всего.
-        ...(windowFull ? {} : { listTotal: list.length }),
+        // Заполненное окно или упор в предел выборки не знают, сколько строк всего.
+        ...(total === undefined ? {} : { listTotal: total }),
         ...(field === "rows" && data["count"] === list.length ? { count: kept.length } : {}),
         offset,
         returned: kept.length,
@@ -305,7 +329,7 @@ export function limitResponseSize(
   // диапазоном это сбило бы клиента.
   const baseNote = staleNote
     ? String(data["note"] ?? "")
-        .replace(/Показаны [^.]*\.(?: [^.]*offset=\d+\.)?\s*/, "")
+        .replace(/Показан[оы] [^.]*\.(?: [^.]*offset=\d+\.)?\s*/, "")
         .replace(
           /Выборка упёрлась в лимит строк, продолжения нет: показаны не все\. Уточните фильтр или период\.\s*/,
           "",
@@ -445,6 +469,7 @@ export function createServer(ctx: ServerContext): McpServer {
               offset,
               continuable,
               limit: continuable && typeof args.limit === "number" ? args.limit : undefined,
+              page: PAGE_LISTS[name],
             }),
           );
         });

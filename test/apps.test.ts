@@ -36,3 +36,12 @@ describe("MCP Apps", () => {
     });
   }
 });
+
+describe("settlements.html: неполный список", () => {
+  it("признак берётся из аргумента render, а не из несуществующей переменной", () => {
+    const html = loadAppHtml("settlements.html");
+    const body = /function render\(p\) \{[\s\S]*?\n\}/.exec(html)![0];
+    expect(body).toContain("p.truncated");
+    expect(body).not.toMatch(/\bdata\.truncated\b/);
+  });
+});

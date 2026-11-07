@@ -753,7 +753,8 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
             quantity: Math.round(v.qty * 1000) / 1000,
             amount: fromCents(v.cents),
           }))
-          .sort((a, b) => b.amount - a.amount)
+          // Вторичный ключ обязателен: каждая страница считается заново, а порядок равных сумм не гарантирован.
+          .sort((a, b) => b.amount - a.amount || a.ref.localeCompare(b.ref))
           .slice(0, limit);
 
         const totalCents = present.reduce((s, [, v]) => s + v.cents, 0);
@@ -763,7 +764,8 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           ...(asOf ? { asOf } : {}),
           accounts: accounts.map((a) => `${a.code} ${a.description}`),
           totalAmount: fromCents(totalCents),
-          count: items.length,
+          // Всего, а не на странице: сколько в этом ответе — длина списка и returned.
+          count: present.length,
           items,
           scan: { rowsScanned: rows.length, elapsedMs: Date.now() - t0 },
         });

@@ -152,7 +152,7 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
           const r = roles.get(c.ref);
           return { ...c, roles: r?.roles ?? [], contracts: r?.contracts ?? 0 };
         });
-        return ok(withTruncationNote(items, truncated, limit));
+        return ok(withTruncationNote(items, truncated, Math.min(limit, conn.behavior.maxRows)));
       }),
   );
 

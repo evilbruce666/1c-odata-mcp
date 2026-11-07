@@ -291,7 +291,11 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
             ...(direction === "both" ? { inflow: fromCents(b.inCents), outflow: fromCents(b.outCents) } : {}),
           }))
           // Месяцы — по порядку: это ряд во времени, а не рейтинг.
-          .sort((a, b) => (groupBy === "month" ? a.label.localeCompare(b.label) : b.sum - a.sum));
+          .sort((a, b) =>
+            groupBy === "month"
+              ? a.label.localeCompare(b.label)
+              : b.sum - a.sum || a.label.localeCompare(b.label),
+          );
 
         return ok({
           database: conn.cfg.name,
@@ -627,7 +631,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
         };
         const groups = [...buckets.values()]
           .map((b) => ({ label: labelOf(b), count: b.count, sum: fromCents(b.cents) }))
-          .sort((a, b) => b.sum - a.sum);
+          .sort((a, b) => b.sum - a.sum || a.label.localeCompare(b.label));
 
         return ok({
           database: conn.cfg.name,

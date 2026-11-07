@@ -448,3 +448,110 @@ describe("схемы ответов чтения открыты", () => {
     expect(schema.additionalProperties).not.toBe(false);
   });
 });
+
+describe("список страницы задан явно", () => {
+  const page = { list: "items", countIsTotal: true };
+  const data = (n: number, window: number) => ({
+    count: n,
+    accounts: rows(3),
+    items: Array.from({ length: Math.min(n, window) }, (_, id) => ({ id })),
+  });
+
+  it("счетов больше, чем позиций: режутся позиции, ложного продолжения нет", () => {
+    const r = ok(data(2, 3));
+    expect(limitResponseSize(r, { continuable: true, limit: 3, page })).toBe(r);
+  });
+
+  it("вторая страница считает по позициям, а не по счетам", () => {
+    const s = limitResponseSize(ok(data(12, 10)), { offset: 5, continuable: true, limit: 5, page })
+      .structuredContent as {
+      listField: string;
+      items: { id: number }[];
+      accounts: unknown[];
+      nextOffset: number;
+      listTotal: number;
+    };
+    expect(s.listField).toBe("items");
+    expect(s.items.map((i) => i.id)).toEqual([5, 6, 7, 8, 9]);
+    expect(s.accounts).toHaveLength(3);
+    expect(s.nextOffset).toBe(10);
+    expect(s.listTotal).toBe(12);
+  });
+
+  it("последняя страница по известному итогу без пустой страницы после неё", () => {
+    const s = limitResponseSize(ok(data(10, 10)), { offset: 5, continuable: true, limit: 5, page })
+      .structuredContent as { nextOffset?: number; truncated: boolean };
+    expect(s.nextOffset).toBeUndefined();
+    expect(s.truncated).toBe(false);
+  });
+
+  it("«Показано N из M» инструмента не остаётся рядом с новым диапазоном", () => {
+    const s = limitResponseSize(
+      ok({ ...data(320, 129), note: "Показано 129 из 320: остальные — с offset или большим limit." }),
+      { offset: 29, continuable: true, limit: 100, page },
+    ).structuredContent as { note: string };
+    expect(s.note).not.toContain("Показано 129");
+    expect(s.note).toContain("offset=129");
+  });
+});
+
+describe("устойчивый порядок при равных суммах", () => {
+  it("get_debtors: порядок строк 1С меняется, строки не теряются и не повторяются", async () => {
+    const f = fake1C({});
+    const tool = (
+      createServer(f.ctx) as unknown as {
+        _registeredTools: Record<
+          string,
+          {
+            inputSchema: { parse: (a: object) => object };
+            handler: (a: object, e: object) => Promise<CallToolResult>;
+          }
+        >;
+      }
+    )._registeredTools["read.analytics.get_debtors"]!;
+    const refs = Array.from(
+      { length: 120 },
+      (_, i) => `cccccccc-0000-4000-8000-${String(i).padStart(12, "0")}`,
+    );
+    const balance = refs.map((ref) => ({
+      Account_Key: "",
+      ExtDimension1: ref,
+      ExtDimension1_Type: "StandardODATA.Catalog_Контрагенты",
+      СуммаBalanceDr: 100,
+      СуммаBalanceCr: 0,
+    }));
+    const realGet = f.conn.client.getCollection.bind(f.conn.client);
+    let round = 0;
+    vi.spyOn(f.conn.client, "getCollection").mockImplementation((async (url: string) => {
+      if (!decodeURIComponent(url).includes("/Balance")) return realGet(url);
+      round += 1;
+      const shift = (round * 37) % balance.length;
+      return { value: [...balance.slice(shift), ...balance.slice(0, shift)].map((r) => ({ ...r })) };
+    }) as never);
+    const seen: string[] = [];
+    let offset = 0;
+    for (let i = 0; i < 50; i++) {
+      const r = await tool.handler(tool.inputSchema.parse({ limit: 25, offset }), {});
+      const s = r.structuredContent as { debtors: { ref: string }[]; nextOffset?: number; count: number };
+      expect(s.count).toBe(120);
+      seen.push(...s.debtors.map((d) => d.ref));
+      if (s.nextOffset === undefined) break;
+      offset = s.nextOffset;
+    }
+    expect(seen.length).toBe(120);
+    expect(new Set(seen).size).toBe(120);
+  });
+});
+
+describe("проверка аргументов внутри инструмента", () => {
+  it("ZodError — понятный отказ вида input", async () => {
+    const { z } = await import("zod");
+    const { guard, ERROR_KIND_META } = await import("../src/tools/_shared.js");
+    const r = await guard("t", async () => {
+      z.object({ a: z.string({ error: "нужен договор" }) }).parse({});
+      return ok({});
+    });
+    expect(r._meta?.[ERROR_KIND_META]).toBe("input");
+    expect((r.content[0] as { text: string }).text).toContain("нужен договор");
+  });
+});
