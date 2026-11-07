@@ -170,6 +170,32 @@ describe("нагрузка на 1С при чтении по offset", () => {
     expect(stats.contracts.length).toBeLessThanOrEqual(60);
   });
 
+  it("ровно ODATA_MAX_ROWS строк: всё прочитано, признака неполноты нет", async () => {
+    const f = fake1C({ READ_ONLY: "true", ODATA_MAX_ROWS: "30" });
+    stub(f, counterparties(30));
+    const client = await connect(f);
+    const r = (await client.callTool({
+      name: "read.counterparty.find_counterparty",
+      arguments: { query: "Контрагент", limit: 100 },
+    })) as { structuredContent: { rows: unknown[]; truncated: boolean; note?: string } };
+    expect(r.structuredContent.rows).toHaveLength(30);
+    expect(r.structuredContent.truncated).toBe(false);
+    expect(r.structuredContent.note).toBeUndefined();
+  });
+
+  it("строк больше предела выборки: неполнота названа", async () => {
+    const f = fake1C({ READ_ONLY: "true", ODATA_MAX_ROWS: "30" });
+    stub(f, counterparties(31));
+    const client = await connect(f);
+    const r = (await client.callTool({
+      name: "read.counterparty.find_counterparty",
+      arguments: { query: "Контрагент", limit: 100 },
+    })) as { structuredContent: { rows: unknown[]; truncated: boolean; note?: string } };
+    expect(r.structuredContent.rows).toHaveLength(30);
+    expect(r.structuredContent.truncated).toBe(true);
+    expect(r.structuredContent.note).toContain("30");
+  });
+
   it("роли строк до начала страницы не запрашиваются", async () => {
     const f = fake1C({ READ_ONLY: "true" });
     const rows = counterparties(60);

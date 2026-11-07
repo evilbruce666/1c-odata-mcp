@@ -118,7 +118,9 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
             : cmp(CF.isFolder, "eq", subjectKind === "group" ? "true" : "false"),
         );
 
-        const { rows, truncated } = await fetchAll(
+        // На одну строку больше предела: иначе ровно cap строк выглядели бы как неполный ответ.
+        const cap = Math.min(limit, conn.behavior.maxRows);
+        const { rows: fetched } = await fetchAll(
           conn.client,
           set,
           {
@@ -137,8 +139,10 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
             ],
           },
           conn.behavior.pageSize,
-          Math.min(limit, conn.behavior.maxRows),
+          cap + 1,
         );
+        const truncated = fetched.length > cap;
+        const rows = fetched.slice(0, cap);
 
         const found = rows
           .map(toCounterparty)
@@ -157,7 +161,7 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
           const r = roles.get(c.ref);
           return { ...c, roles: r?.roles ?? [], contracts: r?.contracts ?? 0 };
         });
-        return ok(withTruncationNote(items, truncated, Math.min(limit, conn.behavior.maxRows)));
+        return ok(withTruncationNote(items, truncated, cap));
       }),
   );
 

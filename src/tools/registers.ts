@@ -724,7 +724,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         "groupBy=warehouse разбивает по складам и на первой странице добавляет итоги byWarehouse; если склад в субконто этих счетов не ведётся, " +
         "ответ скажет об этом (warehouseTracked=false), сумму и количество по складам из документов он не выводит. " +
         "Сумма на счетах без номенклатуры в субконто (например, 41.12) — в withoutNomenclature, она входит в totalAmount. " +
-        "count — всего позиций. (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
+        "count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть. Поиска по названию товара здесь нет. (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
@@ -739,7 +739,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           .min(1)
           .optional()
           .describe(
-            "Группа номенклатуры: название или Ref_Key. Подгруппы входят. Итоги — только по этой группе",
+            "Группа номенклатуры: Ref_Key, название целиком или его часть (несколько совпадений — отказ со списком). Подгруппы входят. Итоги — только по этой группе",
           ),
         limit: z.number().int().positive().max(1000).default(200).describe("Сколько позиций вернуть"),
       }),
