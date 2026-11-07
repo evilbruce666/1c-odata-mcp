@@ -879,15 +879,18 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           );
         }
         if (query && !lines.length) {
-          const known = [...attributes.values()].some((a) => matchesItemQuery(a, query, strictText));
+          const where = group ? "в выбранной группе" : "в справочнике";
+          const items = [...attributes.values()];
+          const known = items.some((a) => matchesItemQuery(a, query, strictText));
+          const similar = !known && items.some((a) => matchesItemQuery(a, query));
           notes.push(
-            group
-              ? known
-                ? "Товар есть в выбранной группе, но остатка на счетах нет (с учётом других отборов)."
-                : "В выбранной группе такого товара нет; вне группы поиск не проверял."
-              : known
-                ? "Товар есть в справочнике, но остатка на счетах нет (с учётом других отборов)."
-                : "В справочнике такого товара не найдено. Попробуйте основу слова (бумаг, а не бумаги) или другую часть названия.",
+            known
+              ? `Товар есть ${where}, но остатка на счетах нет (с учётом других отборов).`
+              : similar
+                ? `Товар с похожими буквами другой раскладки (А и A) есть ${where}, но остатка на счетах нет (с учётом других отборов).`
+                : group
+                  ? "В выбранной группе такого товара нет; вне группы поиск не проверял."
+                  : "В справочнике такого товара не найдено. Попробуйте основу слова (бумаг, а не бумаги) или другую часть названия.",
           );
         }
         if (noItem.length) {

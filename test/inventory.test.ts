@@ -65,7 +65,11 @@ async function setup(balance: object[]) {
     seenReads.push(u);
     if (u.includes("/Balance")) return { value: balance };
     if (/^ChartOfAccounts/.test(u)) return realGet(url);
-    if (u.startsWith("Catalog_Номенклатура") && u.includes("IsFolder eq false")) {
+    if (
+      u.startsWith("Catalog_Номенклатура") &&
+      u.includes("IsFolder eq false") &&
+      !u.includes("Parent_Key eq")
+    ) {
       return {
         value: Object.entries(CATALOG)
           .filter(([ref, v]) => !v.IsFolder && ref.startsWith("a"))
@@ -697,5 +701,25 @@ describe("группа: название целиком важнее части"
       { ref: GROUP(2), name: "Бумага A4" },
     ];
     expect(resolveItemGroup("A4", groups).ref).toBe(GROUP(1));
+  });
+});
+
+describe("примечание при пустом поиске", () => {
+  it("товар другой раскладкой без остатка: не советует искать основу слова", async () => {
+    CATALOG[ITEM(60)] = { Description: "Бумага A4" };
+    try {
+      const { call } = await setup([row([[ITEM(2), NOM]], 1, 10)]);
+      const s = (await call({ query: "бумага а4" })).structuredContent as unknown as { note: string };
+      expect(s.note).toContain("другой раскладки");
+      expect(s.note).not.toContain("основу слова");
+    } finally {
+      delete CATALOG[ITEM(60)];
+    }
+  });
+  it("отбор по группе читает только товары, без подгрупп", async () => {
+    const { call, reads } = await setup([row([[ITEM(1), NOM]], 1, 10)]);
+    await call({ group: "Канцелярия" });
+    const query = reads().find((u) => u.includes("Parent_Key eq"))!;
+    expect(query).toContain("IsFolder eq false");
   });
 });

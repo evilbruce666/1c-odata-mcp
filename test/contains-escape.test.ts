@@ -154,6 +154,16 @@ describe("выбор склада при записи", () => {
     expect(r.isError).toBe(true);
     expect(text(r)).toContain("помечен на удаление");
   });
+  it("точное название на удалении: другой склад по части не подставляется", async () => {
+    const { call } = setup([
+      { Ref_Key: ref(1), Description: "Метка", DeletionMark: true },
+      { Ref_Key: ref(2), Description: "Метка новая" },
+    ]);
+    const r = await call("Метка");
+    expect(r.isError).toBe(true);
+    expect(text(r)).toContain("помечен на удаление");
+    expect(text(await call("Метка новая"))).not.toContain("помечен на удаление");
+  });
   it("нет такого склада — отказ", async () => {
     const { call } = setup([{ Ref_Key: ref(1), Description: "Основной" }]);
     expect(text(await call("Другой"))).toContain("не найден");

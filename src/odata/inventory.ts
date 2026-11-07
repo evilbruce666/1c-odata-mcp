@@ -6,7 +6,7 @@ import { AggregateOverflowError, fetchAllForAggregation } from "./aggregate.js";
 import { callPageStart } from "./call-context.js";
 import { cached } from "./cache.js";
 import { num, readByRefs, resolveNames, GUID_RE } from "./accounting.js";
-import { cmp, odataGuid, or } from "./query.js";
+import { and, cmp, odataGuid, or } from "./query.js";
 import { entitySetOfType, refOf } from "./settlements-aging.js";
 
 /**
@@ -277,10 +277,13 @@ export async function readItemsInGroups(
             conn,
             set,
             {
-              filter: or(
-                ...refs
-                  .slice(i, i + GROUP_FILTER_BATCH)
-                  .map((ref) => cmp("Parent_Key", "eq", odataGuid(ref))),
+              filter: and(
+                or(
+                  ...refs
+                    .slice(i, i + GROUP_FILTER_BATCH)
+                    .map((ref) => cmp("Parent_Key", "eq", odataGuid(ref))),
+                ),
+                cmp("IsFolder", "eq", "false"),
               ),
               select,
             },

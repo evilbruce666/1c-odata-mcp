@@ -192,8 +192,8 @@ async function findCatalogObject(
   for (const step of codeFirst ? [byCode, byName] : [byName, byCode]) {
     const rows = await step();
     if (rows.length) return singleMatch(rows, query, label);
-    // Название из цифр у помеченного объекта: иначе молча выбрался бы другой объект с таким кодом.
-    if (step === byName && /^\d+$/.test(query)) {
+    // Точное название у помеченного объекта: иначе молча выбрался бы другой, с таким кодом или похожим названием.
+    if (step === byName) {
       const { rows: hidden } = await fetchAll<ODataEntity>(
         conn.client,
         set,
@@ -202,7 +202,9 @@ async function findCatalogObject(
         1,
       );
       if (hidden.length) {
-        throw new InputError(`${label}: «${query}» помечен на удаление или это папка. Ничего не записано.`);
+        throw new InputError(
+          `${label}: «${query}» помечен на удаление или это папка. Укажите рабочий объект точным названием, кодом или Ref_Key. Ничего не записано.`,
+        );
       }
     }
   }
