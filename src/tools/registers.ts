@@ -27,6 +27,8 @@ import { resolveOrganization } from "../odata/orgs.js";
 import {
   aggregateStock,
   articlePublished,
+  foldText,
+  strictText,
   hasSubcontoTypes,
   loadItemGroups,
   nomenclatureSet,
@@ -727,7 +729,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         "groupBy=warehouse разбивает по складам и на первой странице добавляет итоги byWarehouse; если склад в субконто этих счетов не ведётся, " +
         "ответ скажет об этом (warehouseTracked=false), сумму и количество по складам из документов он не выводит. " +
         "Сумма на счетах без номенклатуры в субконто (например, 41.12) — в withoutNomenclature, она входит в totalAmount. " +
-        "query находит товар по части названия или артикулу: все части запроса, без учёта регистра и раскладки, словоформы не распознаются (пишите основу: «бумаг»). Итоги — только по найденному; пустой ответ не значит, что остатка нет. count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть. (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
+        "query находит товар по части названия или артикулу: все части запроса, без учёта регистра, похожие буквы кириллицы и латиницы совпадают, словоформы не распознаются (пишите основу: «бумаг»). Итоги — только по найденному; при пустом ответе примечание говорит, есть ли товар в справочнике. count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть. (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
@@ -787,6 +789,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           for (const [ref, a] of await readItemAttributes(conn, nomSet, refs)) attributes.set(ref, a);
         };
         let selectedGroup: ItemGroup | undefined;
+        let lookalikeMatch = false;
         let groups: ItemGroup[] | undefined;
         if (group) {
           if (!nomSet)
@@ -801,10 +804,16 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           if (!nomSet)
             throw new InputError("Справочник номенклатуры не опубликован: поиск по товару невозможен.");
           if (!group) for (const [ref, a] of await readAllItems(conn, nomSet)) attributes.set(ref, a);
-          lines = lines.filter((l) => {
-            const item = l.itemRef ? attributes.get(l.itemRef) : undefined;
-            return !!item && matchesItemQuery(item, query);
-          });
+          const stock = lines;
+          const matching = (fold: (text: string) => string) =>
+            stock.filter((l) => {
+              const item = l.itemRef ? attributes.get(l.itemRef) : undefined;
+              return !!item && matchesItemQuery(item, query, fold);
+            });
+          // Сначала буквально; похожие буквы только если ничего нет: «3M» иначе находил бы и «Кабель 3м».
+          const literal = matching(strictText);
+          lines = literal.length ? literal : matching(foldText);
+          lookalikeMatch = !literal.length && lines.length > 0;
         }
 
         const withItem = lines
@@ -855,9 +864,17 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         if (query && nomSet && !(await articlePublished(conn, nomSet))) {
           notes.push("Артикул не опубликован в OData: поиск шёл только по названию.");
         }
-        if (query && !lines.length) {
+        if (lookalikeMatch) {
           notes.push(
-            "По запросу ничего не найдено. Это не значит, что остатка нет: попробуйте основу слова (бумаг, а не бумаги) или другую часть названия.",
+            "Точных совпадений нет: найдено с учётом похожих букв кириллицы и латиницы, проверьте позиции.",
+          );
+        }
+        if (query && !lines.length) {
+          const inCatalog = [...attributes.values()].some((a) => matchesItemQuery(a, query));
+          notes.push(
+            inCatalog
+              ? "Товар есть в справочнике, но остатка на счетах нет."
+              : "В справочнике такого товара не найдено. Попробуйте основу слова (бумаг, а не бумаги) или другую часть названия.",
           );
         }
         if (noItem.length) {

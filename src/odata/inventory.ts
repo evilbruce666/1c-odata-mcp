@@ -3,6 +3,7 @@ import { CATALOGS, resolveEntity } from "../config/mapping.js";
 import { InputError } from "../errors.js";
 import type { ODataEntity } from "../types/odata.js";
 import { AggregateOverflowError, fetchAllForAggregation } from "./aggregate.js";
+import { callPageStart } from "./call-context.js";
 import { cached } from "./cache.js";
 import { num, readByRefs, resolveNames, GUID_RE } from "./accounting.js";
 import { cmp, odataGuid, or } from "./query.js";
@@ -76,40 +77,42 @@ export interface ItemGroup {
 
 /** Все группы (папки) справочника номенклатуры. */
 export function loadItemGroups(conn: Connection, set: string): Promise<ItemGroup[]> {
-  return cached(
-    conn,
-    `inventory-groups:${set}`,
-    async () => {
-      const { rows } = await fetchAllForAggregation(
-        conn,
-        set,
-        { filter: cmp("IsFolder", "eq", "true"), select: ["Ref_Key", "Description", "Parent_Key"] },
-        "группы номенклатуры",
-      );
-      return rows.map((r) => {
-        const parent = refOf(r["Parent_Key"]);
-        return {
-          ref: String(r["Ref_Key"]),
-          name: String(r["Description"] ?? ""),
-          ...(parent ? { parent } : {}),
-        };
-      });
-    },
-    ITEMS_TTL_MS,
+  return readCatalog(() =>
+    cached(
+      conn,
+      `inventory-groups:${set}`,
+      async () => {
+        const { rows } = await fetchAllForAggregation(
+          conn,
+          set,
+          { filter: cmp("IsFolder", "eq", "true"), select: ["Ref_Key", "Description", "Parent_Key"] },
+          "группы номенклатуры",
+        );
+        return rows.map((r) => {
+          const parent = refOf(r["Parent_Key"]);
+          return {
+            ref: String(r["Ref_Key"]),
+            name: String(r["Description"] ?? ""),
+            ...(parent ? { parent } : {}),
+          };
+        });
+      },
+      itemsTtl(),
+    ),
   );
 }
 
 /** Группа по Ref_Key или названию: точное совпадение важнее части, неоднозначность — отказ, а не выбор наугад. */
 export function resolveItemGroup(query: string, groups: readonly ItemGroup[]): ItemGroup {
   const q = query.trim();
-  const folded = foldText(q);
+  const strict = strictText(q);
+  const named = (g: ItemGroup) => strictText(g.name.trim());
   const byRef = GUID_RE.test(q) ? groups.find((g) => g.ref.toLowerCase() === q.toLowerCase()) : undefined;
-  const exact = groups.filter((g) => foldText(g.name) === folded);
-  const found = byRef
-    ? [byRef]
-    : exact.length
-      ? exact
-      : groups.filter((g) => foldText(g.name).includes(folded));
+  const exact = groups.filter((g) => named(g) === strict);
+  const part = groups.filter((g) => named(g).includes(strict));
+  // Похожие буквы только для названия целиком: по части «TP» выбрал бы «Стройматериалы», итог был бы чужой группы.
+  const lookalike = groups.filter((g) => foldText(g.name.trim()) === foldText(q));
+  const found = byRef ? [byRef] : exact.length ? exact : part.length ? part : lookalike;
   if (found.length === 1) return found[0]!;
   if (!found.length) throw new InputError(`Группа номенклатуры "${query}" не найдена.`);
   const shown = found
@@ -170,6 +173,12 @@ export async function readItemAttributes(
 /** Сколько держать справочник для соседних страниц одного чтения: на каждую страницу он иначе читался бы заново. */
 const ITEMS_TTL_MS = 60_000;
 
+/**
+ * Кэш только для продолжения чтения: первая страница читает свежий справочник, иначе только что заведённый товар или
+ * группа дали бы ложный ноль, а остатки при этом свежие.
+ */
+const itemsTtl = (): number => (callPageStart() === 0 ? 0 : ITEMS_TTL_MS);
+
 /** Отказ вместо технического «документов за номенклатура»: периода у справочника нет, сузить его нечем. */
 async function readCatalog<T>(load: () => Promise<T>): Promise<T> {
   try {
@@ -201,7 +210,7 @@ export function readAllItems(conn: Connection, set: string): Promise<Map<string,
         );
         return new Map(rows.map((r) => [String(r["Ref_Key"]), toAttributes(r)]));
       },
-      ITEMS_TTL_MS,
+      itemsTtl(),
     ),
   );
 }
@@ -227,14 +236,17 @@ const LOOKALIKE: Record<string, string> = {
   х: "x",
 };
 
-/** Текст для сравнения: без регистра, ё как е, похожие буквы кириллицы и латиницы одинаковы («А4» и «A4»). */
+/** Текст для сравнения: без регистра, ё как е. */
+export const strictText = (text: string): string => text.toLowerCase().replace(/ё/g, "е");
+
+/** То же, и похожие буквы кириллицы и латиницы одинаковы («А4» и «A4»). Даёт ложные совпадения, поэтому только вторым шагом. */
 export const foldText = (text: string): string =>
-  text.toLowerCase().replace(/[авеёкмнорстух]/g, (c) => LOOKALIKE[c] ?? c);
+  strictText(text).replace(/[авекмнорстух]/g, (c) => LOOKALIKE[c] ?? c);
 
 /** Все части запроса есть в названии или артикуле: «бумаг а4» находит «Бумага офисная (A4)». */
-export function matchesItemQuery(item: ItemAttributes, query: string): boolean {
-  const text = foldText(`${item.name ?? ""} ${item.article ?? ""}`);
-  return foldText(query)
+export function matchesItemQuery(item: ItemAttributes, query: string, fold = foldText): boolean {
+  const text = fold(`${item.name ?? ""} ${item.article ?? ""}`);
+  return fold(query)
     .split(/\s+/)
     .filter(Boolean)
     .every((word) => text.includes(word));
@@ -278,7 +290,7 @@ export async function readItemsInGroups(
         }
         return out;
       },
-      ITEMS_TTL_MS,
+      itemsTtl(),
     ),
   );
 }

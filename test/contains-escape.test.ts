@@ -24,52 +24,125 @@ describe("contains: символы ПОДОБНО ищутся буквальн�
   });
 });
 
-describe("запись не берёт первое совпадение по части названия", () => {
+describe("выбор склада при записи", () => {
   type Tool = {
     inputSchema: { parse: (a: object) => object };
     handler: (a: object, e: object) => Promise<{ isError?: boolean; content: { text: string }[] }>;
   };
-  function setup(warehouses: { Ref_Key: string; Description: string }[]) {
+  type Row = {
+    Ref_Key: string;
+    Description: string;
+    Code?: string;
+    DeletionMark?: boolean;
+    IsFolder?: boolean;
+  };
+  const ref = (i: number) => `aaaaaaaa-0000-4000-8000-${String(i).padStart(12, "0")}`;
+
+  /** Эмуляция 1С: условия на Description, Code, Ref_Key и признаки применяются к строкам. */
+  function setup(warehouses: Row[]) {
     const f = fake1C({ READ_ONLY: "true" });
     const realGet = f.conn.client.getCollection.bind(f.conn.client);
+    const queries: string[] = [];
     vi.spyOn(f.conn.client, "getCollection").mockImplementation((async (url: string) => {
       const u = decodeURIComponent(url);
-      if (u.startsWith("Catalog_Склады")) return { value: warehouses };
-      return realGet(url);
+      if (!u.startsWith("Catalog_Склады")) return realGet(url);
+      queries.push(u);
+      let rows = warehouses;
+      if (u.includes("DeletionMark eq false")) rows = rows.filter((r) => !r.DeletionMark);
+      if (u.includes("IsFolder eq false")) rows = rows.filter((r) => !r.IsFolder);
+      const eqName = /Description eq '([^']*)'/.exec(u)?.[1];
+      if (eqName !== undefined) rows = rows.filter((r) => r.Description === eqName);
+      const eqCode = /Code eq '([^']*)'/.exec(u)?.[1];
+      if (eqCode !== undefined) rows = rows.filter((r) => r.Code === eqCode);
+      const eqRef = /Ref_Key eq guid'([^']*)'/.exec(u)?.[1];
+      if (eqRef !== undefined) rows = rows.filter((r) => r.Ref_Key === eqRef);
+      const part = /substringof\('([^']*)', Description\)/.exec(u)?.[1];
+      if (part !== undefined)
+        rows = rows.filter((r) => r.Description.toLowerCase().includes(part.toLowerCase()));
+      const top = Number(/\$top=(\d+)/.exec(u)?.[1] ?? 1000);
+      return { value: rows.slice(0, top) };
     }) as never);
-    return (createServer(f.ctx) as unknown as { _registeredTools: Record<string, Tool> })._registeredTools[
-      "write.warehouse.create_writeoff"
-    ]!;
+    const tool = (createServer(f.ctx) as unknown as { _registeredTools: Record<string, Tool> })
+      ._registeredTools["write.warehouse.create_writeoff"]!;
+    const call = (warehouse: string) =>
+      tool.handler(
+        tool.inputSchema.parse({
+          warehouse,
+          lines: [{ nomenclatureRef: ref(9), quantity: 1 }],
+          date: "2026-11-01",
+        }),
+        {},
+      );
+    return { call, queries };
   }
-  const ref = (i: number) => `aaaaaaaa-0000-4000-8000-${String(i).padStart(12, "0")}`;
-  const args = (warehouse: string) => ({
-    warehouse,
-    lines: [{ nomenclatureRef: ref(9), quantity: 1 }],
-    date: "2026-11-01",
-  });
+  const text = (r: { content: { text: string }[] }) => r.content[0]!.text;
 
-  it("несколько совпадений: отказ со списком, ничего не записано", async () => {
-    const tool = setup([
-      { Ref_Key: ref(1), Description: "Склад основной" },
-      { Ref_Key: ref(2), Description: "Склад розничный" },
+  it("несколько совпадений по части: отказ с кодами и ссылками", async () => {
+    const { call } = setup([
+      { Ref_Key: ref(1), Description: "Склад основной", Code: "01" },
+      { Ref_Key: ref(2), Description: "Склад розничный", Code: "02" },
     ]);
-    const r = await tool.handler(tool.inputSchema.parse(args("Склад")), {});
+    const r = await call("Склад");
     expect(r.isError).toBe(true);
-    expect(r.content[0]!.text).toContain("подходит несколько");
-    expect(r.content[0]!.text).toContain("Склад розничный");
-    expect(r.content[0]!.text).toContain("Ничего не записано");
+    expect(text(r)).toContain("подходит несколько");
+    expect(text(r)).toContain("код 02");
+    expect(text(r)).toContain(ref(2));
+    expect(text(r)).toContain("Ничего не записано");
   });
-  it("точное название среди похожих проходит этот шаг", async () => {
-    const tool = setup([
+  it("точное название важнее части, даже за пределом выборки", async () => {
+    const many: Row[] = Array.from({ length: 25 }, (_, i) => ({
+      Ref_Key: ref(i + 10),
+      Description: `Склад ${i}`,
+    }));
+    const { call } = setup([...many, { Ref_Key: ref(1), Description: "Склад" }]);
+    expect(text(await call("Склад"))).not.toContain("подходит несколько");
+  });
+  it("копия с пометкой удаления и папка не мешают", async () => {
+    const { call } = setup([
+      { Ref_Key: ref(1), Description: "Основной" },
+      { Ref_Key: ref(2), Description: "Основной", DeletionMark: true },
+      { Ref_Key: ref(3), Description: "Основной", IsFolder: true },
+    ]);
+    expect(text(await call("Основной"))).not.toContain("подходит несколько");
+  });
+  it("настоящие дубли: отказ, и по коду или Ref_Key выбрать можно", async () => {
+    const rows: Row[] = [
+      { Ref_Key: ref(1), Description: "Основной", Code: "01" },
+      { Ref_Key: ref(2), Description: "Основной", Code: "02" },
+    ];
+    const { call } = setup(rows);
+    expect(text(await call("Основной"))).toContain("подходит несколько");
+    expect(text(await call("02"))).not.toContain("подходит несколько");
+    expect(text(await call(ref(2)))).not.toContain("подходит несколько");
+    expect(text(await call(ref(2)))).not.toContain("не найден");
+  });
+  it("пробелы вокруг имени не меняют выбор", async () => {
+    const { call, queries } = setup([
       { Ref_Key: ref(1), Description: "Склад" },
       { Ref_Key: ref(2), Description: "Склад розничный" },
     ]);
-    const r = await tool.handler(tool.inputSchema.parse(args("склад")), {});
-    expect(r.content[0]!.text).not.toContain("подходит несколько");
+    await call("  Склад ");
+    expect(queries[0]).toContain("Description eq 'Склад'");
   });
-  it("единственное совпадение по части проходит этот шаг", async () => {
-    const tool = setup([{ Ref_Key: ref(1), Description: "Склад основной" }]);
-    const r = await tool.handler(tool.inputSchema.parse(args("основн")), {});
-    expect(r.content[0]!.text).not.toContain("подходит несколько");
+  it("нет такого склада — отказ", async () => {
+    const { call } = setup([{ Ref_Key: ref(1), Description: "Основной" }]);
+    expect(text(await call("Другой"))).toContain("не найден");
+  });
+  it("справочник не опубликован: заданный склад не игнорируется", async () => {
+    const f = fake1C({ READ_ONLY: "true" });
+    const meta = await f.conn.getMetadata();
+    const entities = new Map([...meta.entities].filter(([k]) => !k.startsWith("Catalog_Склады")));
+    vi.spyOn(f.conn, "available").mockResolvedValue(new Set(entities.keys()));
+    const tool = (createServer(f.ctx) as unknown as { _registeredTools: Record<string, Tool> })
+      ._registeredTools["write.warehouse.create_writeoff"]!;
+    const r = await tool.handler(
+      tool.inputSchema.parse({
+        warehouse: "Склад",
+        lines: [{ nomenclatureRef: ref(9), quantity: 1 }],
+        date: "2026-11-01",
+      }),
+      {},
+    );
+    expect(text(r)).toContain("не опубликован");
   });
 });

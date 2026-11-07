@@ -1,3 +1,4 @@
+import { InputError } from "../errors.js";
 import type { Connection } from "../context.js";
 import { fetchAll } from "./pagination.js";
 import { and, cmp, contains, odataString } from "./query.js";
@@ -16,6 +17,9 @@ import { fetchAllForAggregation } from "./aggregate.js";
 export type CounterpartyKind = "ИП" | "ЮрЛицо" | "ФизЛицо" | "Нерезидент" | "Госорган";
 
 /** Возвращает Set<Ref_Key> контрагентов выбранной категории. Пустой Set, если их нет. */
+/** Статей ДДС в одном отборе. */
+const MATCHES_LIMIT = 20;
+
 export async function counterpartyRefsByKind(conn: Connection, kind: CounterpartyKind): Promise<Set<string>> {
   const set = resolveEntity(CATALOGS.counterparties, await conn.available());
   if (!set) return new Set();
@@ -82,9 +86,15 @@ export async function resolveCashflowItems(
     conn.client,
     set,
     { filter, select: ["Ref_Key", "Code", "Description"] },
-    20,
-    20,
+    MATCHES_LIMIT + 1,
+    MATCHES_LIMIT + 1,
   );
+  // Часть статей не вошла бы в отбор, и сумма оказалась бы заниженной без предупреждения.
+  if (rows.length > MATCHES_LIMIT) {
+    throw new InputError(
+      `Под «${query}» подходит больше ${MATCHES_LIMIT} статей ДДС: уточните название или код.`,
+    );
+  }
   return rows.map((r) => ({
     ref: String(r["Ref_Key"]),
     code: r["Code"] ? String(r["Code"]) : undefined,

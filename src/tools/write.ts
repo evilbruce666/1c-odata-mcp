@@ -128,42 +128,89 @@ async function resolveOrg(
   return { key: o.ref, name: o.name };
 }
 
-/** Сколько совпадений по части названия читать, чтобы найти точное и назвать варианты в отказе. */
+/** Сколько совпадений по части названия читать, чтобы назвать варианты в отказе. */
 const NAME_MATCH_LIMIT = 20;
 
-/**
- * Единственный объект из совпавших по части названия. Точное название важнее части; иначе несколько совпадений —
- * отказ: первое из них дало бы документ с чужим складом или валютой, а заметить это можно только в предпросмотре.
- */
-function singleByName(rows: readonly ODataEntity[], query: string, label: string): ODataEntity {
-  const wanted = query.trim().toLowerCase();
-  const exact = rows.filter((r) => String(r["Description"] ?? "").toLowerCase() === wanted);
-  if (exact.length === 1) return exact[0] as ODataEntity;
+/** Единственный объект; несколько — отказ с кодами и ссылками: первое дало бы документ с чужим складом или валютой. */
+function singleMatch(rows: readonly ODataEntity[], query: string, label: string): ODataEntity {
   if (rows.length === 1) return rows[0] as ODataEntity;
-  const names = rows
+  const variants = rows
     .slice(0, 10)
-    .map((r) => String(r["Description"] ?? ""))
-    .join(", ");
+    .map((r) => {
+      const code = r["Code"] ? `код ${String(r["Code"]).trim()}, ` : "";
+      return `${String(r["Description"] ?? "")} (${code}${String(r["Ref_Key"])})`;
+    })
+    .join("; ");
   throw new InputError(
-    `${label}: под «${query}» подходит несколько: ${names}. Укажите название точнее. Ничего не записано.`,
+    `${label}: под «${query}» подходит несколько: ${variants}. Укажите Ref_Key, код или название точнее. Ничего не записано.`,
   );
 }
 
+/**
+ * Объект справочника по Ref_Key, коду или названию. Помеченные на удаление и папки не выбираются. Точное название
+ * ищется отдельным запросом: среди совпадений по части оно могло бы не попасть в выборку и потеряться.
+ */
+async function findCatalogObject(
+  conn: Connection,
+  set: string,
+  query: string,
+  label: string,
+  codeFirst: boolean,
+): Promise<ODataEntity | undefined> {
+  const props = new Set((await conn.getMetadata()).entities.get(set)?.properties.map((p) => p.name));
+  const select = ["Ref_Key", "Description", ...(props.has("Code") ? ["Code"] : [])];
+  const active = and(
+    props.has("DeletionMark") ? cmp("DeletionMark", "eq", "false") : undefined,
+    props.has("IsFolder") ? cmp("IsFolder", "eq", "false") : undefined,
+  );
+  const read = async (condition: string) =>
+    (
+      await fetchAll<ODataEntity>(
+        conn.client,
+        set,
+        { filter: and(condition, active || undefined), select },
+        NAME_MATCH_LIMIT,
+        NAME_MATCH_LIMIT,
+      )
+    ).rows;
+  if (GUID_RE.test(query)) {
+    const rows = await read(cmp("Ref_Key", "eq", odataGuid(query.replace(/[{}]/g, ""))));
+    return rows[0];
+  }
+  const byCode = () =>
+    props.has("Code") ? read(cmp("Code", "eq", odataString(query))) : Promise.resolve([] as ODataEntity[]);
+  const byName = () => read(cmp("Description", "eq", odataString(query)));
+  for (const step of codeFirst ? [byCode, byName] : [byName, byCode]) {
+    const rows = await step();
+    if (rows.length) return singleMatch(rows, query, label);
+  }
+  const partial = await read(contains("Description", query));
+  if (!partial.length) return undefined;
+  const wanted = query.toLowerCase();
+  const exact = partial.filter(
+    (r) =>
+      String(r["Description"] ?? "")
+        .trim()
+        .toLowerCase() === wanted,
+  );
+  return singleMatch(exact.length ? exact : partial, query, label);
+}
+
 /** Резолвит склад по названию; если не задан и склад один — берёт его; иначе undefined. */
-async function resolveWarehouse(conn: Connection, name: string | undefined): Promise<string | undefined> {
+async function resolveWarehouse(conn: Connection, rawName: string | undefined): Promise<string | undefined> {
+  const name = rawName?.trim();
   const set = resolveEntity(CATALOGS.warehouses, await conn.available());
-  if (!set) return undefined;
+  if (!set) {
+    if (name)
+      throw new InputError(
+        `Справочник складов не опубликован в OData: склад "${name}" выбрать нельзя. Ничего не записано.`,
+      );
+    return undefined;
+  }
   if (name) {
-    const { rows } = await fetchAll(
-      conn.client,
-      set,
-      { filter: contains("Description", name), select: ["Ref_Key", "Description"] },
-      NAME_MATCH_LIMIT,
-      NAME_MATCH_LIMIT,
-    );
-    if (!rows.length)
-      throw new InputError(`Склад "${name}" не найден (см. list_entities / справочник складов).`);
-    return String(singleByName(rows, name, "Склад")["Ref_Key"]);
+    const found = await findCatalogObject(conn, set, name, "Склад", false);
+    if (!found) throw new InputError(`Склад "${name}" не найден (см. list_entities / справочник складов).`);
+    return String(found["Ref_Key"]);
   }
   const { rows } = await fetchAll(conn.client, set, { select: ["Ref_Key"] }, 2, 2);
   return rows.length === 1 ? String((rows[0] as ODataEntity)["Ref_Key"]) : undefined;
@@ -180,25 +227,7 @@ async function resolveCatalogItem(
   query: string,
 ): Promise<{ ref: string; code?: string; name?: string }> {
   const set = await requireEntity(conn, candidates, label);
-  const byCode = await fetchAll(
-    conn.client,
-    set,
-    { filter: cmp("Code", "eq", odataString(query)), select: ["Ref_Key", "Code", "Description"] },
-    3,
-    3,
-  );
-  const rows = byCode.rows.length
-    ? byCode.rows
-    : (
-        await fetchAll(
-          conn.client,
-          set,
-          { filter: contains("Description", query), select: ["Ref_Key", "Code", "Description"] },
-          NAME_MATCH_LIMIT,
-          NAME_MATCH_LIMIT,
-        )
-      ).rows;
-  const first = rows.length ? singleByName(rows, query, label) : undefined;
+  const first = await findCatalogObject(conn, set, query.trim(), label, true);
   if (!first) throw new InputError(`${label}: «${query}» не найдено (по коду или наименованию).`);
   return {
     ref: String(first["Ref_Key"]),
@@ -1889,8 +1918,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
             note: "У этого объекта нет «Комментария», метку не поставить. Проверьте в 1С вручную (по наименованию/номеру).",
           });
         }
-        // 1С превращает substringof в регулярное выражение — скобки метки «[op:…]» ломают запрос (500),
-        // поэтому ищем по «op:<id>» без них (UUID — только hex и «-»).
+        // Ищем по «op:<id>» без квадратных скобок метки: в substringof это класс символов (UUID — только hex и «-»).
         // Number есть только у документов; у справочников — Code (иначе 1С отвечает 400).
         const numberField = entry.entitySet.startsWith("Document_") ? "Number" : "Code";
         const found = await conn.client.getCollection<ODataEntity>(

@@ -6,6 +6,7 @@ import {
   dimensionOf,
   foldText,
   matchesItemQuery,
+  strictText,
   resolveItemGroup,
   subtreeOf,
 } from "../src/odata/inventory.js";
@@ -599,7 +600,7 @@ describe("поиск без ложных нулей", () => {
       note: string;
     };
     expect(s.items).toEqual([]);
-    expect(s.note).toContain("не значит, что остатка нет");
+    expect(s.note).toContain("основу слова");
     const hit = (await call({ query: "бумаг" })).structuredContent as unknown as { items: Item[] };
     expect(hit.items).toHaveLength(1);
   });
@@ -626,5 +627,57 @@ describe("поиск без ложных нулей", () => {
     await call({ query: "бумаг", groupBy: "warehouse", limit: 5 });
     await call({ query: "бумаг", groupBy: "warehouse", limit: 5, offset: 5 });
     expect(reads().filter((u) => u.includes("IsFolder eq false"))).toHaveLength(1);
+  });
+});
+
+describe("уровни сопоставления и свежесть справочника", () => {
+  it("«TP» не выбирает чужую группу по похожим буквам", () => {
+    const groups = [{ ref: GROUP(1), name: "Стройматериалы" }];
+    expect(() => resolveItemGroup("TP", groups)).toThrow(/не найдена/);
+    expect(resolveItemGroup("строй", groups).ref).toBe(GROUP(1));
+  });
+  it("название группы целиком находится и в другой раскладке, пробел в конце не мешает", () => {
+    expect(resolveItemGroup("A4", [{ ref: GROUP(1), name: "А4" }]).ref).toBe(GROUP(1));
+    expect(resolveItemGroup("Мебель", [{ ref: GROUP(1), name: "Мебель " }]).ref).toBe(GROUP(1));
+  });
+  it("буквальные совпадения важнее похожих букв, вторым шагом примечание", async () => {
+    CATALOG[ITEM(50)] = { Description: "Кабель 3м" };
+    CATALOG[ITEM(51)] = { Description: "Лента 3M" };
+    try {
+      const { call } = await setup([row([[ITEM(50), NOM]], 1, 10), row([[ITEM(51), NOM]], 1, 20)]);
+      const both = (await call({ query: "3m" })).structuredContent as unknown as {
+        items: Item[];
+        note?: string;
+      };
+      expect(both.items.map((i) => i.item)).toEqual(["Лента 3M"]);
+      expect(both.note ?? "").not.toContain("похожих букв");
+      const { call: call2 } = await setup([row([[ITEM(50), NOM]], 1, 10)]);
+      const look = (await call2({ query: "3m" })).structuredContent as unknown as {
+        items: Item[];
+        note: string;
+      };
+      expect(look.items.map((i) => i.item)).toEqual(["Кабель 3м"]);
+      expect(look.note).toContain("похожих букв");
+    } finally {
+      delete CATALOG[ITEM(50)];
+      delete CATALOG[ITEM(51)];
+    }
+  });
+  it("товар есть в справочнике без остатка и товара нет: разные примечания", async () => {
+    const { call } = await setup([row([[ITEM(2), NOM]], 1, 10)]);
+    const noStock = (await call({ query: "бумаг" })).structuredContent as unknown as { note: string };
+    expect(noStock.note).toContain("остатка на счетах нет");
+    const unknown = (await call({ query: "бумаги" })).structuredContent as unknown as { note: string };
+    expect(unknown.note).toContain("не найдено");
+  });
+  it("первая страница читает свежий справочник: новый товар виден сразу", async () => {
+    const { call, reads } = await setup([row([[ITEM(1), NOM]], 1, 10)]);
+    await call({ query: "бумаг" });
+    await call({ query: "бумаг" });
+    expect(reads().filter((u) => u.includes("IsFolder eq false"))).toHaveLength(2);
+  });
+  it("strictText: регистр и ё", () => {
+    expect(strictText("ЁЛКА")).toBe("елка");
+    expect(strictText("A4")).not.toBe(strictText("А4"));
   });
 });

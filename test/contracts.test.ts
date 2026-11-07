@@ -145,6 +145,14 @@ describe("create_contract regulated currency", () => {
     const connection = {
       cfg: { name: "default", writable: true },
       behavior: { regulatedCurrencyCode, writeOperationMarker: false, pageSize: 100, maxRows: 1000 },
+      getMetadata: async () => ({
+        entities: new Map([
+          [
+            "Catalog_Валюты",
+            { properties: [{ name: "Code" }, { name: "Description" }, { name: "DeletionMark" }] },
+          ],
+        ]),
+      }),
       available: async () =>
         new Set(["Catalog_ДоговорыКонтрагентов", "Catalog_Организации", "Catalog_Валюты"]),
       client: {
