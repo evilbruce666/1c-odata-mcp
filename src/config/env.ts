@@ -58,6 +58,10 @@ export interface Behavior {
   toolDeadlineMs: number;
   /** Предел текста ответа инструмента чтения, символов: только уменьшение нормы для клиентов с малым контекстом. */
   maxResponseChars: number;
+  /** Какие инструменты видит клиент: all — все, read — только чтение. Запись защищена не этим, а READ_ONLY. */
+  toolsProfile: "all" | "read";
+  /** Точный список инструментов вместо профиля. */
+  toolsAllow?: string[] | undefined;
   /**
    * Код валюты регламентированного учёта (по справочнику «Валюты»): по нему договор относится к виду
    * расчётов «в валюте регламентированного учёта» при подборе счетов расчётов. По умолчанию 643 (рубль).
@@ -106,6 +110,8 @@ const BehaviorSchema = z.object({
   ODATA_QUEUE_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
   ODATA_TOOL_DEADLINE_MS: z.coerce.number().int().min(0).default(0),
   ODATA_MAX_RESPONSE_CHARS: z.coerce.number().int().min(10_000).max(45_000).default(45_000),
+  TOOLS_PROFILE: z.preprocess((v) => (v === "" ? undefined : v), z.enum(["all", "read"]).optional()),
+  TOOLS_ALLOW: z.string().optional(),
   // Пустое значение (обычное в шаблонах .env) = «не задано», а не ошибка старта.
   ODATA_REGULATED_CURRENCY_CODE: CurrencyCodeSchema,
   LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"),
@@ -182,6 +188,15 @@ export function loadConfig(): RuntimeConfig {
   return cached;
 }
 
+/** Список имён из TOOLS_ALLOW; пустое значение (обычное в шаблонах .env) — «не задано». */
+const toolList = (value: string | undefined): string[] | undefined => {
+  const names = (value ?? "")
+    .split(",")
+    .map((n) => n.trim())
+    .filter(Boolean);
+  return names.length ? names : undefined;
+};
+
 /** Чистый разбор конфигурации из объекта env (без кеша) — удобно для тестов. */
 export function parseConfig(env: Env): RuntimeConfig {
   const issues: string[] = [];
@@ -189,6 +204,14 @@ export function parseConfig(env: Env): RuntimeConfig {
   const behaviorParsed = BehaviorSchema.safeParse(env);
   if (!behaviorParsed.success) {
     for (const i of behaviorParsed.error.issues) issues.push(`${i.path.join(".")}: ${i.message}`);
+  }
+
+  if (
+    behaviorParsed.success &&
+    behaviorParsed.data.TOOLS_PROFILE &&
+    toolList(behaviorParsed.data.TOOLS_ALLOW)
+  ) {
+    issues.push("TOOLS_PROFILE и TOOLS_ALLOW вместе не задаются: оставьте одну из настроек");
   }
 
   const raw = collectRawConnections(env);
@@ -241,6 +264,8 @@ export function parseConfig(env: Env): RuntimeConfig {
       queueTimeoutMs: b.ODATA_QUEUE_TIMEOUT_MS,
       toolDeadlineMs: b.ODATA_TOOL_DEADLINE_MS,
       maxResponseChars: b.ODATA_MAX_RESPONSE_CHARS,
+      toolsProfile: b.TOOLS_PROFILE ?? "all",
+      toolsAllow: toolList(b.TOOLS_ALLOW),
       regulatedCurrencyCode: b.ODATA_REGULATED_CURRENCY_CODE ?? "643",
       regulatedCurrencySource: b.ODATA_REGULATED_CURRENCY_CODE ? "global" : "default",
       writeJournalDir: resolve(

@@ -13,7 +13,7 @@ import { PROMPTS } from "../mcp/prompts.js";
 async function main(): Promise<void> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
-    if (v !== undefined && !k.startsWith("ODATA_")) env[k] = v;
+    if (v !== undefined && !k.startsWith("ODATA_") && !k.startsWith("TOOLS_")) env[k] = v;
   }
   Object.assign(env, {
     ODATA_BASE_URL: "https://example.com/odata/standard.odata/",

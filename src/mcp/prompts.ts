@@ -104,8 +104,12 @@ export function renderPrompt(def: PromptDef, args: Record<string, string | undef
   });
 }
 
-export function registerPrompts(server: McpServer): void {
-  for (const def of PROMPTS) {
+/** Инструменты, которые сценарий велит вызвать. */
+export const promptTools = (def: PromptDef): string[] => def.text.match(/\b(?:read|write)\.\w+\.\w+/g) ?? [];
+
+/** Сценарий, ведущий к недоступному инструменту, не показывается: выполнить его модель не сможет. */
+export function registerPrompts(server: McpServer, listed: (tool: string) => boolean = () => true): void {
+  for (const def of PROMPTS.filter((d) => promptTools(d).every(listed))) {
     const argsSchema = Object.fromEntries(
       def.arguments.map((a) => [
         a.name,

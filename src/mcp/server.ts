@@ -71,6 +71,10 @@ const INSTRUCTIONS =
   "вызовах тяжёлые (check_month_close, data_freshness, акт сверки, карточка) упираются в таймаут клиента, а соседние " +
   "получают Connection closed. После такой ошибки повторите вызов один, это не значит, что данных нет.";
 
+const LISTED_TOOLS_NOTE =
+  "Список инструментов на этом сервере ограничен настройкой TOOLS_ALLOW: если ответ или описание советует " +
+  "инструмент, которого нет в вашем списке, он недоступен, скажите об этом пользователю.";
+
 /**
  * Правки документа, которые нельзя слепо повторять: инструмент перечитывает документ, и повтор
  * добавил бы ещё строку или удалил соседнюю. Как и создание, защищены operationId и журналом.
@@ -286,9 +290,22 @@ export function requireDatabase(
 
 /** Создаёт MCP-сервер и регистрирует все инструменты (чтение + гейтованная запись). */
 export function createServer(ctx: ServerContext): McpServer {
+  // Какие инструменты видит клиент. Это про объём контекста модели, запись защищают READ_ONLY и WRITABLE.
+  const { toolsProfile = "all", toolsAllow } = ctx.behavior;
+  const allowed = toolsAllow && new Set(toolsAllow);
+  const listed = (name: string) =>
+    allowed ? allowed.has(name) : toolsProfile === "all" || name.startsWith("read.");
+  const known = new Set<string>();
   const server = new McpServer(
     { name: "1c-odata-mcp", version: readVersion() },
-    { instructions: INSTRUCTIONS, capabilities: { extensions: { [APPS_EXTENSION_ID]: {} } } },
+    {
+      instructions: allowed
+        ? `${INSTRUCTIONS} ${LISTED_TOOLS_NOTE}`
+        : toolsProfile === "read"
+          ? `${INSTRUCTIONS} Инструменты записи на этом сервере не подключены (TOOLS_PROFILE=read).`
+          : INSTRUCTIONS,
+      capabilities: { extensions: { [APPS_EXTENSION_ID]: {} } },
+    },
   );
 
   // Оборачиваем registerTool, чтобы каждому инструменту проставить аннотации по имени.
@@ -302,6 +319,8 @@ export function createServer(ctx: ServerContext): McpServer {
     config: Record<string, unknown>,
     cb: (args: Record<string, unknown>, extra: unknown) => Promise<CallToolResult>,
   ) => {
+    known.add(name);
+    if (!listed(name)) return undefined;
     const appMeta = appMetaFor(name);
     const annotatedConfig = {
       ...config,
@@ -451,8 +470,16 @@ export function createServer(ctx: ServerContext): McpServer {
   registerExistingBankSettlementTools(server, ctx);
   registerSettlementSettingsTools(server, ctx);
   registerCounterpartyGroupTools(server, ctx);
-  registerPrompts(server);
+  registerPrompts(server, listed);
   registerApps(server);
+
+  // Опечатка в списке молча оставила бы клиента без инструмента: отказ при старте с точным именем.
+  const unknown = (toolsAllow ?? []).filter((name) => !known.has(name));
+  if (unknown.length) {
+    throw new Error(
+      `TOOLS_ALLOW: таких инструментов нет: ${unknown.join(", ")}. Имена — как в tools/list, например read.analytics.get_debtors.`,
+    );
+  }
 
   return server;
 }
