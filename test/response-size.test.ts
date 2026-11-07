@@ -286,9 +286,13 @@ describe("limitResponseSize: страницы для инструментов б
     expect(limitResponseSize(err)).toBe(err);
   });
 
-  it("без списка ответ не трогает", () => {
-    const big = answer({ text: "x".repeat(60_000) });
-    expect(limitResponseSize(big)).toBe(big);
+  it("без списка содержимое не трогает, превышение называет", () => {
+    const s = limitResponseSize(answer({ text: "x".repeat(60_000) })).structuredContent as {
+      text: string;
+      overLimit: boolean;
+    };
+    expect(s.text).toHaveLength(60_000);
+    expect(s.overLimit).toBe(true);
   });
 });
 

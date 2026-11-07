@@ -3,6 +3,7 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { parseConfig } from "../src/config/env.js";
 import { createServer } from "../src/mcp/server.js";
 import { PROMPTS, promptTools } from "../src/mcp/prompts.js";
+import { toolListed } from "../src/tools/_shared.js";
 import { fake1C } from "./helpers/fake-1c.js";
 
 async function connect(env: Record<string, string>) {
@@ -72,5 +73,14 @@ describe("фильтр инструментов", () => {
       expect(behavior.toolsProfile).toBe("all");
       expect(behavior.toolsAllow).toBeUndefined();
     });
+  });
+});
+
+describe("подсказка не ведёт к скрытому инструменту", () => {
+  it("toolListed совпадает с настройками", () => {
+    expect(toolListed({}, "write.operation.status")).toBe(true);
+    expect(toolListed({ toolsProfile: "read" }, "write.operation.status")).toBe(false);
+    expect(toolListed({ toolsAllow: ["read.a.b"] }, "write.operation.status")).toBe(false);
+    expect(toolListed({ toolsAllow: ["write.operation.status"] }, "write.operation.status")).toBe(true);
   });
 });

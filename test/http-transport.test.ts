@@ -58,6 +58,16 @@ describe("настройка HTTP", () => {
     ["адрес не loopback без списка имён", { MCP_HTTP_HOST: "0.0.0.0" }, /MCP_HTTP_ALLOWED_HOSTS/],
     ["неверный транспорт", { MCP_TRANSPORT: "sse" }, /MCP_TRANSPORT/],
     ["неверный порт", { MCP_HTTP_PORT: "70000" }, /MCP_HTTP_PORT/],
+    ["пробелы в токене", { MCP_HTTP_TOKEN: " ".repeat(40) }, /без пробелов/],
+    [
+      "комментарий шаблона вместо токена",
+      { MCP_HTTP_TOKEN: "# не короче 32 символов, например openssl rand" },
+      /без пробелов/,
+    ],
+    ["профиль all", { TOOLS_PROFILE: "all" }, /только для чтения/],
+    ["запись в TOOLS_ALLOW", { TOOLS_ALLOW: "read.a.b,write.sales.create_invoice" }, /только для чтения/],
+    ["порт в списке имён", { MCP_HTTP_ALLOWED_HOSTS: "mcp.local:8787" }, /без схемы и порта/],
+    ["схема в списке имён", { MCP_HTTP_ALLOWED_HOSTS: "https://mcp.local" }, /без схемы и порта/],
   ])("%s — отказ при старте", (_name, extra, message) => {
     expect(() => parseConfig({ ...good, ...extra } as Record<string, string>)).toThrow(message);
   });
@@ -68,6 +78,12 @@ describe("настройка HTTP", () => {
     } catch (e) {
       expect(String(e)).not.toContain(TOKEN);
     }
+  });
+  it("в HTTP по умолчанию только чтение, имена хостов без учёта регистра", () => {
+    const c = parseConfig({ ...good, MCP_HTTP_ALLOWED_HOSTS: "MCP.Local, [::1]" });
+    expect(c.behavior.toolsProfile).toBe("read");
+    expect(c.http?.allowedHosts).toEqual(["mcp.local", "[::1]"]);
+    expect(parseConfig(base).behavior.toolsProfile).toBe("all");
   });
   it("адрес не loopback со списком имён", () => {
     const c = parseConfig({
@@ -165,7 +181,9 @@ describe("настоящий клиент по настоящему сокету
 
   it("список инструментов, вызов и параллельные вызовы", async () => {
     const { server, client } = await serve();
-    expect((await client.listTools()).tools).toHaveLength(76);
+    const { tools } = await client.listTools();
+    expect(tools).toHaveLength(34);
+    expect(tools.every((t) => t.name.startsWith("read."))).toBe(true);
     const calls = await Promise.all(
       Array.from({ length: 5 }, () => client.callTool({ name: "read.system.list_databases", arguments: {} })),
     );

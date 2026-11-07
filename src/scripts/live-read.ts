@@ -3,13 +3,17 @@
  * Ничего не пишет: глобальный fetch пропускает только GET/HEAD, любая попытка записи — провал
  * прогона. Журнал операций — во временном каталоге.
  *
- *   npm run test:live:read -- [--db <имя базы>]   (без --db — все настроенные базы)
+ *   npm run test:live:read -- [--db <имя базы>] [--http]   (без --db — все настроенные базы)
+ *
+ * С --http те же проверки идут настоящим клиентом через HTTP-транспорт на случайном порту локальной машины;
+ * outputSchema тогда проверяет сам клиент.
  *
  * Проверяет: health_check; все инструменты чтения без обязательных аргументов; проводки последних
  * проведённых документов — что субконто действительно приходят (dimensionsStatus), а не только что
  * ответ есть. Именно такой прогон нашёл, что на БП 3.0 записи регистра субконто не публикуют (#49).
  * Код возврата 1 — если хоть одна проверка не прошла.
  */
+import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,6 +45,17 @@ const arg = (name: string) => {
 };
 const line = (s = "") => process.stdout.write(`${s}\n`);
 
+const OVER_HTTP = process.argv.includes("--http");
+if (OVER_HTTP) {
+  Object.assign(process.env, {
+    MCP_TRANSPORT: "http",
+    MCP_HTTP_PORT: "0",
+    MCP_HTTP_HOST: "127.0.0.1",
+    MCP_HTTP_TOKEN: randomBytes(32).toString("hex"),
+    READ_ONLY: "true",
+  });
+}
+
 async function main(): Promise<number> {
   const blockedWrites: string[] = [];
   const realFetch = globalThis.fetch;
@@ -63,7 +78,20 @@ async function main(): Promise<number> {
 
   const rows: Array<[string, boolean, string]> = [];
   const check = (name: string, ok: boolean, detail = "") => rows.push([name, ok, detail]);
+  const http = OVER_HTTP ? await connectOverHttp(ctx, cfg.http!, realFetch) : undefined;
   const run = async (name: string, a: Json) => {
+    if (http) {
+      try {
+        const r = (await http.client.callTool({ name, arguments: a })) as {
+          isError?: boolean;
+          structuredContent?: Json;
+          content?: Array<{ text?: string }>;
+        };
+        return { err: !!r.isError, sc: r.structuredContent ?? {}, text: r.content?.[0]?.text ?? "" };
+      } catch (e) {
+        return { err: true, sc: {} as Json, text: e instanceof Error ? e.message : String(e) };
+      }
+    }
     const tool = tools[name]!;
     const parsed = tool.inputSchema ? tool.inputSchema.safeParse(a) : { success: true, data: a };
     if (!parsed.success) return { err: true, sc: {} as Json, text: "входные данные не прошли схему" };
@@ -136,11 +164,42 @@ async function main(): Promise<number> {
     }
   }
   check("ни одной попытки записи", blockedWrites.length === 0, blockedWrites.join(", "));
+  if (http) {
+    check("по HTTP видно только чтение", http.writeTools === 0, `инструментов записи: ${http.writeTools}`);
+    await http.close();
+  }
 
   for (const [name, ok, detail] of rows) line(`${ok ? "✓" : "✗"} ${name}${detail ? ` — ${detail}` : ""}`);
   const failed = rows.filter(([, ok]) => !ok).length;
   line(failed ? `\nНе прошло: ${failed}` : "\nВсё прошло.");
   return failed ? 1 : 0;
+}
+
+/** Настоящий клиент через HTTP-транспорт: то, что увидит интеграция на сервере. */
+async function connectOverHttp(
+  ctx: import("../context.js").ServerContext,
+  cfg: import("../config/env.js").HttpTransport,
+  fetchImpl: typeof fetch,
+) {
+  const { startHttpServer } = await import("../http.js");
+  const { Client, StreamableHTTPClientTransport } = await import("@modelcontextprotocol/client");
+  const server = await startHttpServer(ctx, cfg);
+  const client = new Client({ name: "live-read", version: "1" });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${server.port}/mcp`), {
+      fetch: fetchImpl,
+      requestInit: { headers: { Authorization: `Bearer ${cfg.token}` } },
+    }),
+  );
+  const { tools } = await client.listTools();
+  return {
+    client,
+    writeTools: tools.filter((t) => !t.name.startsWith("read.")).length,
+    close: async () => {
+      await client.close();
+      await server.close();
+    },
+  };
 }
 
 main().then(

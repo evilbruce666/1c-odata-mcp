@@ -70,7 +70,7 @@ export function ok(data: unknown): CallToolResult {
  * Ключ _meta с видом ошибки: клиент различает отказы без разбора текста, а текст ошибки может содержать
  * сообщение 1С с данными. Не в structuredContent: там ответ должен соответствовать outputSchema.
  */
-export const ERROR_KIND_META = "1c-odata-mcp/errorKind";
+export const ERROR_KIND_META = "odata-1c/errorKind";
 
 /**
  * Ошибка инструмента: помечаем isError, отдаём понятный текст вместо падения. kind: виды ODataError либо
@@ -99,7 +99,9 @@ export async function guard(toolName: string, fn: () => Promise<CallToolResult>)
     if (e instanceof InputError) {
       // Неверные аргументы вызова — отдаём текст как есть: это чинится уточнением
       // запроса, а не разбирательством с сервером.
-      logger.info({ tool: toolName }, e.message);
+      // В тексте бывают названия и ИНН из запроса: на обычном уровне только факт отказа.
+      logger.info({ tool: toolName, kind: "input" }, "Неверные аргументы вызова");
+      logger.debug({ tool: toolName }, e.message);
       return fail(e.message, "input");
     }
     if (e instanceof AggregateOverflowError) {
@@ -129,13 +131,31 @@ export const RESPONSE_CHARS_NORM = 50_000;
 /** Предел текста текущего вызова: настройка ODATA_MAX_RESPONSE_CHARS, по умолчанию MAX_RESPONSE_CHARS. */
 export const responseCharsLimit = (): number => callResponseLimit() ?? MAX_RESPONSE_CHARS;
 
+/**
+ * Сколько можно занять строками страницы. Рядом с ними ещё служебные поля и примечания: при настроенном пределе
+ * нужен запас, иначе страница не уложится и её придётся резать повторно. По умолчанию запас уже есть до нормы.
+ */
+export const pageCharsLimit = (): number => {
+  const limit = responseCharsLimit();
+  return limit >= MAX_RESPONSE_CHARS ? limit : limit - 1_000;
+};
+
+/** Виден ли инструмент клиенту. Подсказка в ответе не должна вести к скрытому. */
+export function toolListed(
+  behavior: { toolsProfile?: "all" | "read"; toolsAllow?: string[] | undefined },
+  name: string,
+): boolean {
+  if (behavior.toolsAllow) return behavior.toolsAllow.includes(name);
+  return (behavior.toolsProfile ?? "all") === "all" || name.startsWith("read.");
+}
+
 /** Символов, которые значение занимает в ответе ok() как элемент массива верхнего уровня. */
 export const elementChars = (v: unknown): number => {
   return renderJson(v).length + 1;
 };
 
 /** Сколько первых строк поместится в остаток предела. Хотя бы одна — иначе offset не сдвинется. */
-export function fitToChars<T>(items: readonly T[], usedChars: number, maxChars = responseCharsLimit()): T[] {
+export function fitToChars<T>(items: readonly T[], usedChars: number, maxChars = pageCharsLimit()): T[] {
   let used = usedChars;
   let n = 0;
   for (const item of items) {

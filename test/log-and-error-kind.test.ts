@@ -34,7 +34,23 @@ describe("журнал не хранит параметры запроса на 
   });
 });
 
+describe("журнал не хранит текст отказов на обычных уровнях", () => {
+  it("InputError с названием и ИНН — только на debug", async () => {
+    const info = vi.spyOn(logger, "info").mockImplementation(() => undefined);
+    const debug = vi.spyOn(logger, "debug").mockImplementation(() => undefined);
+    const r = await guard("t", () =>
+      Promise.reject(new InputError('Организация "ООО Ромашка 7701234567" не найдена')),
+    );
+    expect(r.content[0]).toMatchObject({ text: expect.stringContaining("Ромашка") });
+    expect(JSON.stringify(info.mock.calls)).not.toContain("7701234567");
+    expect(JSON.stringify(debug.mock.calls)).toContain("7701234567");
+  });
+});
+
 describe("вид ошибки в _meta", () => {
+  it("ключ соответствует формату спецификации MCP: метка начинается с буквы", () => {
+    expect(ERROR_KIND_META).toMatch(/^[a-z][a-z0-9-]*[a-z0-9]\/[A-Za-z]/);
+  });
   const kindOf = (r: { _meta?: Record<string, unknown> }) => r._meta?.[ERROR_KIND_META];
   it.each([
     [new ODataError({ kind: "auth", message: "нет" }), "auth"],

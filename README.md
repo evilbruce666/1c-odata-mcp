@@ -353,15 +353,16 @@ Claude: (вызывает read.analytics.get_debtors, overdueOnly) Просро�
 
 ## Как устроено
 
-Локальный процесс на Node.js, общается с клиентом по протоколу MCP через **stdio** (для серверной установки есть HTTP только для чтения), а с 1С — по HTTP к OData (Basic-аутентификация). Стек: **Node.js 20+**, **TypeScript** (strict), официальный `@modelcontextprotocol/sdk`, нативный `fetch`, `zod` (валидация), `pino` (логи в stderr), `fast-xml-parser` (разбор `$metadata`).
+Локальный процесс на Node.js, общается с клиентом по протоколу MCP через **stdio** (для серверной установки есть HTTP только для чтения), а с 1С — по HTTP к OData (Basic-аутентификация). Стек: **Node.js 22+**, **TypeScript** (strict), официальный SDK MCP (`@modelcontextprotocol/server`), нативный `fetch`, `zod` (валидация), `pino` (логи: в терминале и в HTTP-режиме в stderr, под MCP-клиентом в файл), `fast-xml-parser` (разбор `$metadata`).
 
 Карта объектов строится автоматически из `$metadata` базы и кешируется; запросы собираются типобезопасным билдером. Несколько баз — у каждой свой клиент и свой кеш метаданных.
 
 ```
 src/
   index.ts            точка входа
+  http.ts             HTTP-транспорт (токен, проверка Host и Origin)
   context.ts          реестр баз: Connection (клиент + кеш $metadata) + ServerContext
-  mcp/server.ts       инициализация MCP SDK, регистрация инструментов, stdio
+  mcp/server.ts       инициализация MCP SDK, регистрация инструментов, размер ответа
   odata/              клиент, билдер запросов, пагинация, разбор $metadata, аналитика,
                       справочные резолверы, обработка ошибок, проверка публикации
   tools/              инструменты: meta, counterparties, documents, registers, cashflow,

@@ -79,6 +79,8 @@ export async function startHttpServer(
   createServer(ctx);
   const handler = createHttpHandler(ctx, cfg);
   const node = toNodeHandler(handler, {
+    // Адаптер читает тело до проверки токена: без этого чужой запрос занял бы 4 МиБ.
+    maxRequestBodySize: MAX_BODY_BYTES,
     onerror: (e) => logger.error({ err: e.message }, "http: сбой обработки запроса"),
   });
   const server: Server = createHttpServer((req, res) => void node(req, res));

@@ -121,7 +121,10 @@ const BehaviorSchema = z.object({
   ODATA_MAX_CONCURRENT_REQUESTS: z.coerce.number().int().min(0).max(64).default(0),
   ODATA_QUEUE_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
   ODATA_TOOL_DEADLINE_MS: z.coerce.number().int().min(0).default(0),
-  ODATA_MAX_RESPONSE_CHARS: z.coerce.number().int().min(10_000).max(45_000).default(45_000),
+  ODATA_MAX_RESPONSE_CHARS: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.coerce.number().int().min(10_000).max(45_000).default(45_000),
+  ),
   TOOLS_PROFILE: z.preprocess((v) => (v === "" ? undefined : v), z.enum(["all", "read"]).optional()),
   TOOLS_ALLOW: z.string().optional(),
   MCP_TRANSPORT: z.preprocess((v) => (v === "" ? undefined : v), z.enum(["stdio", "http"]).default("stdio")),
@@ -220,8 +223,19 @@ const MIN_TOKEN_LENGTH = 32;
 function httpIssues(b: z.infer<typeof BehaviorSchema>): string[] {
   if (b.MCP_TRANSPORT !== "http") return [];
   const issues: string[] = [];
-  if ((b.MCP_HTTP_TOKEN?.length ?? 0) < MIN_TOKEN_LENGTH) {
-    issues.push(`MCP_HTTP_TOKEN обязателен при MCP_TRANSPORT=http, не короче ${MIN_TOKEN_LENGTH} символов`);
+  if ((b.MCP_HTTP_TOKEN?.length ?? 0) < MIN_TOKEN_LENGTH || /\s/.test(b.MCP_HTTP_TOKEN ?? "")) {
+    // Пробел в значении — обычно комментарий из шаблона .env, попавший в токен.
+    issues.push(
+      `MCP_HTTP_TOKEN обязателен при MCP_TRANSPORT=http: не короче ${MIN_TOKEN_LENGTH} символов, без пробелов`,
+    );
+  }
+  if (b.TOOLS_PROFILE === "all" || toolList(b.TOOLS_ALLOW)?.some((name) => !name.startsWith("read."))) {
+    issues.push("MCP_TRANSPORT=http работает только для чтения: инструменты записи подключить нельзя");
+  }
+  for (const host of toolList(b.MCP_HTTP_ALLOWED_HOSTS) ?? []) {
+    if (/[:/]/.test(host.replace(/^\[.*\]$/, ""))) {
+      issues.push(`MCP_HTTP_ALLOWED_HOSTS: «${host}» — нужно только имя, без схемы и порта`);
+    }
   }
   if (b.READ_ONLY !== "true") {
     issues.push("MCP_TRANSPORT=http работает только для чтения: задайте READ_ONLY=true");
@@ -318,7 +332,7 @@ export function parseConfig(env: Env): RuntimeConfig {
             host: b.MCP_HTTP_HOST,
             port: b.MCP_HTTP_PORT,
             token: b.MCP_HTTP_TOKEN!,
-            allowedHosts: toolList(b.MCP_HTTP_ALLOWED_HOSTS),
+            allowedHosts: toolList(b.MCP_HTTP_ALLOWED_HOSTS)?.map((host) => host.toLowerCase()),
           }
         : undefined,
     behavior: {
@@ -335,7 +349,8 @@ export function parseConfig(env: Env): RuntimeConfig {
       toolDeadlineMs: b.ODATA_TOOL_DEADLINE_MS,
       maxResponseChars: b.ODATA_MAX_RESPONSE_CHARS,
       networkTransport: b.MCP_TRANSPORT === "http",
-      toolsProfile: b.TOOLS_PROFILE ?? "all",
+      // Записывать по HTTP нельзя: описания записи занимали бы контекст и вели в тупик.
+      toolsProfile: b.TOOLS_PROFILE ?? (b.MCP_TRANSPORT === "http" ? "read" : "all"),
       toolsAllow: toolList(b.TOOLS_ALLOW),
       regulatedCurrencyCode: b.ODATA_REGULATED_CURRENCY_CODE ?? "643",
       regulatedCurrencySource: b.ODATA_REGULATED_CURRENCY_CODE ? "global" : "default",

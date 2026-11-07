@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { ServerContext } from "../context.js";
-import { ok, fail, guard, databaseField, offsetField, pageOf, snapshotField } from "./_shared.js";
+import { ok, fail, guard, databaseField, offsetField, pageOf, snapshotField, toolListed } from "./_shared.js";
 import { listOrganizations } from "../odata/orgs.js";
 import type { EntityClass } from "../types/odata.js";
 import {
@@ -88,7 +88,9 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
                   note: !journal.writable
                     ? "Каталог журнала недоступен для записи — подтверждение создания и правки строк не пройдёт. Проверьте ODATA_WRITE_JOURNAL_DIR (в Docker — том)."
                     : journal.uncertain.length
-                      ? "Есть операции с неизвестным исходом: проверьте их write.operation.status — повтор по ним заблокирован до сверки."
+                      ? toolListed(conn.behavior, "write.operation.status")
+                        ? "Есть операции с неизвестным исходом: проверьте их write.operation.status — повтор по ним заблокирован до сверки."
+                        : "Есть операции с неизвестным исходом, повтор по ним заблокирован до сверки. Сверить их нечем: write.operation.status на этом сервере скрыт настройкой TOOLS_PROFILE или TOOLS_ALLOW."
                       : "Журнал в порядке.",
                 },
               }

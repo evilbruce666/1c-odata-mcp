@@ -56,13 +56,13 @@ function abortErrorOf(call: CallContext | undefined): ODataError | undefined {
     return new ODataError({
       kind: "deadline",
       message:
-        `Вызов не уложился в ODATA_TOOL_DEADLINE_MS (${call.deadline.ms} мс), запросы к 1С остановлены. ` +
+        `Вызов не уложился в ODATA_TOOL_DEADLINE_MS (${call.deadline.ms} мс), его запросы к 1С остановлены. ` +
         "Частичных данных в ответе нет: сузьте период или отбор либо повторите позже.",
     });
   }
   return new ODataError({
     kind: "cancelled",
-    message: "Вызов отменён клиентом, запросы к 1С остановлены.",
+    message: "Вызов отменён клиентом, его запросы к 1С остановлены.",
   });
 }
 

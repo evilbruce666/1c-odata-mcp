@@ -125,6 +125,37 @@ describe("отмена вызова чтения", () => {
   });
 });
 
+describe("отмена не задевает запись", () => {
+  it("POST создания и действия в отменённом вызове уходит и не прерывается", async () => {
+    const f = fake1C({ READ_ONLY: "false", ODATA_DB_NAME: "x", ODATA_WRITABLE: "true" });
+    const signals: Array<AbortSignal | undefined> = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_u: string | URL, init?: { signal?: AbortSignal }) => {
+        signals.push(init?.signal);
+        await gate;
+        return new Response('{"Ref_Key":"1"}', {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+    const controller = new AbortController();
+    controller.abort();
+    await withToolCall({ signal: controller.signal, deadlineMs: 0 }, async () => {
+      const created = f.conn.client.create("Catalog_Контрагенты", { Description: "x" });
+      const posted = f.conn.client.action("Document_Акт(guid'1')/Post");
+      await vi.waitFor(() => expect(signals).toHaveLength(2));
+      release();
+      await expect(created).resolves.toMatchObject({ Ref_Key: "1" });
+      await posted;
+    });
+    expect(signals.every((s) => s && !s.aborted)).toBe(true);
+  });
+});
+
 describe("общие загрузки и отмена", () => {
   it("отмена начавшего загрузку кэша не задевает соседний вызов", async () => {
     const owner = {};

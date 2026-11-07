@@ -41,7 +41,7 @@
 
 ## Разработка
 
-Нужен **Node.js ≥ 20**.
+Нужен **Node.js ≥ 22**.
 
 ```bash
 git clone https://github.com/evilbruce666/1c-odata-mcp.git
@@ -147,6 +147,7 @@ npm run check
 ```bash
 npm run test:live:read                  # все базы из .env, ~1–2 мин
 npm run test:live:read -- --db <имя базы>
+npm run test:live:read -- --http        # те же проверки настоящим клиентом через HTTP-транспорт
 ```
 
 Проверяет `health_check`, все инструменты чтения без обязательных аргументов (ответ должен проходить `outputSchema`, как у настоящего клиента) и что у проводок

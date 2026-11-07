@@ -132,9 +132,40 @@ describe("вложенные списки", () => {
     });
   });
 
-  it("большой ответ без списков возвращается как есть", () => {
-    const r = ok({ text: "я".repeat(60_000) });
-    expect(limitResponseSize(r)).toBe(r);
+  it("много мелких списков тоже укладываются в настроенный предел, срезы названы", async () => {
+    const lists = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`l${i}`, rows(8)]));
+    await atLimit(10_000, () => {
+      const r = limitResponseSize(ok(lists));
+      expect(textOf(r).length).toBeLessThanOrEqual(10_000);
+      const s = r.structuredContent as { truncated: boolean; truncatedLists: unknown[]; overLimit?: boolean };
+      expect(s.truncated).toBe(true);
+      expect(s.truncatedLists.length).toBeGreaterThan(0);
+      expect(s.overLimit).toBeUndefined();
+    });
+  });
+
+  it("сократить нечем: признак превышения, данные целы", () => {
+    const s = limitResponseSize(ok({ text: "я".repeat(60_000) })).structuredContent as {
+      text: string;
+      overLimit: boolean;
+      note: string;
+    };
+    expect(s.overLimit).toBe(true);
+    expect(s.text).toHaveLength(60_000);
+    expect(s.note).toContain("больше предела");
+  });
+
+  it("срезы с примечанием не выходят за норму", () => {
+    const r = limitResponseSize(ok({ checks: [{ a: rows(1000) }, { b: rows(1000) }], note: "итог" }));
+    expect(textOf(r).length).toBeLessThanOrEqual(50_000);
+  });
+
+  it("путь среза на второй странице — от начала списка", () => {
+    const big = Array.from({ length: 6 }, (_, i) => ({ id: i, lines: rows(1000) }));
+    const s = limitResponseSize(ok({ rows: big }), { offset: 3, continuable: true }).structuredContent as {
+      truncatedLists: { path: string }[];
+    };
+    expect(s.truncatedLists[0]!.path).toBe("rows[3].lines");
   });
 });
 
@@ -158,5 +189,98 @@ describe("итоги первыми", () => {
   it("ошибка не трогается", () => {
     const err = { content: [{ type: "text" as const, text: "нет" }], isError: true };
     expect(summaryFirst(err)).toBe(err);
+  });
+});
+
+describe("чтение по nextOffset при любом пределе: ни одна строка не теряется", () => {
+  type Tool = {
+    inputSchema: { parse: (a: object) => object };
+    handler: (a: object, e: object) => Promise<CallToolResult>;
+  };
+  const SET = "Document_СписаниеСРасчетногоСчета";
+  const LIMITS = [undefined, "10000", "11000", "12000", "15000", "20000", "30000", "44000", "45000"];
+
+  async function walk(limit: string | undefined) {
+    const f = fake1C(limit ? { ODATA_MAX_RESPONSE_CHARS: limit } : {});
+    const realGet = f.conn.client.getCollection.bind(f.conn.client);
+    const docs = Array.from({ length: 700 }, (_, i) => ({
+      Ref_Key: `d${i}`,
+      Number: `0000-${String(i).padStart(6, "0")}`,
+      Date: `2026-0${(i % 9) + 1}-15T00:00:00`,
+      Posted: true,
+      DeletionMark: false,
+      СуммаДокумента: i,
+      НомерВходящегоДокумента: "описание длинного входящего номера документа для объёма",
+    })).sort((a, b) => b.Date.localeCompare(a.Date) || a.Ref_Key.localeCompare(b.Ref_Key));
+    vi.spyOn(f.conn.client, "getCollection").mockImplementation((async (url: string) => {
+      const u = decodeURIComponent(url);
+      if (!u.startsWith(SET)) return realGet(url);
+      const top = Number(/\$top=(\d+)/.exec(u)![1]);
+      const skip = Number(/\$skip=(\d+)/.exec(u)?.[1] ?? 0);
+      return { value: docs.slice(skip, skip + top) };
+    }) as never);
+    const tool = (createServer(f.ctx) as unknown as { _registeredTools: Record<string, Tool> })
+      ._registeredTools["read.document.search_documents"]!;
+    const seen: string[] = [];
+    let offset = 0;
+    for (let i = 0; i < 300; i++) {
+      const r = await tool.handler(tool.inputSchema.parse({ entitySet: SET, limit: 500, offset }), {});
+      const s = r.structuredContent as {
+        rows: { ref: string }[];
+        offset: number;
+        returned: number;
+        nextOffset?: number;
+      };
+      expect(textOf(r).length).toBeLessThanOrEqual(limit && Number(limit) < 45_000 ? Number(limit) : 50_000);
+      expect(s.offset).toBe(offset);
+      expect(s.returned).toBe(s.rows.length);
+      seen.push(...s.rows.map((x) => x.ref));
+      if (s.nextOffset === undefined) break;
+      expect(s.nextOffset).toBe(offset + s.rows.length);
+      offset = s.nextOffset;
+    }
+    return seen;
+  }
+
+  it.each(LIMITS)("search_documents, предел %s: 700 из 700 без повторов", async (limit) => {
+    const seen = await walk(limit);
+    expect(seen).toHaveLength(700);
+    expect(new Set(seen).size).toBe(700);
+  });
+});
+
+describe("срез чужой страницы сдвигает продолжение", () => {
+  const page = (offset: number) =>
+    ok({
+      offset,
+      returned: 100,
+      truncated: true,
+      nextOffset: offset + 100,
+      note: `Показаны документы ${offset + 1}–${offset + 100}. Следующая страница: offset=${offset + 100}.`,
+      other: [1],
+      rows: rows(100),
+    });
+
+  it("nextOffset — следующая непрочитанная строка, offset не затирается, диапазон один", async () => {
+    await atLimit(10_000, () => {
+      const s = limitResponseSize(page(200)).structuredContent as {
+        offset: number;
+        returned: number;
+        nextOffset: number;
+        note: string;
+        rows: unknown[];
+      };
+      expect(s.rows.length).toBeLessThan(100);
+      expect(s.offset).toBe(200);
+      expect(s.returned).toBe(s.rows.length);
+      expect(s.nextOffset).toBe(200 + s.rows.length);
+      expect(s.note).toContain(`offset=${s.nextOffset}`);
+      expect(s.note).not.toContain("offset=300");
+    });
+  });
+
+  it("страница без среза не меняется", () => {
+    const small = ok({ offset: 5, returned: 1, nextOffset: 6, rows: rows(1) });
+    expect(limitResponseSize(small)).toBe(small);
   });
 });
