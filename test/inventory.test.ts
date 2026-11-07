@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createServer } from "../src/mcp/server.js";
-import { dimensionOf, resolveItemGroup, subtreeOf } from "../src/odata/inventory.js";
+import { aggregateStock, dimensionOf, resolveItemGroup, subtreeOf } from "../src/odata/inventory.js";
 import { fake1C } from "./helpers/fake-1c.js";
 
 afterEach(() => {
@@ -51,14 +51,24 @@ const CATALOG: Record<
 async function setup(balance: object[]) {
   const f = fake1C({ READ_ONLY: "true" });
   const realGet = f.conn.client.getCollection.bind(f.conn.client);
+  const seenReads: string[] = [];
   vi.spyOn(f.conn.client, "getCollection").mockImplementation((async (url: string) => {
     const u = decodeURIComponent(url);
+    seenReads.push(u);
     if (u.includes("/Balance")) return { value: balance };
     if (/^ChartOfAccounts/.test(u)) return realGet(url);
     if (u.startsWith("Catalog_Номенклатура") && u.includes("IsFolder eq true")) {
       return {
         value: Object.entries(CATALOG)
           .filter(([, v]) => v.IsFolder)
+          .map(([Ref_Key, v]) => ({ Ref_Key, ...v })),
+      };
+    }
+    if (u.startsWith("Catalog_Номенклатура") && u.includes("Parent_Key eq")) {
+      const groups = [...u.matchAll(/Parent_Key eq guid'([^']+)'/g)].map((m) => m[1]!);
+      return {
+        value: Object.entries(CATALOG)
+          .filter(([, v]) => !v.IsFolder && v.Parent_Key && groups.includes(v.Parent_Key))
           .map(([Ref_Key, v]) => ({ Ref_Key, ...v })),
       };
     }
@@ -81,7 +91,7 @@ async function setup(balance: object[]) {
     };
     return r;
   };
-  return { call };
+  return { call, reads: () => seenReads };
 }
 
 interface Item {
@@ -354,5 +364,81 @@ describe("отбор по группе", () => {
       { ref: "b", name: "b", parent: "a" },
     ];
     expect([...subtreeOf("a", groups)].sort()).toEqual(["a", "b"]);
+  });
+});
+
+describe("конфигурации без типов субконто", () => {
+  it("номенклатура — первая позиция, как раньше", () => {
+    const lines = aggregateStock(
+      [{ ExtDimension1: ITEM(1), КоличествоBalanceDr: 2, СуммаBalanceDr: 100 }],
+      false,
+    );
+    expect(lines).toEqual([expect.objectContaining({ itemRef: ITEM(1), cents: 10_000 })]);
+  });
+  it("строка с типами, но без номенклатуры, остаётся без неё", () => {
+    expect(aggregateStock([row([[STORE(1), WH]], 0, 10)], false)[0]!.itemRef).toBeUndefined();
+  });
+});
+
+describe("признак учёта по складам", () => {
+  it("нет остатков — признака нет: неизвестно, ведётся ли склад", async () => {
+    const { call } = await setup([]);
+    const s = (await call({ groupBy: "warehouse" })).structuredContent as unknown as Record<string, unknown>;
+    expect(s).not.toHaveProperty("warehouseTracked");
+    expect(s).not.toHaveProperty("note");
+  });
+  it("отбор по группе без остатков не отменяет ведение склада", async () => {
+    const { call } = await setup([
+      row(
+        [
+          [ITEM(3), NOM],
+          [STORE(1), WH],
+        ],
+        1,
+        10,
+      ),
+    ]);
+    const s = (await call({ groupBy: "warehouse", group: "Канцелярия" })).structuredContent as unknown as {
+      warehouseTracked: boolean;
+      items: unknown[];
+    };
+    expect(s.warehouseTracked).toBe(true);
+    expect(s.items).toEqual([]);
+  });
+  it("byWarehouse только на первой странице", async () => {
+    const many = Array.from({ length: 12 }, (_, i) =>
+      row(
+        [
+          [ITEM(100 + i), NOM],
+          [STORE(1), WH],
+        ],
+        1,
+        10,
+      ),
+    );
+    const { call } = await setup(many);
+    const first = (await call({ groupBy: "warehouse", limit: 5 })).structuredContent as unknown as Record<
+      string,
+      unknown
+    >;
+    const next = (await call({ groupBy: "warehouse", limit: 5, offset: 5 }))
+      .structuredContent as unknown as Record<string, unknown>;
+    expect(first).toHaveProperty("byWarehouse");
+    expect(next).not.toHaveProperty("byWarehouse");
+    expect(next["warehouseTracked"]).toBe(true);
+  });
+  it("пробелы в group — отказ проверки аргументов", async () => {
+    const { call } = await setup([]);
+    const r = await call({ group: "   " }).catch((e: Error) => ({
+      isError: true,
+      content: [{ text: e.message }],
+    }));
+    expect(r.isError).toBe(true);
+  });
+  it("отбор по группе не читает позиции по одной", async () => {
+    const many = Array.from({ length: 200 }, (_, i) => row([[ITEM(1000 + i), NOM]], 1, 1));
+    const { call, reads } = await setup(many);
+    await call({ group: "Канцелярия", limit: 5 });
+    expect(reads().filter((u) => u.startsWith("Catalog_Номенклатура")).length).toBeLessThanOrEqual(3);
   });
 });

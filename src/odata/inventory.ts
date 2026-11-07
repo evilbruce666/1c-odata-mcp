@@ -4,7 +4,7 @@ import { InputError } from "../errors.js";
 import type { ODataEntity } from "../types/odata.js";
 import { fetchAllForAggregation } from "./aggregate.js";
 import { num, readByRefs, resolveNames, GUID_RE } from "./accounting.js";
-import { cmp } from "./query.js";
+import { cmp, odataGuid, or } from "./query.js";
 import { entitySetOfType, refOf } from "./settlements-aging.js";
 
 /**
@@ -40,7 +40,14 @@ export interface StockLine {
 export function aggregateStock(rows: readonly ODataEntity[], byWarehouse: boolean): StockLine[] {
   const lines = new Map<string, StockLine>();
   for (const r of rows) {
-    const item = dimensionOf(r, CATALOGS.nomenclature);
+    // Старые конфигурации отдают субконто без _Type: номенклатура там определялась первой позицией, и других данных нет.
+    const typed = SUBCONTO_POSITIONS.some((i) => `ExtDimension${i}_Type` in r);
+    const legacyRef = typed ? undefined : refOf(r["ExtDimension1"]);
+    const item = typed
+      ? dimensionOf(r, CATALOGS.nomenclature)
+      : legacyRef
+        ? { ref: legacyRef, set: "" }
+        : undefined;
     const warehouse = byWarehouse ? dimensionOf(r, CATALOGS.warehouses) : undefined;
     const key = `${item?.ref ?? ""}|${warehouse?.ref ?? ""}`;
     const line = lines.get(key) ?? {
@@ -117,25 +124,61 @@ export interface ItemAttributes {
   groupRef?: string;
 }
 
-/** Название, артикул и родитель. Поля, которых нет в схеме базы, не запрашиваются: иначе 1С ответит 400. */
+/** Поля, которых нет в схеме базы, не запрашиваются: иначе 1С ответит 400. */
+async function itemFields(conn: Connection, set: string): Promise<string[]> {
+  const meta = await conn.getMetadata();
+  const props = new Set(meta.entities.get(set)?.properties.map((p) => p.name));
+  return ["Ref_Key", "Description", ...["Артикул", "Parent_Key"].filter((f) => props.has(f))];
+}
+
+const toAttributes = (r: ODataEntity): ItemAttributes => {
+  const article = typeof r["Артикул"] === "string" ? r["Артикул"].trim() : "";
+  const groupRef = refOf(r["Parent_Key"]);
+  return {
+    ...(r["Description"] ? { name: String(r["Description"]) } : {}),
+    ...(article ? { article } : {}),
+    ...(groupRef ? { groupRef } : {}),
+  };
+};
+
+/** Название, артикул и родитель указанных позиций. */
 export async function readItemAttributes(
   conn: Connection,
   set: string,
   refs: Iterable<string>,
 ): Promise<Map<string, ItemAttributes>> {
-  const meta = await conn.getMetadata();
-  const props = new Set(meta.entities.get(set)?.properties.map((p) => p.name));
-  const select = ["Ref_Key", "Description", ...["Артикул", "Parent_Key"].filter((f) => props.has(f))];
-  const rows = await readByRefs(conn, set, refs, select);
+  const rows = await readByRefs(conn, set, refs, await itemFields(conn, set));
+  return new Map([...rows].map(([ref, r]) => [ref, toAttributes(r)]));
+}
+
+/** Групп в одном $filter: длинный or упирается в лимит вложенности условий 1С. */
+const GROUP_FILTER_BATCH = 10;
+
+/**
+ * Позиции указанных групп. Запрос идёт по группам, а не по остаткам: иначе отбор на 10 000 позициях стоил бы
+ * 500 запросов на каждую страницу.
+ */
+export async function readItemsInGroups(
+  conn: Connection,
+  set: string,
+  groupRefs: Iterable<string>,
+): Promise<Map<string, ItemAttributes>> {
+  const select = await itemFields(conn, set);
+  const refs = [...groupRefs];
   const out = new Map<string, ItemAttributes>();
-  for (const [ref, r] of rows) {
-    const article = typeof r["Артикул"] === "string" ? r["Артикул"].trim() : "";
-    const groupRef = refOf(r["Parent_Key"]);
-    out.set(ref, {
-      ...(r["Description"] ? { name: String(r["Description"]) } : {}),
-      ...(article ? { article } : {}),
-      ...(groupRef ? { groupRef } : {}),
-    });
+  for (let i = 0; i < refs.length; i += GROUP_FILTER_BATCH) {
+    const { rows } = await fetchAllForAggregation(
+      conn,
+      set,
+      {
+        filter: or(
+          ...refs.slice(i, i + GROUP_FILTER_BATCH).map((ref) => cmp("Parent_Key", "eq", odataGuid(ref))),
+        ),
+        select,
+      },
+      "номенклатура группы",
+    );
+    for (const r of rows) out.set(String(r["Ref_Key"]), toAttributes(r));
   }
   return out;
 }

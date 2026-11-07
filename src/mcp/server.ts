@@ -458,7 +458,7 @@ export function createServer(ctx: ServerContext): McpServer {
           offset > 0 && typeof args.limit === "number" ? { ...args, limit: args.limit + offset } : args;
         const signal = (extra as { mcpReq?: { signal?: AbortSignal } } | undefined)?.mcpReq?.signal;
         const { toolDeadlineMs: deadlineMs = 0, maxResponseChars } = ctx.behavior;
-        return withToolCall({ signal, deadlineMs, maxResponseChars }, async () => {
+        return withToolCall({ signal, deadlineMs, maxResponseChars, pageStart: offset }, async () => {
           const result = await cb(toolArgs, extra);
           // Прерванный вызов не отдаёт результат: часть инструментов переживает сбой отдельного запроса
           // и показала бы неполные данные как обычный ответ.

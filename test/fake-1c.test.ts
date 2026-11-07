@@ -322,6 +322,19 @@ const OPTIONAL_OMIT: Record<string, string[]> = {
   "write.document.copy_document": ["lines"], // правки строк по номеру, не новые строки
 };
 
+describe("чтение со всеми необязательными флагами", () => {
+  // В прогонах выше флаги остаются false: ветка aging у должников из-за этого не выполнялась ни разу.
+  const reads = manifest.tools.filter((t) => t.name.startsWith("read."));
+  it.each(reads.map((t) => [t.name, t] as const))("%s", async (name, tool) => {
+    const raw: Record<string, unknown> = { ...argsFor(tool, true), ...OVERRIDES[name] };
+    for (const arg of OPTIONAL_OMIT[name] ?? []) delete raw[arg];
+    const props = (tool.inputSchema as { properties?: Record<string, { type?: string }> }).properties ?? {};
+    for (const [key, schema] of Object.entries(props)) if (schema.type === "boolean") raw[key] = true;
+    const { fake } = await call(name, raw);
+    expect(fake.violations, "запросы к полям, которых нет в схеме БП 3.0").toEqual([]);
+  });
+});
+
 describe("с заполненными необязательными аргументами", () => {
   // Фильтры и параметры, которые не задаются в основном прогоне. Синтетические строки («Тест» вместо
   // имени счёта или объекта) дают отказы бизнес-логики — здесь проверяется только схема запросов.

@@ -10,6 +10,8 @@ interface CallContext {
   signal?: AbortSignal;
   /** Предел текста ответа этого вызова (ODATA_MAX_RESPONSE_CHARS). */
   maxResponseChars?: number | undefined;
+  /** С какой строки окна начинается страница: строки до неё обёртка отбросит. */
+  pageStart?: number | undefined;
   /** Сработавший лимит времени отличается от отмены клиентом только текстом и видом ошибки. */
   deadline?: { signal: AbortSignal; ms: number };
 }
@@ -25,7 +27,12 @@ export const withConnection = <T>(signal: AbortSignal, fn: () => T): T => connec
 
 /** Выполняет вызов инструмента с отменой от клиента и лимитом времени (0 — без лимита). */
 export function withToolCall<T>(
-  o: { signal?: AbortSignal | undefined; deadlineMs: number; maxResponseChars?: number | undefined },
+  o: {
+    signal?: AbortSignal | undefined;
+    deadlineMs: number;
+    maxResponseChars?: number | undefined;
+    pageStart?: number | undefined;
+  },
   fn: () => Promise<T>,
 ): Promise<T> {
   const deadline =
@@ -36,6 +43,7 @@ export function withToolCall<T>(
       ...(signals.length ? { signal: AbortSignal.any(signals) } : {}),
       ...(deadline ? { deadline } : {}),
       maxResponseChars: o.maxResponseChars,
+      pageStart: o.pageStart,
     },
     fn,
   );
@@ -46,6 +54,12 @@ export const callSignal = (): AbortSignal | undefined => store.getStore()?.signa
 
 /** Предел текста ответа текущего вызова; undefined — действует предел по умолчанию. */
 export const callResponseLimit = (): number | undefined => store.getStore()?.maxResponseChars;
+
+/**
+ * Инструмент считает с начала и отдаёт окно limit+offset, а обёртка оставляет строки от offset. Подбирать имена и
+ * роли для отброшенных строк незачем: на 1С каждый такой запрос стоит около секунды.
+ */
+export const callPageStart = (): number => store.getStore()?.pageStart ?? 0;
 
 /** Ошибка прерванного вызова, если он прерван; иначе undefined. */
 export const callAbortError = (): ODataError | undefined => abortErrorOf(store.getStore());

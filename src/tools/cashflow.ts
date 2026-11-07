@@ -459,7 +459,12 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
             for (const [k, v] of await resolveNames(conn, cpSet, cpKeys)) cpNames.set(k.toLowerCase(), v);
         }
 
-        events.sort((a, b) => a.date.localeCompare(b.date));
+        events.sort(
+          (a, b) =>
+            a.date.localeCompare(b.date) ||
+            a.entitySet.localeCompare(b.entitySet) ||
+            String(a.number).localeCompare(String(b.number)),
+        );
         const inflowC = events.filter((e) => e.direction === "in").reduce((s, e) => s + e.cents, 0);
         const outflowC = events.filter((e) => e.direction === "out").reduce((s, e) => s + e.cents, 0);
         const allItems = events.map((e) => ({

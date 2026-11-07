@@ -29,6 +29,7 @@ import {
   loadItemGroups,
   nomenclatureSet,
   readItemAttributes,
+  readItemsInGroups,
   resolveItemGroup,
   subtreeOf,
   warehouseNames,
@@ -37,6 +38,7 @@ import {
   type StockLine,
 } from "../odata/inventory.js";
 import { InputError } from "../errors.js";
+import { callPageStart } from "../odata/call-context.js";
 import { collectDocuments, emptyMeta, addMeta, type ScanMeta } from "../odata/aggregate.js";
 import {
   getSalesResultSchema,
@@ -718,7 +720,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         "Остатки товаров/материалов: сальдо счетов 41/10/43 регистра Хозрасчетный, сгруппированное по номенклатуре. " +
         "Возвращает количество, сумму, артикул и группу номенклатуры (родитель). Можно ограничить организацией и группой " +
         "номенклатуры с её подгруппами (group). По умолчанию — текущие остатки; asOf=YYYY-MM-DD даёт остатки на конец даты. " +
-        "groupBy=warehouse разбивает по складам и добавляет итоги byWarehouse; если склад в субконто этих счетов не ведётся, " +
+        "groupBy=warehouse разбивает по складам и на первой странице добавляет итоги byWarehouse; если склад в субконто этих счетов не ведётся, " +
         "ответ скажет об этом (warehouseTracked=false), сумму и количество по складам из документов он не выводит. " +
         "Сумма на счетах без номенклатуры в субконто (например, 41.12) — в withoutNomenclature, она входит в totalAmount. " +
         "count — всего позиций. (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
@@ -732,6 +734,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           .describe("item — по номенклатуре (по умолчанию); warehouse — номенклатура в разрезе складов"),
         group: z
           .string()
+          .trim()
           .min(1)
           .optional()
           .describe(
@@ -756,6 +759,10 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         const byWarehouse = groupBy === "warehouse";
         const nomSet = await nomenclatureSet(conn);
         let lines = aggregateStock(rows, byWarehouse);
+        // До отбора по группе: при отборе может остаться только часть без склада, а вопрос про весь учёт.
+        const anyStock = lines.length > 0;
+        const tracked = lines.some((l) => l.warehouseRef);
+        const pageStart = callPageStart();
 
         // Группы нужны для отбора и названий; без отбора читаем только названия групп показанных позиций.
         const attributes = new Map<string, ItemAttributes>();
@@ -771,11 +778,8 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           groups = await loadItemGroups(conn, nomSet);
           selectedGroup = resolveItemGroup(group, groups);
           const allowed = subtreeOf(selectedGroup.ref, groups);
-          await readAttributes(lines.flatMap((l) => (l.itemRef ? [l.itemRef] : [])));
-          lines = lines.filter((l) => {
-            const parent = l.itemRef ? attributes.get(l.itemRef)?.groupRef : undefined;
-            return !!parent && allowed.has(parent);
-          });
+          for (const [ref, a] of await readItemsInGroups(conn, nomSet, allowed)) attributes.set(ref, a);
+          lines = lines.filter((l) => !!l.itemRef && attributes.has(l.itemRef));
         }
 
         const withItem = lines
@@ -788,15 +792,19 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
               (a.warehouseRef ?? "").localeCompare(b.warehouseRef ?? ""),
           );
         const shown = withItem.slice(0, limit);
-        if (!group) await readAttributes(shown.map((l) => l.itemRef));
+        // Строки до начала страницы обёртка отбросит: сведения для них у 1С не запрашиваем.
+        const page = shown.slice(pageStart);
+        if (!group) await readAttributes(page.map((l) => l.itemRef));
 
-        const parentRefs = [...new Set(shown.flatMap((l) => attributes.get(l.itemRef)?.groupRef ?? []))];
+        const parentRefs = [...new Set(page.flatMap((l) => attributes.get(l.itemRef)?.groupRef ?? []))];
         const groupNames = groups
           ? new Map(groups.map((g) => [g.ref, g.name]))
           : nomSet
             ? await resolveNames(conn, nomSet, parentRefs)
             : new Map<string, string>();
-        const warehouses = byWarehouse ? await warehouseNames(conn, lines) : new Map<string, string>();
+        const warehouses = byWarehouse
+          ? await warehouseNames(conn, pageStart ? page : lines)
+          : new Map<string, string>();
 
         const items = shown.map((l) => {
           const a = attributes.get(l.itemRef);
@@ -821,7 +829,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         const notes: string[] = [];
         if (noItem.length) {
           notes.push(
-            "В totalAmount входит withoutNomenclature: сумма на счетах, где номенклатура не ведётся в субконто (например, 41.12).",
+            "В totalAmount входит withoutNomenclature: сумма строк без номенклатуры в субконто (она не ведётся на счёте, как на 41.12, или не заполнена).",
           );
         }
 
@@ -833,8 +841,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           if (l.itemRef) t.positions += 1;
           warehouseTotals.set(key, t);
         }
-        const tracked = lines.some((l) => l.warehouseRef);
-        if (byWarehouse && !tracked && lines.length) {
+        if (byWarehouse && !tracked && anyStock) {
           notes.push(
             "В субконто остатков склада нет: эти счета ведутся без разбивки по складам, показаны итоги по номенклатуре.",
           );
@@ -846,7 +853,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           database: conn.cfg.name,
           organization: org.name,
           ...(asOf ? { asOf } : {}),
-          ...(byWarehouse ? { groupBy, warehouseTracked: tracked } : {}),
+          ...(byWarehouse ? { groupBy, ...(anyStock ? { warehouseTracked: tracked } : {}) } : {}),
           ...(selectedGroup
             ? { itemGroup: { name: selectedGroup.name, ref: selectedGroup.ref, includesSubgroups: true } }
             : {}),
@@ -862,7 +869,8 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
                 },
               }
             : {}),
-          ...(byWarehouse && tracked
+          // Итоги по складам на первой странице: на остальных они вытесняли бы сами строки.
+          ...(byWarehouse && tracked && pageStart === 0
             ? {
                 byWarehouse: [...warehouseTotals]
                   .map(([ref, t]) => ({

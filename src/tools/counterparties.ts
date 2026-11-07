@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import { callPageStart } from "../odata/call-context.js";
 import type { Connection, ServerContext } from "../context.js";
 import { ok, fail, guard, withTruncationNote, databaseField, organizationField } from "./_shared.js";
 import { fetchAll } from "../odata/pagination.js";
@@ -146,7 +147,11 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
           );
         const roles = await counterpartyRoles(
           conn,
-          found.filter((c) => !c.isFolder).map((c) => c.ref),
+          // Строки до начала страницы обёртка отбросит: роли для них у 1С не запрашиваем.
+          found
+            .slice(callPageStart())
+            .filter((c) => !c.isFolder)
+            .map((c) => c.ref),
         );
         const items = found.map((c) => {
           const r = roles.get(c.ref);

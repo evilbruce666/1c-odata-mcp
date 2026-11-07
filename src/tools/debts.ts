@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import { callPageStart } from "../odata/call-context.js";
 import type { Connection, ServerContext } from "../context.js";
 import { ok, fail, guard, databaseField, organizationField, dateField } from "./_shared.js";
 import { and, cmp, odataGuid } from "../odata/query.js";
@@ -191,7 +192,8 @@ async function settlementsReport(conn: Connection, side: SettlementSide, o: Sett
       ? await resolveNames(
           conn,
           cpSet,
-          top.map(([ref]) => ref),
+          // Строки до начала страницы обёртка отбросит: имена для них у 1С не запрашиваем.
+          top.slice(callPageStart()).map(([ref]) => ref),
         )
       : new Map<string, string>();
     return {
@@ -241,7 +243,7 @@ async function settlementsReport(conn: Connection, side: SettlementSide, o: Sett
     ? await resolveNames(
         conn,
         cpSet,
-        selected.map((x) => x.cp),
+        selected.slice(callPageStart()).map((x) => x.cp),
       )
     : new Map<string, string>();
 
@@ -307,6 +309,7 @@ async function settlementsReport(conn: Connection, side: SettlementSide, o: Sett
   return {
     head,
     totalCents,
+    total: eligible.length,
     list: selected.map(({ cp, a }) => ({
       counterparty: names.get(cp) ?? cp,
       ref: cp,
@@ -544,7 +547,7 @@ async function unpaidInvoices(
     ? await resolveNames(
         conn,
         cpSet,
-        shown.map((i) => i.counterpartyRef ?? ""),
+        shown.slice(callPageStart()).map((i) => i.counterpartyRef ?? ""),
       )
     : new Map<string, string>();
 
