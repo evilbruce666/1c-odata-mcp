@@ -109,10 +109,10 @@ export function resolveItemGroup(query: string, groups: readonly ItemGroup[]): I
   const named = (g: ItemGroup) => strictText(g.name.trim());
   const byRef = GUID_RE.test(q) ? groups.find((g) => g.ref.toLowerCase() === q.toLowerCase()) : undefined;
   const exact = groups.filter((g) => named(g) === strict);
-  const part = groups.filter((g) => named(g).includes(strict));
   // Похожие буквы только для названия целиком: по части «TP» выбрал бы «Стройматериалы», итог был бы чужой группы.
   const lookalike = groups.filter((g) => foldText(g.name.trim()) === foldText(q));
-  const found = byRef ? [byRef] : exact.length ? exact : part.length ? part : lookalike;
+  const part = groups.filter((g) => named(g).includes(strict));
+  const found = byRef ? [byRef] : exact.length ? exact : lookalike.length ? lookalike : part;
   if (found.length === 1) return found[0]!;
   if (!found.length) throw new InputError(`Группа номенклатуры "${query}" не найдена.`);
   const shown = found

@@ -211,3 +211,17 @@ describe("нагрузка на 1С при чтении по offset", () => {
     expect(stats.contracts).toHaveLength(1);
   });
 });
+
+describe("cashflowItem: больше 20 статей", () => {
+  it("отказ называет варианты с кодом и Ref_Key", async () => {
+    const { resolveCashflowItems } = await import("../src/odata/refilters.js");
+    const f = fake1C({ READ_ONLY: "true" });
+    const rows = Array.from({ length: 25 }, (_, i) => ({
+      Ref_Key: `dddddddd-0000-4000-8000-${String(i).padStart(12, "0")}`,
+      Code: String(i),
+      Description: `Аренда ${i}`,
+    }));
+    vi.spyOn(f.conn.client, "getCollection").mockResolvedValue({ value: rows.slice(0, 21) } as never);
+    await expect(resolveCashflowItems(f.conn, "Аренда")).rejects.toThrow(/Аренда 0 \(код 0, dddddddd/);
+  });
+});

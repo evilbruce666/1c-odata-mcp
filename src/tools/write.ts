@@ -146,6 +146,16 @@ function singleMatch(rows: readonly ODataEntity[], query: string, label: string)
   );
 }
 
+const catalogProps = async (conn: Connection, set: string): Promise<Set<string>> =>
+  new Set((await conn.getMetadata()).entities.get(set)?.properties.map((p) => p.name));
+
+/** Рабочие объекты: помеченные на удаление и папки документ не должен получать. */
+const activeOnly = (props: ReadonlySet<string>): string =>
+  and(
+    props.has("DeletionMark") ? cmp("DeletionMark", "eq", "false") : undefined,
+    props.has("IsFolder") ? cmp("IsFolder", "eq", "false") : undefined,
+  );
+
 /**
  * Объект справочника по Ref_Key, коду или названию. Помеченные на удаление и папки не выбираются. Точное название
  * ищется отдельным запросом: среди совпадений по части оно могло бы не попасть в выборку и потеряться.
@@ -157,12 +167,9 @@ async function findCatalogObject(
   label: string,
   codeFirst: boolean,
 ): Promise<ODataEntity | undefined> {
-  const props = new Set((await conn.getMetadata()).entities.get(set)?.properties.map((p) => p.name));
+  const props = await catalogProps(conn, set);
   const select = ["Ref_Key", "Description", ...(props.has("Code") ? ["Code"] : [])];
-  const active = and(
-    props.has("DeletionMark") ? cmp("DeletionMark", "eq", "false") : undefined,
-    props.has("IsFolder") ? cmp("IsFolder", "eq", "false") : undefined,
-  );
+  const active = activeOnly(props);
   const read = async (condition: string) =>
     (
       await fetchAll<ODataEntity>(
@@ -177,12 +184,27 @@ async function findCatalogObject(
     const rows = await read(cmp("Ref_Key", "eq", odataGuid(query.replace(/[{}]/g, ""))));
     return rows[0];
   }
+  // Пустой substringof в 1С находит всё, и единственный объект выбрался бы по строке из пробелов.
+  if (!query) throw new InputError(`${label}: пустое значение. Ничего не записано.`);
   const byCode = () =>
     props.has("Code") ? read(cmp("Code", "eq", odataString(query))) : Promise.resolve([] as ODataEntity[]);
   const byName = () => read(cmp("Description", "eq", odataString(query)));
   for (const step of codeFirst ? [byCode, byName] : [byName, byCode]) {
     const rows = await step();
     if (rows.length) return singleMatch(rows, query, label);
+    // Название из цифр у помеченного объекта: иначе молча выбрался бы другой объект с таким кодом.
+    if (step === byName && /^\d+$/.test(query)) {
+      const { rows: hidden } = await fetchAll<ODataEntity>(
+        conn.client,
+        set,
+        { filter: cmp("Description", "eq", odataString(query)), select },
+        1,
+        1,
+      );
+      if (hidden.length) {
+        throw new InputError(`${label}: «${query}» помечен на удаление или это папка. Ничего не записано.`);
+      }
+    }
   }
   const partial = await read(contains("Description", query));
   if (!partial.length) return undefined;
@@ -199,6 +221,7 @@ async function findCatalogObject(
 /** Резолвит склад по названию; если не задан и склад один — берёт его; иначе undefined. */
 async function resolveWarehouse(conn: Connection, rawName: string | undefined): Promise<string | undefined> {
   const name = rawName?.trim();
+  if (rawName !== undefined && !name) throw new InputError("Склад: пустое значение. Ничего не записано.");
   const set = resolveEntity(CATALOGS.warehouses, await conn.available());
   if (!set) {
     if (name)
@@ -212,7 +235,14 @@ async function resolveWarehouse(conn: Connection, rawName: string | undefined): 
     if (!found) throw new InputError(`Склад "${name}" не найден (см. list_entities / справочник складов).`);
     return String(found["Ref_Key"]);
   }
-  const { rows } = await fetchAll(conn.client, set, { select: ["Ref_Key"] }, 2, 2);
+  const active = activeOnly(await catalogProps(conn, set));
+  const { rows } = await fetchAll(
+    conn.client,
+    set,
+    { filter: active || undefined, select: ["Ref_Key"] },
+    2,
+    2,
+  );
   return rows.length === 1 ? String((rows[0] as ODataEntity)["Ref_Key"]) : undefined;
 }
 
@@ -2471,7 +2501,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     organization: organizationField,
     counterpartyRef: z.string().describe("Ref_Key контрагента"),
     contractRef: z.string().optional().describe("Ref_Key договора (необязательно)"),
-    warehouse: z.string().optional().describe("Название склада (если в базе несколько)"),
+    warehouse: z.string().optional().describe("Название, код или Ref_Key склада (если в базе несколько)"),
     date: z.string().optional().describe("Дата документа YYYY-MM-DD (по умолчанию сегодня)"),
     sumIncludesVat: z.boolean().default(true).describe("Сумма включает НДС"),
   };
@@ -2964,8 +2994,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
-        fromWarehouse: z.string().describe("Название склада-отправителя"),
-        toWarehouse: z.string().describe("Название склада-получателя"),
+        fromWarehouse: z.string().describe("Склад-отправитель: название, код или Ref_Key"),
+        toWarehouse: z.string().describe("Склад-получатель: название, код или Ref_Key"),
         date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
         lines: whLines,
         confirm: confirmField,
@@ -3013,7 +3043,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
-        warehouse: z.string().optional().describe("Название склада (если несколько)"),
+        warehouse: z.string().optional().describe("Название, код или Ref_Key склада (если несколько)"),
         inventoryRef: z.string().optional().describe("Ref_Key инвентаризации-основания (необязательно)"),
         date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
         lines: whLines,
@@ -3061,7 +3091,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
-        warehouse: z.string().optional().describe("Название склада (если несколько)"),
+        warehouse: z.string().optional().describe("Название, код или Ref_Key склада (если несколько)"),
         inventoryRef: z.string().optional().describe("Ref_Key инвентаризации-основания (необязательно)"),
         date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
         lines: whLines,
@@ -3110,7 +3140,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
-        warehouse: z.string().optional().describe("Название склада (если несколько)"),
+        warehouse: z.string().optional().describe("Название, код или Ref_Key склада (если несколько)"),
         date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
         lines: z
           .array(

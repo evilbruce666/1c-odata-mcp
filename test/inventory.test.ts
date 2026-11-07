@@ -647,10 +647,14 @@ describe("уровни сопоставления и свежесть справ
       const { call } = await setup([row([[ITEM(50), NOM]], 1, 10), row([[ITEM(51), NOM]], 1, 20)]);
       const both = (await call({ query: "3m" })).structuredContent as unknown as {
         items: Item[];
-        note?: string;
+        totalAmount: number;
+        otherSimilar: { count: number; amount: number; examples: string[] };
+        note: string;
       };
       expect(both.items.map((i) => i.item)).toEqual(["Лента 3M"]);
-      expect(both.note ?? "").not.toContain("похожих букв");
+      expect(both.totalAmount).toBe(20);
+      expect(both.otherSimilar).toEqual({ count: 1, amount: 10, examples: ["Кабель 3м"] });
+      expect(both.note).toContain("otherSimilar");
       const { call: call2 } = await setup([row([[ITEM(50), NOM]], 1, 10)]);
       const look = (await call2({ query: "3m" })).structuredContent as unknown as {
         items: Item[];
@@ -669,6 +673,10 @@ describe("уровни сопоставления и свежесть справ
     expect(noStock.note).toContain("остатка на счетах нет");
     const unknown = (await call({ query: "бумаги" })).structuredContent as unknown as { note: string };
     expect(unknown.note).toContain("не найдено");
+    const inGroup = (await call({ query: "стол", group: "Канцелярия" })).structuredContent as unknown as {
+      note: string;
+    };
+    expect(inGroup.note).toContain("В выбранной группе такого товара нет");
   });
   it("первая страница читает свежий справочник: новый товар виден сразу", async () => {
     const { call, reads } = await setup([row([[ITEM(1), NOM]], 1, 10)]);
@@ -679,5 +687,15 @@ describe("уровни сопоставления и свежесть справ
   it("strictText: регистр и ё", () => {
     expect(strictText("ЁЛКА")).toBe("елка");
     expect(strictText("A4")).not.toBe(strictText("А4"));
+  });
+});
+
+describe("группа: название целиком важнее части", () => {
+  it("«A4» латиницей выбирает группу «А4», а не «Бумага A4»", () => {
+    const groups = [
+      { ref: GROUP(1), name: "А4" },
+      { ref: GROUP(2), name: "Бумага A4" },
+    ];
+    expect(resolveItemGroup("A4", groups).ref).toBe(GROUP(1));
   });
 });

@@ -729,7 +729,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         "groupBy=warehouse разбивает по складам и на первой странице добавляет итоги byWarehouse; если склад в субконто этих счетов не ведётся, " +
         "ответ скажет об этом (warehouseTracked=false), сумму и количество по складам из документов он не выводит. " +
         "Сумма на счетах без номенклатуры в субконто (например, 41.12) — в withoutNomenclature, она входит в totalAmount. " +
-        "query находит товар по части названия или артикулу: все части запроса, без учёта регистра, похожие буквы кириллицы и латиницы совпадают, словоформы не распознаются (пишите основу: «бумаг»). Итоги — только по найденному; при пустом ответе примечание говорит, есть ли товар в справочнике. count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть. (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
+        "query находит товар по части названия или артикулу: все части запроса, без учёта регистра; похожие буквы кириллицы и латиницы совпадают, только если точных совпадений нет, остальные названы в otherSimilar; словоформы не распознаются (пишите основу: «бумаг»). Итоги — только по найденному; при пустом ответе примечание говорит, есть ли товар в справочнике или группе. count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть. (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
@@ -790,6 +790,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         };
         let selectedGroup: ItemGroup | undefined;
         let lookalikeMatch = false;
+        let otherSimilar: StockLine[] = [];
         let groups: ItemGroup[] | undefined;
         if (group) {
           if (!nomSet)
@@ -812,8 +813,11 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
             });
           // Сначала буквально; похожие буквы только если ничего нет: «3M» иначе находил бы и «Кабель 3м».
           const literal = matching(strictText);
-          lines = literal.length ? literal : matching(foldText);
+          const similar = matching(foldText);
+          lines = literal.length ? literal : similar;
           lookalikeMatch = !literal.length && lines.length > 0;
+          // «А4» и «A4» в одной базе: итог только по буквальным занизил бы остаток, поэтому остальные названы.
+          otherSimilar = literal.length ? similar.filter((l) => !literal.includes(l)) : [];
         }
 
         const withItem = lines
@@ -864,17 +868,26 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         if (query && nomSet && !(await articlePublished(conn, nomSet))) {
           notes.push("Артикул не опубликован в OData: поиск шёл только по названию.");
         }
+        if (otherSimilar.length) {
+          notes.push(
+            "Ещё есть позиции, похожие на запрос другой раскладкой букв (А и A): в итог они не вошли, см. otherSimilar. Чтобы показать их, повторите поиск теми же буквами, что в их названии.",
+          );
+        }
         if (lookalikeMatch) {
           notes.push(
             "Точных совпадений нет: найдено с учётом похожих букв кириллицы и латиницы, проверьте позиции.",
           );
         }
         if (query && !lines.length) {
-          const inCatalog = [...attributes.values()].some((a) => matchesItemQuery(a, query));
+          const known = [...attributes.values()].some((a) => matchesItemQuery(a, query, strictText));
           notes.push(
-            inCatalog
-              ? "Товар есть в справочнике, но остатка на счетах нет."
-              : "В справочнике такого товара не найдено. Попробуйте основу слова (бумаг, а не бумаги) или другую часть названия.",
+            group
+              ? known
+                ? "Товар есть в выбранной группе, но остатка на счетах нет (с учётом других отборов)."
+                : "В выбранной группе такого товара нет; вне группы поиск не проверял."
+              : known
+                ? "Товар есть в справочнике, но остатка на счетах нет (с учётом других отборов)."
+                : "В справочнике такого товара не найдено. Попробуйте основу слова (бумаг, а не бумаги) или другую часть названия.",
           );
         }
         if (noItem.length) {
@@ -911,6 +924,17 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
             ? { groupBy, ...(anyStock && typesKnown ? { warehouseTracked: tracked } : {}) }
             : {}),
           ...(query ? { query } : {}),
+          ...(otherSimilar.length
+            ? {
+                otherSimilar: {
+                  count: otherSimilar.length,
+                  amount: fromCents(otherSimilar.reduce((t, l) => t + l.cents, 0)),
+                  examples: [...new Set(otherSimilar.map((l) => attributes.get(l.itemRef ?? "")?.name ?? ""))]
+                    .filter(Boolean)
+                    .slice(0, 5),
+                },
+              }
+            : {}),
           ...(selectedGroup
             ? { itemGroup: { name: selectedGroup.name, ref: selectedGroup.ref, includesSubgroups: true } }
             : {}),

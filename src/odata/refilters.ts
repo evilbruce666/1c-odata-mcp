@@ -91,8 +91,15 @@ export async function resolveCashflowItems(
   );
   // Часть статей не вошла бы в отбор, и сумма оказалась бы заниженной без предупреждения.
   if (rows.length > MATCHES_LIMIT) {
+    const variants = rows
+      .slice(0, 10)
+      .map(
+        (r) =>
+          `${String(r["Description"] ?? "")} (${r["Code"] ? `код ${String(r["Code"]).trim()}, ` : ""}${String(r["Ref_Key"])})`,
+      )
+      .join("; ");
     throw new InputError(
-      `Под «${query}» подходит больше ${MATCHES_LIMIT} статей ДДС: уточните название или код.`,
+      `Под «${query}» подходит больше ${MATCHES_LIMIT} статей ДДС, например: ${variants}. Укажите Ref_Key нужной статьи или её код.`,
     );
   }
   return rows.map((r) => ({

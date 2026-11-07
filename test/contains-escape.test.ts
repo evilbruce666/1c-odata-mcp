@@ -73,7 +73,12 @@ describe("выбор склада при записи", () => {
         }),
         {},
       );
-    return { call, queries };
+    const callNoWarehouse = () =>
+      tool.handler(
+        tool.inputSchema.parse({ lines: [{ nomenclatureRef: ref(9), quantity: 1 }], date: "2026-11-01" }),
+        {},
+      );
+    return { call, callNoWarehouse, queries };
   }
   const text = (r: { content: { text: string }[] }) => r.content[0]!.text;
 
@@ -123,6 +128,31 @@ describe("выбор склада при записи", () => {
     ]);
     await call("  Склад ");
     expect(queries[0]).toContain("Description eq 'Склад'");
+  });
+  it("строка из пробелов — отказ, а не выбор единственного", async () => {
+    const { call } = setup([{ Ref_Key: ref(1), Description: "Основной" }]);
+    const r = await call("   ");
+    expect(r.isError).toBe(true);
+    expect(text(r)).toContain("пустое значение");
+  });
+  it("без названия: помеченный склад и папка не считаются, рабочий выбирается", async () => {
+    const { queries, callNoWarehouse } = setup([
+      { Ref_Key: ref(1), Description: "Основной" },
+      { Ref_Key: ref(2), Description: "Копия", DeletionMark: true },
+      { Ref_Key: ref(3), Description: "Папка", IsFolder: true },
+    ]);
+    await callNoWarehouse();
+    expect(queries[0]).toContain("DeletionMark eq false");
+    expect(queries[0]).toContain("IsFolder eq false");
+  });
+  it("название из цифр у помеченного склада: отказ, а не склад с таким кодом", async () => {
+    const { call } = setup([
+      { Ref_Key: ref(1), Description: "12", DeletionMark: true },
+      { Ref_Key: ref(2), Description: "Другой", Code: "12" },
+    ]);
+    const r = await call("12");
+    expect(r.isError).toBe(true);
+    expect(text(r)).toContain("помечен на удаление");
   });
   it("нет такого склада — отказ", async () => {
     const { call } = setup([{ Ref_Key: ref(1), Description: "Основной" }]);

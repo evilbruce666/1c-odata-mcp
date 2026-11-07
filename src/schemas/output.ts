@@ -501,6 +501,10 @@ export const getInventoryResultSchema = z
     groupBy: z.string().optional(),
     warehouseTracked: z.boolean().optional(),
     query: z.string().optional(),
+    otherSimilar: z
+      .object({ count: z.number(), amount: z.number(), examples: z.array(z.string()) })
+      .passthrough()
+      .optional(),
     itemGroup: z.object({ name: z.string(), ref: z.string() }).passthrough().optional(),
     withoutNomenclature: z.object({ quantity: z.number(), amount: z.number() }).passthrough().optional(),
     byWarehouse: z
