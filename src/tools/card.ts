@@ -11,6 +11,7 @@ import {
   elementChars,
   fitToChars,
   MAX_RESPONSE_CHARS,
+  renderJson,
   offsetField,
   pageOf,
   snapshotField,
@@ -339,7 +340,7 @@ async function accountCard(
     count: entries.length,
     ...(groups ? { groups } : {}),
   };
-  const shown = fitToChars(rows, JSON.stringify(head, null, 2).length);
+  const shown = fitToChars(rows, renderJson(head).length);
   const nextOffset = o.offset + shown.length;
   const truncated = !o.summaryOnly && nextOffset < entries.length;
   const changes = snapshotFields(head, o.snapshot);

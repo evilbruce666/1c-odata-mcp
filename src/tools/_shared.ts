@@ -4,6 +4,7 @@ import { z } from "zod";
 import { ODataError } from "../odata/errors.js";
 import { NotPublishedError, publicationHelp } from "../odata/publication.js";
 import { AggregateOverflowError } from "../odata/aggregate.js";
+import { callResponseLimit } from "../odata/call-context.js";
 import { InputError } from "../errors.js";
 import { logger } from "../logger.js";
 
@@ -34,6 +35,9 @@ export function dateField(label: string): z.ZodString {
   return z.string().regex(DATE_RE, "Дата должна быть в формате YYYY-MM-DD").describe(`${label} (YYYY-MM-DD)`);
 }
 
+/** Текст ответа и расчёты размера страницы: единое место, где задан вид JSON в ответах. */
+export const renderJson = (data: unknown): string => JSON.stringify(data, null, 2);
+
 /**
  * Аннотации инструментов (подсказки клиенту MCP о характере операции).
  * openWorldHint — обращение к внешней системе (1С). readOnlyHint — только чтение.
@@ -54,7 +58,7 @@ export const DESTRUCTIVE_HINTS = {
  */
 export function ok(data: unknown): CallToolResult {
   return {
-    content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+    content: [{ type: "text", text: renderJson(data) }],
     structuredContent: data as Record<string, unknown>,
   };
 }
@@ -116,14 +120,20 @@ export async function guard(toolName: string, fn: () => Promise<CallToolResult>)
  */
 export const MAX_RESPONSE_CHARS = 45_000;
 
+/** Норма ответа: больше клиент уносит в файл и теряет конец (проверяет test/fake-1c.test.ts). */
+export const RESPONSE_CHARS_NORM = 50_000;
+
+/** Предел текста текущего вызова: настройка ODATA_MAX_RESPONSE_CHARS, по умолчанию MAX_RESPONSE_CHARS. */
+export const responseCharsLimit = (): number => callResponseLimit() ?? MAX_RESPONSE_CHARS;
+
 /** Символов, которые значение занимает в ответе ok() как элемент массива верхнего уровня. */
 export const elementChars = (v: unknown): number => {
-  const text = JSON.stringify(v, null, 2);
+  const text = renderJson(v);
   return text.length + text.split("\n").length * 4 + 2;
 };
 
 /** Сколько первых строк поместится в остаток предела. Хотя бы одна — иначе offset не сдвинется. */
-export function fitToChars<T>(items: readonly T[], usedChars: number, maxChars = MAX_RESPONSE_CHARS): T[] {
+export function fitToChars<T>(items: readonly T[], usedChars: number, maxChars = responseCharsLimit()): T[] {
   let used = usedChars;
   let n = 0;
   for (const item of items) {
@@ -176,7 +186,7 @@ export function pageOf<T>(
   },
 ): { items: T[]; page: Record<string, unknown>; note?: string } {
   const candidates = all.slice(o.offset, o.limit === undefined ? undefined : o.offset + o.limit);
-  const items = fitToChars(candidates, JSON.stringify(o.head, null, 2).length);
+  const items = fitToChars(candidates, renderJson(o.head).length);
   const next = o.offset + items.length;
   const more = next < all.length;
   const unit = o.unit ?? "строки";

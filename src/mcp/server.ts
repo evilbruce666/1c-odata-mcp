@@ -29,12 +29,16 @@ import {
   READ_HINTS,
   WRITE_HINTS,
   DESTRUCTIVE_HINTS,
+  MAX_RESPONSE_CHARS,
+  RESPONSE_CHARS_NORM,
   elementChars,
   fail,
   fitToChars,
   guard,
   offsetField,
   ok,
+  renderJson,
+  responseCharsLimit,
 } from "../tools/_shared.js";
 
 /** Версия берётся из package.json (в собранном пакете он на два уровня выше dist/mcp/). */
@@ -124,21 +128,60 @@ export function withDatabaseInfo(
         }
       : {}),
   };
-  const text = JSON.stringify(data, null, 2);
+  const text = renderJson(data);
   const content = result.content.map((item) =>
-    item.type === "text" && item.text === text
-      ? { ...item, text: JSON.stringify(structuredContent, null, 2) }
-      : item,
+    item.type === "text" && item.text === text ? { ...item, text: renderJson(structuredContent) } : item,
   );
   return { ...result, content, structuredContent };
 }
 
-/** Норма ответа: больше клиент уносит в файл и теряет конец. */
-export const RESPONSE_CHARS_NORM = 50_000;
+type NestedList = { path: string; holder: unknown[]; chars: number };
+
+/**
+ * Самый длинный вложенный список: обрезка верхнего уровня его не видит, а элемент с большим списком внутри
+ * (проверка закрытия месяца, табличная часть документа) один превышает предел. skip — список со страницами.
+ */
+function largestList(value: unknown, path: string, skip?: string): NestedList | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const own: NestedList | undefined =
+    Array.isArray(value) && value.length > 1 && path !== skip
+      ? { path, holder: value, chars: renderJson(value).length }
+      : undefined;
+  const children = Array.isArray(value)
+    ? value.map((v, i) => largestList(v, `${path}[${i}]`, skip))
+    : Object.entries(value).map(([k, v]) => largestList(v, path ? `${path}.${k}` : k, skip));
+  return [own, ...children].reduce<NestedList | undefined>(
+    (best, c) => (c && (!best || c.chars > best.chars) ? c : best),
+    undefined,
+  );
+}
+
+type ListCut = { path: string; total: number; returned: number };
+
+/**
+ * Режет вложенные списки, пока ответ не уложится. Продолжения у них нет, поэтому каждый срез назван в ответе.
+ * Мелкие списки не трогает: ответ раздувают не они, и срез не помог бы, а данные потерял.
+ */
+function fitNestedLists(data: Record<string, unknown>, maxChars: number, skip?: string) {
+  const fitted = structuredClone(data);
+  const cuts: ListCut[] = [];
+  for (let size = renderJson(fitted).length; size > maxChars && cuts.length < 10;) {
+    const list = largestList(fitted, "", skip);
+    if (!list || list.chars < maxChars / 4) break;
+    const kept = fitToChars(list.holder, 0, Math.max(maxChars - (size - list.chars), 0)).length;
+    if (kept >= list.holder.length) break;
+    cuts.push({ path: list.path, total: list.holder.length, returned: kept });
+    list.holder.length = kept;
+    size = renderJson(fitted).length;
+  }
+  return { fitted, cuts };
+}
 
 /**
  * Страницы для инструментов без своих: длинный ответ режется по самому большому списку верхнего уровня,
  * с продолжением по offset. Инструмент считает всё заново, поэтому порядок и итоги рядом со списком те же.
+ * Без продолжения сначала режутся большие вложенные списки: иначе элемент с таким списком (проверка закрытия
+ * месяца) пропал бы целиком. Срезы вложенных списков перечислены в truncatedLists.
  */
 export function limitResponseSize(
   result: CallToolResult,
@@ -148,39 +191,77 @@ export function limitResponseSize(
   const data = result.structuredContent as Record<string, unknown> | undefined;
   const first = result.content[0];
   if (result.isError || !data || first?.type !== "text") return result;
-  if (offset === 0 && first.text.length <= RESPONSE_CHARS_NORM) return result;
+  // По умолчанию срабатывает на норме, а страницы считаются с запасом к ней; настроенный предел строгий.
+  const limit = responseCharsLimit();
+  const trigger = limit >= MAX_RESPONSE_CHARS ? RESPONSE_CHARS_NORM : limit;
+  if (offset === 0 && first.text.length <= trigger) return result;
   const field = Object.keys(data)
     .filter((k) => Array.isArray(data[k]))
     .sort((a, b) => elementChars(data[b]) - elementChars(data[a]))[0];
-  if (!field) return result;
-  const list = data[field] as unknown[];
-  const { [field]: _list, ...rest } = data;
-  const kept = fitToChars(list.slice(offset), JSON.stringify(rest, null, 2).length + 500);
-  const next = offset + kept.length;
-  const more = next < list.length;
-  const hint = !more
-    ? ""
-    : o.continuable
-      ? `Показаны строки ${offset + 1}–${next} из ${list.length} списка ${field}. Следующая страница: offset=${next}.`
-      : `Показаны строки ${offset + 1}–${next} из ${list.length} списка ${field}, больше не помещается. Уточните отбор или период.`;
-  const note = [data["note"], hint].filter(Boolean).join(" ");
+  const before = field && !o.continuable ? fitNestedLists(data, trigger, field) : undefined;
+  const source = before?.fitted ?? data;
+  let structured = source;
+  let hint = "";
+  if (field) {
+    const list = source[field] as unknown[];
+    const { [field]: _list, ...rest } = source;
+    const kept = fitToChars(list.slice(offset), renderJson(rest).length + 500);
+    const next = offset + kept.length;
+    const more = next < list.length;
+    hint = !more
+      ? ""
+      : o.continuable
+        ? `Показаны строки ${offset + 1}–${next} из ${list.length} списка ${field}. Следующая страница: offset=${next}.`
+        : `Показаны строки ${offset + 1}–${next} из ${list.length} списка ${field}, больше не помещается. Уточните отбор или период.`;
+    structured = {
+      ...rest,
+      [field]: kept,
+      listField: field,
+      listTotal: list.length,
+      ...(data["count"] === list.length ? { count: kept.length } : {}),
+      offset,
+      returned: kept.length,
+      truncated: more || data["truncated"] === true,
+      ...(more && o.continuable ? { nextOffset: next } : {}),
+    };
+  }
+  const after = fitNestedLists(structured, trigger, field);
+  const cuts = [...(before?.cuts ?? []), ...after.cuts];
+  if (!field && !cuts.length) return result;
+  const cutHint = cuts.length
+    ? `Списки показаны не полностью, продолжения нет: ${cuts
+        .map((c) => `${c.path} — ${c.returned} из ${c.total}`)
+        .join(", ")}. Уточните отбор или период.`
+    : "";
+  const note = [data["note"], hint, cutHint].filter(Boolean).join(" ");
   const structuredContent = {
-    ...rest,
-    [field]: kept,
-    listField: field,
-    listTotal: list.length,
-    ...(data["count"] === list.length ? { count: kept.length } : {}),
-    offset,
-    returned: kept.length,
-    truncated: more || data["truncated"] === true,
-    ...(more && o.continuable ? { nextOffset: next } : {}),
+    ...after.fitted,
+    ...(cuts.length ? { truncated: true, truncatedLists: cuts } : {}),
     ...(note ? { note } : {}),
   };
   return {
     ...result,
-    content: [{ type: "text", text: JSON.stringify(structuredContent, null, 2) }, ...result.content.slice(1)],
+    content: [{ type: "text", text: renderJson(structuredContent) }, ...result.content.slice(1)],
     structuredContent,
   };
+}
+
+/**
+ * Простые поля раньше объектов и списков, самый большой — последним: клиент, обрезающий длинный ответ сам,
+ * не теряет итоги, предупреждения и признак неполноты. Содержание ответа не меняется.
+ */
+export function summaryFirst(result: CallToolResult): CallToolResult {
+  const data = result.structuredContent;
+  if (result.isError || !data || typeof data !== "object") return result;
+  const weight = (v: unknown) => (v && typeof v === "object" ? renderJson(v).length : 0);
+  const structuredContent = Object.fromEntries(
+    Object.entries(data).sort(([, a], [, b]) => weight(a) - weight(b)),
+  );
+  const text = renderJson(data);
+  const content = result.content.map((item) =>
+    item.type === "text" && item.text === text ? { ...item, text: renderJson(structuredContent) } : item,
+  );
+  return { ...result, content, structuredContent };
 }
 
 /**
@@ -249,13 +330,16 @@ export function createServer(ctx: ServerContext): McpServer {
         const toolArgs =
           offset > 0 && typeof args.limit === "number" ? { ...args, limit: args.limit + offset } : args;
         const signal = (extra as { mcpReq?: { signal?: AbortSignal } } | undefined)?.mcpReq?.signal;
-        return withToolCall({ signal, deadlineMs: ctx.behavior.toolDeadlineMs }, async () => {
+        const { toolDeadlineMs: deadlineMs = 0, maxResponseChars } = ctx.behavior;
+        return withToolCall({ signal, deadlineMs, maxResponseChars }, async () => {
           const result = await cb(toolArgs, extra);
           // Прерванный вызов не отдаёт результат: часть инструментов переживает сбой отдельного запроса
           // и показала бы неполные данные как обычный ответ.
           const aborted = callAbortError();
           if (aborted) return fail(`[${aborted.kind}] ${aborted.message}`, aborted.kind);
-          return limitResponseSize(withDatabaseInfo(ctx, args, result), { offset, continuable });
+          return summaryFirst(
+            limitResponseSize(withDatabaseInfo(ctx, args, result), { offset, continuable }),
+          );
         });
       });
     }
@@ -336,7 +420,7 @@ export function createServer(ctx: ServerContext): McpServer {
           return result;
         const structuredContent = { ...result.structuredContent, operationId: token };
         const content = result.content.map((item) =>
-          item.type === "text" ? { ...item, text: JSON.stringify(structuredContent, null, 2) } : item,
+          item.type === "text" ? { ...item, text: renderJson(structuredContent) } : item,
         );
         return { ...result, content, structuredContent };
       });

@@ -200,6 +200,14 @@ async function call(name: string, raw: Record<string, unknown>) {
     text.length,
     `${name}: ответ ${text.length} символов — больше ${MAX_RESPONSE_CHARS}, в контекст модели не поместится`,
   ).toBeLessThanOrEqual(MAX_RESPONSE_CHARS);
+  // Клиент, обрезающий длинный ответ сам, не должен потерять итоги и признак неполноты.
+  if (!r.isError && name.startsWith("read.") && name !== "read.system.list_databases") {
+    const kinds = Object.values(r.structuredContent as object).map((v) =>
+      v && typeof v === "object" ? 1 : 0,
+    );
+    expect(kinds, `${name}: простые поля должны идти раньше списков`).toEqual([...kinds].sort());
+    expect(JSON.parse(text)).toEqual(r.structuredContent);
+  }
   // Настоящий MCP-клиент отвергает ответ, не прошедший outputSchema, а прямой вызов обработчика — нет.
   if (!r.isError && registered.outputSchema) {
     const parsed = registered.outputSchema.safeParse(r.structuredContent);
