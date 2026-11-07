@@ -254,7 +254,7 @@ export function createServer(ctx: ServerContext): McpServer {
           // Прерванный вызов не отдаёт результат: часть инструментов переживает сбой отдельного запроса
           // и показала бы неполные данные как обычный ответ.
           const aborted = callAbortError();
-          if (aborted) return fail(`[${aborted.kind}] ${aborted.message}`);
+          if (aborted) return fail(`[${aborted.kind}] ${aborted.message}`, aborted.kind);
           return limitResponseSize(withDatabaseInfo(ctx, args, result), { offset, continuable });
         });
       });

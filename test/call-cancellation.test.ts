@@ -5,6 +5,7 @@ import { cached } from "../src/odata/cache.js";
 import { callAbortError, withToolCall } from "../src/odata/call-context.js";
 import { ODataError } from "../src/odata/errors.js";
 import { RequestLimiter } from "../src/odata/limiter.js";
+import { ERROR_KIND_META } from "../src/tools/_shared.js";
 import { fake1C } from "./helpers/fake-1c.js";
 
 afterEach(() => {
@@ -73,9 +74,11 @@ describe("отмена вызова чтения", () => {
       isError?: boolean;
       structuredContent?: unknown;
       content: { text: string }[];
+      _meta?: Record<string, unknown>;
     };
     expect(r.isError).toBe(true);
     expect(r.structuredContent).toBeUndefined();
+    expect(r._meta?.[ERROR_KIND_META]).toBe("deadline");
     expect(r.content[0]!.text).toContain("[deadline]");
     expect(r.content[0]!.text).toContain("ODATA_TOOL_DEADLINE_MS");
     await sleep(1_200);

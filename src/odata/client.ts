@@ -124,7 +124,7 @@ export class ODataClient {
         if (!res.ok) {
           const body = await res.text().catch(() => undefined);
           const err = fromHttpStatus(res.status, url, body, { method, path });
-          logger.warn({ url, status: res.status, ms, kind: err.kind }, "odata error");
+          logger.warn({ url: withoutQuery(url), status: res.status, ms, kind: err.kind }, "odata error");
           if (err.retryable && attempt < maxAttempts) {
             lastErr = err;
             release(); // пауза между повторами не держит место
@@ -143,7 +143,7 @@ export class ODataClient {
         const err = normalize(e, url);
         if (err.retryable && attempt < maxAttempts) {
           lastErr = err;
-          logger.warn({ url, kind: err.kind, attempt }, "retrying");
+          logger.warn({ url: withoutQuery(url), kind: err.kind, attempt }, "retrying");
           release();
           await backoff(attempt, undefined, signal);
           continue;
@@ -341,6 +341,12 @@ export class ODataClient {
     }
   }
 }
+
+/**
+ * URL для журнала на обычных уровнях: в $filter бывают названия контрагентов и ИНН из запроса пользователя,
+ * а журнал живёт долго. Полный URL остаётся только на LOG_LEVEL=debug, который включают для разбора сбоя.
+ */
+const withoutQuery = (url: string): string => url.split("?")[0]!;
 
 /**
  * Тело успешного ответа. Публикация 1С (в том числе 1cfresh) на отказ доступа или исключение

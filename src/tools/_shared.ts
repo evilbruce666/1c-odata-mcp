@@ -59,11 +59,21 @@ export function ok(data: unknown): CallToolResult {
   };
 }
 
-/** Ошибка инструмента: помечаем isError, отдаём понятный текст вместо падения. */
-export function fail(message: string): CallToolResult {
+/**
+ * Ключ _meta с видом ошибки: клиент различает отказы без разбора текста, а текст ошибки может содержать
+ * сообщение 1С с данными. Не в structuredContent: там ответ должен соответствовать outputSchema.
+ */
+export const ERROR_KIND_META = "1c-odata-mcp/errorKind";
+
+/**
+ * Ошибка инструмента: помечаем isError, отдаём понятный текст вместо падения. kind: виды ODataError либо
+ * refused (отказ инструмента по содержанию запроса), input, not_published, overflow, internal.
+ */
+export function fail(message: string, kind = "refused"): CallToolResult {
   return {
     content: [{ type: "text", text: message }],
     isError: true,
+    _meta: { [ERROR_KIND_META]: kind },
   };
 }
 
@@ -77,26 +87,26 @@ export async function guard(toolName: string, fn: () => Promise<CallToolResult>)
   } catch (e) {
     if (e instanceof NotPublishedError) {
       logger.warn({ tool: toolName, missing: e.missing.map((m) => m.label) }, "not published");
-      return fail(publicationHelp(e.missing));
+      return fail(publicationHelp(e.missing), "not_published");
     }
     if (e instanceof InputError) {
       // Неверные аргументы вызова — отдаём текст как есть: это чинится уточнением
       // запроса, а не разбирательством с сервером.
       logger.info({ tool: toolName }, e.message);
-      return fail(e.message);
+      return fail(e.message, "input");
     }
     if (e instanceof AggregateOverflowError) {
       // Громкий, но аккуратный отказ — лучше явная ошибка, чем неполная сумма.
       logger.warn({ tool: toolName, entitySet: e.entitySet, cap: e.cap }, "aggregate overflow");
-      return fail(e.message);
+      return fail(e.message, "overflow");
     }
     if (e instanceof ODataError) {
       logger.warn({ tool: toolName, kind: e.kind }, e.message);
-      return fail(`[${e.kind}] ${e.message}`);
+      return fail(`[${e.kind}] ${e.message}`, e.kind);
     }
     const msg = e instanceof Error ? e.message : String(e);
     logger.error({ tool: toolName }, msg);
-    return fail(`Внутренняя ошибка инструмента ${toolName}: ${msg}`);
+    return fail(`Внутренняя ошибка инструмента ${toolName}: ${msg}`, "internal");
   }
 }
 
