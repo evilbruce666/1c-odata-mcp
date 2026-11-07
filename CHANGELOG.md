@@ -5,6 +5,8 @@
 
 ## [Не выпущено]
 
+## [0.14.0] — 2026-11-07
+
 Главное в этом релизе — коннектор можно поставить на сервере: для бота или своего приложения с моделью появился HTTP только для чтения. Отменённый вызов больше не занимает очередь 1С, а ответы и описания инструментов занимают меньше контекста модели. Подробности и настройки — в [docs/CONNECTING.md](docs/CONNECTING.md#подключение-по-http-опционально).
 
 ### Что изменится при обновлении
@@ -805,7 +807,8 @@ POST-тестом (create → read → mark) на реальной базе — 
   коды плана счетов); вежливый фоллбэк при отсутствии объекта в «Составе OData».
 - npm-пакет с запуском через `npx 1c-odata-mcp`.
 
-[Не выпущено]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.13.0...HEAD
+[Не выпущено]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.10.0...v0.11.0
