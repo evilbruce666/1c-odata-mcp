@@ -1,3 +1,4 @@
+import { bundleManifest } from "../src/mcp/bundle-manifest.js";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createServer } from "../src/mcp/server.js";
@@ -133,5 +134,15 @@ describe("документация совпадает с кодом", () => {
       expect(tools.filter((t) => !names.includes(t!))).toEqual([]);
       expect(renderPrompt(p, {})).not.toContain("${arguments.");
     }
+  });
+});
+
+describe("манифест расширения .mcpb", () => {
+  it("в tools только name и description: остальное Claude Desktop отвергает", () => {
+    const bundled = bundleManifest(manifest);
+    expect(bundled.tools).toHaveLength(manifest.tools.length);
+    for (const tool of bundled.tools ?? []) expect(Object.keys(tool).sort()).toEqual(["description", "name"]);
+    // Исходный манифест со схемами нужен тестам этого файла.
+    expect(manifest.tools[0]).toHaveProperty("inputSchema");
   });
 });

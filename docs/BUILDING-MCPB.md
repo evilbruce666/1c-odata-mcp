@@ -9,13 +9,18 @@
 > Раньше бандл публиковался на Smithery. С октября 2026 Smithery не даёт обновлять серверы
 > («Updating servers has been removed»), поэтому туда больше не публикуем.
 
-## Почему не `mcpb pack`
+## Почему два манифеста
 
-Официальный CLI `@anthropic-ai/mcpb` валидирует `manifest.json` по спецификации MCPB, где
-элементы `tools` — только `{name, description}`. Наш манифест хранит у инструментов ещё и
-`inputSchema` / `outputSchema` / аннотации — ровно то, что видит MCP-клиент, — и на них
-держится тест согласованности документации с кодом. `mcpb pack` такие ключи отвергает
-(«Unrecognized key(s)»), поэтому бандл собирается вручную через `zip`.
+Формат MCPB допускает в `tools` только `{name, description}`, и так же строго его проверяет сам Claude Desktop:
+расширение с другими ключами не устанавливается («Invalid manifest: tools: Unrecognized key(s)»). `manifest.json` в
+репозитории хранит у инструментов ещё `inputSchema`, `outputSchema` и аннотации — на них держится тест согласованности
+документации с кодом. Поэтому в бандл идёт очищенная копия (`bundleManifest`), а схемы клиент получает от сервера через
+`tools/list`. `mcpb validate` проверяет именно очищенную копию, манифест из репозитория он не примет.
+
+## Как проверить
+
+Манифест из бандла проверяет официальный валидатор: `npx @anthropic-ai/mcpb validate manifest.json` в распакованной
+папке. Он не заменяет запуск: приложения из `apps/` и зависимости проверяются только работающим сервером.
 
 ## Как собрать
 
@@ -31,29 +36,19 @@
 2. Прогнать тесты: `test/docs-consistency.test.ts` сверяет состав и схемы инструментов в
    манифесте с кодом, версию в `package.json`/`manifest.json`/CHANGELOG и число
    инструментов в README, `package.json` и `long_description` манифеста. Упал — поправить
-   числа в текстах (`mcpb validate` тут не поможет: официальный валидатор не принимает
+   числа в текстах (`mcpb validate` на манифесте из репозитория не поможет: официальный валидатор не принимает
    `inputSchema` в `tools[]`):
 
    ```bash
    npm test
    ```
 
-3. Собрать staging-папку (build + **чистый** `npm ci --omit=dev`, чтобы не
-   тащить dev-зависимости и не трогать рабочий `node_modules`) и заzip'овать:
+3. Собрать бандл: чистая установка рабочих зависимостей без dev-пакетов, очищенный манифест, zip. Рабочий `node_modules`
+   не затрагивается:
 
    ```bash
-   STAGE=$(mktemp -d)
-   npm run build
-   cp -R dist "$STAGE/dist"
-   cp package.json package-lock.json README.md LICENSE manifest.json "$STAGE/"
-   (cd "$STAGE" && npm ci --omit=dev --ignore-scripts)
-   rm -rf "$STAGE/dist/scripts"
-   # В рантайме не нужны: типы, sourcemaps, исходники .ts и markdown пакетов —
-   # бандл ужимается с ~6,4 до ~3,3 МБ.
-   find "$STAGE" -type f \( -name "*.map" -o -name "*.d.ts" -o -name "*.d.mts" -o -name "*.d.cts" \) -delete
-   find "$STAGE/node_modules" -type f \( -name "*.ts" -o -iname "*.md" -o -iname "CHANGELOG*" \) -delete
-   (cd "$STAGE" && zip -r -X -q -9 /tmp/1c-odata-mcp.mcpb . -x ".*")
+   npm run bundle -- /путь/к/1c-odata-mcp.mcpb
    ```
 
-   Перед тем как отдавать бандл, стоит запустить `$STAGE/dist/index.js` MCP-клиентом (`tools/list` и
+   Перед тем как отдавать бандл, стоит распаковать его и запустить `dist/index.js` MCP-клиентом (`tools/list` и
    пара вызовов) — облегчённый бандл должен отвечать так же, как исходный.

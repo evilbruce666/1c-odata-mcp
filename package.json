@@ -36,6 +36,7 @@
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
     "prepublishOnly": "npm run build && node --eval \"require('fs').rmSync('dist/scripts',{recursive:true,force:true})\"",
+    "bundle": "npm run build && node dist/scripts/pack-mcpb.js",
     "manifest": "npm run build && node dist/scripts/gen-manifest.js",
     "test:live": "npm run build && node --env-file=.env dist/scripts/live-write.js",
     "test:live:read": "npm run build && node --env-file=.env dist/scripts/live-read.js",
