@@ -24,6 +24,19 @@ import {
   type PostingsSource,
 } from "../odata/accounting.js";
 import { resolveOrganization } from "../odata/orgs.js";
+import {
+  aggregateStock,
+  loadItemGroups,
+  nomenclatureSet,
+  readItemAttributes,
+  resolveItemGroup,
+  subtreeOf,
+  warehouseNames,
+  type ItemAttributes,
+  type ItemGroup,
+  type StockLine,
+} from "../odata/inventory.js";
+import { InputError } from "../errors.js";
 import { collectDocuments, emptyMeta, addMeta, type ScanMeta } from "../odata/aggregate.js";
 import {
   getSalesResultSchema,
@@ -32,7 +45,6 @@ import {
   getAccountTurnoverResultSchema,
   getDocumentPostingsResultSchema,
 } from "../schemas/output.js";
-import { InputError } from "../errors.js";
 import type { ODataEntity } from "../types/odata.js";
 
 // Деньги копим в целых копейках (float-сложение тысяч сумм даёт дрейф).
@@ -703,20 +715,33 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
     {
       title: "Остатки товаров",
       description:
-        "Остатки товаров/материалов на складах: сальдо счетов 41/10/43 регистра Хозрасчетный, " +
-        "сгруппированное по номенклатуре. Возвращает количество и сумму остатка. Можно ограничить " +
-        "организацией. По умолчанию — текущие остатки; параметром asOf=YYYY-MM-DD можно получить " +
-        "остатки на конец указанной даты (для инвентаризации/аудита). " +
-        "(В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
+        "Остатки товаров/материалов: сальдо счетов 41/10/43 регистра Хозрасчетный, сгруппированное по номенклатуре. " +
+        "Возвращает количество, сумму, артикул и группу номенклатуры (родитель). Можно ограничить организацией и группой " +
+        "номенклатуры с её подгруппами (group). По умолчанию — текущие остатки; asOf=YYYY-MM-DD даёт остатки на конец даты. " +
+        "groupBy=warehouse разбивает по складам и добавляет итоги byWarehouse; если склад в субконто этих счетов не ведётся, " +
+        "ответ скажет об этом (warehouseTracked=false), сумму и количество по складам из документов он не выводит. " +
+        "Сумма на счетах без номенклатуры в субконто (например, 41.12) — в withoutNomenclature, она входит в totalAmount. " +
+        "count — всего позиций. (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
         asOf: dateField("Дата остатков — на конец этой даты (без параметра — текущие)").optional(),
+        groupBy: z
+          .enum(["item", "warehouse"])
+          .default("item")
+          .describe("item — по номенклатуре (по умолчанию); warehouse — номенклатура в разрезе складов"),
+        group: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Группа номенклатуры: название или Ref_Key. Подгруппы входят. Итоги — только по этой группе",
+          ),
         limit: z.number().int().positive().max(1000).default(200).describe("Сколько позиций вернуть"),
       }),
       outputSchema: getInventoryResultSchema,
     },
-    ({ database, organization, asOf, limit }) =>
+    ({ database, organization, asOf, groupBy, group, limit }) =>
       guard("read.analytics.get_inventory", async () => {
         const t0 = Date.now();
         const conn = ctx.db(database);
@@ -728,44 +753,131 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           org.key,
           asOf,
         );
+        const byWarehouse = groupBy === "warehouse";
+        const nomSet = await nomenclatureSet(conn);
+        let lines = aggregateStock(rows, byWarehouse);
 
-        // Сумма — в копейках (целые), количество — float (округляем до 3 знаков).
-        const byItem = new Map<string, { qty: number; cents: number }>();
-        for (const r of rows) {
-          const item = String(r["ExtDimension1"] ?? "");
-          if (!item) continue;
-          const cur = byItem.get(item) ?? { qty: 0, cents: 0 };
-          cur.qty += num(r["КоличествоBalanceDr"]) - num(r["КоличествоBalanceCr"]);
-          cur.cents += toCents(r["СуммаBalanceDr"]) - toCents(r["СуммаBalanceCr"]);
-          byItem.set(item, cur);
+        // Группы нужны для отбора и названий; без отбора читаем только названия групп показанных позиций.
+        const attributes = new Map<string, ItemAttributes>();
+        const readAttributes = async (refs: Iterable<string>) => {
+          if (!nomSet) return;
+          for (const [ref, a] of await readItemAttributes(conn, nomSet, refs)) attributes.set(ref, a);
+        };
+        let selectedGroup: ItemGroup | undefined;
+        let groups: ItemGroup[] | undefined;
+        if (group) {
+          if (!nomSet)
+            throw new InputError("Справочник номенклатуры не опубликован: отбор по группе невозможен.");
+          groups = await loadItemGroups(conn, nomSet);
+          selectedGroup = resolveItemGroup(group, groups);
+          const allowed = subtreeOf(selectedGroup.ref, groups);
+          await readAttributes(lines.flatMap((l) => (l.itemRef ? [l.itemRef] : [])));
+          lines = lines.filter((l) => {
+            const parent = l.itemRef ? attributes.get(l.itemRef)?.groupRef : undefined;
+            return !!parent && allowed.has(parent);
+          });
         }
 
-        const nomSet = resolveEntity(CATALOGS.nomenclature, await conn.available());
-        const names = nomSet ? await resolveNames(conn, nomSet, byItem.keys()) : new Map<string, string>();
+        const withItem = lines
+          .filter((l): l is StockLine & { itemRef: string } => !!l.itemRef)
+          // Вторичные ключи обязательны: каждая страница считается заново, а порядок равных сумм не гарантирован.
+          .sort(
+            (a, b) =>
+              b.cents - a.cents ||
+              a.itemRef.localeCompare(b.itemRef) ||
+              (a.warehouseRef ?? "").localeCompare(b.warehouseRef ?? ""),
+          );
+        const shown = withItem.slice(0, limit);
+        if (!group) await readAttributes(shown.map((l) => l.itemRef));
 
-        const present = [...byItem.entries()].filter(
-          ([, v]) => Math.abs(v.qty) > 0.0001 || Math.abs(v.cents) > 0,
-        );
-        const items = present
-          .map(([ref, v]) => ({
-            item: names.get(ref) ?? ref,
-            ref,
-            quantity: Math.round(v.qty * 1000) / 1000,
-            amount: fromCents(v.cents),
-          }))
-          // Вторичный ключ обязателен: каждая страница считается заново, а порядок равных сумм не гарантирован.
-          .sort((a, b) => b.amount - a.amount || a.ref.localeCompare(b.ref))
-          .slice(0, limit);
+        const parentRefs = [...new Set(shown.flatMap((l) => attributes.get(l.itemRef)?.groupRef ?? []))];
+        const groupNames = groups
+          ? new Map(groups.map((g) => [g.ref, g.name]))
+          : nomSet
+            ? await resolveNames(conn, nomSet, parentRefs)
+            : new Map<string, string>();
+        const warehouses = byWarehouse ? await warehouseNames(conn, lines) : new Map<string, string>();
 
-        const totalCents = present.reduce((s, [, v]) => s + v.cents, 0);
+        const items = shown.map((l) => {
+          const a = attributes.get(l.itemRef);
+          const groupName = a?.groupRef ? groupNames.get(a.groupRef) : undefined;
+          return {
+            item: a?.name ?? l.itemRef,
+            ref: l.itemRef,
+            ...(a?.article ? { article: a.article } : {}),
+            ...(groupName ? { group: groupName } : {}),
+            ...(a?.groupRef ? { groupRef: a.groupRef } : {}),
+            ...(l.warehouseRef
+              ? { warehouse: warehouses.get(l.warehouseRef) ?? l.warehouseRef, warehouseRef: l.warehouseRef }
+              : {}),
+            quantity: Math.round(l.quantity * 1000) / 1000,
+            amount: fromCents(l.cents),
+          };
+        });
+
+        const noItem = lines.filter((l) => !l.itemRef);
+        const noItemCents = noItem.reduce((s, l) => s + l.cents, 0);
+        const totalCents = lines.reduce((s, l) => s + l.cents, 0);
+        const notes: string[] = [];
+        if (noItem.length) {
+          notes.push(
+            "В totalAmount входит withoutNomenclature: сумма на счетах, где номенклатура не ведётся в субконто (например, 41.12).",
+          );
+        }
+
+        const warehouseTotals = new Map<string, { cents: number; positions: number }>();
+        for (const l of lines) {
+          const key = l.warehouseRef ?? "";
+          const t = warehouseTotals.get(key) ?? { cents: 0, positions: 0 };
+          t.cents += l.cents;
+          if (l.itemRef) t.positions += 1;
+          warehouseTotals.set(key, t);
+        }
+        const tracked = lines.some((l) => l.warehouseRef);
+        if (byWarehouse && !tracked && lines.length) {
+          notes.push(
+            "В субконто остатков склада нет: эти счета ведутся без разбивки по складам, показаны итоги по номенклатуре.",
+          );
+        } else if (byWarehouse && warehouseTotals.has("")) {
+          notes.push("Часть остатков без склада в субконто: они в byWarehouse со значением warehouse: null.");
+        }
+
         return ok({
           database: conn.cfg.name,
           organization: org.name,
           ...(asOf ? { asOf } : {}),
+          ...(byWarehouse ? { groupBy, warehouseTracked: tracked } : {}),
+          ...(selectedGroup
+            ? { itemGroup: { name: selectedGroup.name, ref: selectedGroup.ref, includesSubgroups: true } }
+            : {}),
           accounts: accounts.map((a) => `${a.code} ${a.description}`),
           totalAmount: fromCents(totalCents),
           // Всего, а не на странице: сколько в этом ответе — длина списка и returned.
-          count: present.length,
+          count: withItem.length,
+          ...(noItem.length
+            ? {
+                withoutNomenclature: {
+                  quantity: Math.round(noItem.reduce((s, l) => s + l.quantity, 0) * 1000) / 1000,
+                  amount: fromCents(noItemCents),
+                },
+              }
+            : {}),
+          ...(byWarehouse && tracked
+            ? {
+                byWarehouse: [...warehouseTotals]
+                  .map(([ref, t]) => ({
+                    warehouse: ref ? (warehouses.get(ref) ?? ref) : null,
+                    ...(ref ? { warehouseRef: ref } : {}),
+                    positions: t.positions,
+                    amount: fromCents(t.cents),
+                  }))
+                  .sort(
+                    (a, b) =>
+                      b.amount - a.amount || String(a.warehouseRef).localeCompare(String(b.warehouseRef)),
+                  ),
+              }
+            : {}),
+          ...(notes.length ? { note: notes.join(" ") } : {}),
           items,
           scan: { rowsScanned: rows.length, elapsedMs: Date.now() - t0 },
         });

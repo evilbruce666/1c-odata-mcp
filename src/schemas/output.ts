@@ -484,8 +484,37 @@ export const getInventoryResultSchema = z
     totalAmount: z.number(),
     count: z.number(),
     items: z.array(
-      z.object({ item: z.string(), ref: z.string(), quantity: z.number(), amount: z.number() }).passthrough(),
+      z
+        .object({
+          item: z.string(),
+          ref: z.string(),
+          article: z.string().optional(),
+          group: z.string().optional(),
+          groupRef: z.string().optional(),
+          warehouse: z.string().optional(),
+          warehouseRef: z.string().optional(),
+          quantity: z.number(),
+          amount: z.number(),
+        })
+        .passthrough(),
     ),
+    groupBy: z.string().optional(),
+    warehouseTracked: z.boolean().optional(),
+    itemGroup: z.object({ name: z.string(), ref: z.string() }).passthrough().optional(),
+    withoutNomenclature: z.object({ quantity: z.number(), amount: z.number() }).passthrough().optional(),
+    byWarehouse: z
+      .array(
+        z
+          .object({
+            warehouse: z.string().nullable(),
+            warehouseRef: z.string().optional(),
+            positions: z.number(),
+            amount: z.number(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+    note: z.string().optional(),
     scan: scanSchema,
   })
   .passthrough();

@@ -1914,7 +1914,7 @@
     {
       "name": "read.analytics.get_inventory",
       "title": "Остатки товаров",
-      "description": "Остатки товаров/материалов на складах: сальдо счетов 41/10/43 регистра Хозрасчетный, сгруппированное по номенклатуре. Возвращает количество и сумму остатка. Можно ограничить организацией. По умолчанию — текущие остатки; параметром asOf=YYYY-MM-DD можно получить остатки на конец указанной даты (для инвентаризации/аудита). (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
+      "description": "Остатки товаров/материалов: сальдо счетов 41/10/43 регистра Хозрасчетный, сгруппированное по номенклатуре. Возвращает количество, сумму, артикул и группу номенклатуры (родитель). Можно ограничить организацией и группой номенклатуры с её подгруппами (group). По умолчанию — текущие остатки; asOf=YYYY-MM-DD даёт остатки на конец даты. groupBy=warehouse разбивает по складам и добавляет итоги byWarehouse; если склад в субконто этих счетов не ведётся, ответ скажет об этом (warehouseTracked=false), сумму и количество по складам из документов он не выводит. Сумма на счетах без номенклатуры в субконто (например, 41.12) — в withoutNomenclature, она входит в totalAmount. count — всего позиций. (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1930,6 +1930,20 @@
             "type": "string",
             "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
             "description": "Дата остатков — на конец этой даты (без параметра — текущие) (YYYY-MM-DD)"
+          },
+          "groupBy": {
+            "default": "item",
+            "description": "item — по номенклатуре (по умолчанию); warehouse — номенклатура в разрезе складов",
+            "type": "string",
+            "enum": [
+              "item",
+              "warehouse"
+            ]
+          },
+          "group": {
+            "description": "Группа номенклатуры: название или Ref_Key. Подгруппы входят. Итоги — только по этой группе",
+            "type": "string",
+            "minLength": 1
           },
           "limit": {
             "default": 200,
@@ -1983,6 +1997,21 @@
                 "ref": {
                   "type": "string"
                 },
+                "article": {
+                  "type": "string"
+                },
+                "group": {
+                  "type": "string"
+                },
+                "groupRef": {
+                  "type": "string"
+                },
+                "warehouse": {
+                  "type": "string"
+                },
+                "warehouseRef": {
+                  "type": "string"
+                },
                 "quantity": {
                   "type": "number"
                 },
@@ -1998,6 +2027,76 @@
               ],
               "additionalProperties": {}
             }
+          },
+          "groupBy": {
+            "type": "string"
+          },
+          "warehouseTracked": {
+            "type": "boolean"
+          },
+          "itemGroup": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "ref"
+            ],
+            "additionalProperties": {}
+          },
+          "withoutNomenclature": {
+            "type": "object",
+            "properties": {
+              "quantity": {
+                "type": "number"
+              },
+              "amount": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "quantity",
+              "amount"
+            ],
+            "additionalProperties": {}
+          },
+          "byWarehouse": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "warehouse": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "warehouseRef": {
+                  "type": "string"
+                },
+                "positions": {
+                  "type": "number"
+                },
+                "amount": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "warehouse",
+                "positions",
+                "amount"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "note": {
+            "type": "string"
           },
           "scan": {
             "type": "object",
