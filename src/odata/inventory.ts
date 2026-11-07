@@ -36,12 +36,16 @@ export interface StockLine {
   cents: number;
 }
 
+/** Отдаёт ли 1С типы субконто. Старые конфигурации их не отдают: тогда склад определить нельзя. */
+export const hasSubcontoTypes = (row: ODataEntity): boolean =>
+  SUBCONTO_POSITIONS.some((i) => `ExtDimension${i}_Type` in row);
+
 /** Сводит строки сальдо по номенклатуре и, при byWarehouse, складу. Копейки — целые, количество — float. */
 export function aggregateStock(rows: readonly ODataEntity[], byWarehouse: boolean): StockLine[] {
   const lines = new Map<string, StockLine>();
   for (const r of rows) {
     // Старые конфигурации отдают субконто без _Type: номенклатура там определялась первой позицией, и других данных нет.
-    const typed = SUBCONTO_POSITIONS.some((i) => `ExtDimension${i}_Type` in r);
+    const typed = hasSubcontoTypes(r);
     const legacyRef = typed ? undefined : refOf(r["ExtDimension1"]);
     const item = typed
       ? dimensionOf(r, CATALOGS.nomenclature)

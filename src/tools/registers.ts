@@ -26,6 +26,7 @@ import {
 import { resolveOrganization } from "../odata/orgs.js";
 import {
   aggregateStock,
+  hasSubcontoTypes,
   loadItemGroups,
   nomenclatureSet,
   readItemAttributes,
@@ -761,6 +762,8 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         let lines = aggregateStock(rows, byWarehouse);
         // До отбора по группе: при отборе может остаться только часть без склада, а вопрос про весь учёт.
         const anyStock = lines.length > 0;
+        // Без типов субконто неизвестно, ведётся ли склад: это не то же самое, что «не ведётся».
+        const typesKnown = rows.some(hasSubcontoTypes);
         const tracked = lines.some((l) => l.warehouseRef);
         const pageStart = callPageStart();
 
@@ -841,11 +844,15 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           if (l.itemRef) t.positions += 1;
           warehouseTotals.set(key, t);
         }
-        if (byWarehouse && !tracked && anyStock) {
+        if (byWarehouse && anyStock && !typesKnown) {
+          notes.push(
+            "1С не отдаёт типы субконто, поэтому склад определить нельзя: показаны итоги по номенклатуре.",
+          );
+        } else if (byWarehouse && !tracked && anyStock) {
           notes.push(
             "В субконто остатков склада нет: эти счета ведутся без разбивки по складам, показаны итоги по номенклатуре.",
           );
-        } else if (byWarehouse && warehouseTotals.has("")) {
+        } else if (byWarehouse && pageStart === 0 && warehouseTotals.has("")) {
           notes.push("Часть остатков без склада в субконто: они в byWarehouse со значением warehouse: null.");
         }
 
@@ -853,7 +860,9 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           database: conn.cfg.name,
           organization: org.name,
           ...(asOf ? { asOf } : {}),
-          ...(byWarehouse ? { groupBy, ...(anyStock ? { warehouseTracked: tracked } : {}) } : {}),
+          ...(byWarehouse
+            ? { groupBy, ...(anyStock && typesKnown ? { warehouseTracked: tracked } : {}) }
+            : {}),
           ...(selectedGroup
             ? { itemGroup: { name: selectedGroup.name, ref: selectedGroup.ref, includesSubgroups: true } }
             : {}),

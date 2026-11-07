@@ -442,3 +442,43 @@ describe("признак учёта по складам", () => {
     expect(reads().filter((u) => u.startsWith("Catalog_Номенклатура")).length).toBeLessThanOrEqual(3);
   });
 });
+
+describe("разбивка без типов субконто и на следующих страницах", () => {
+  it("типов нет: не утверждает, что склад не ведётся", async () => {
+    const { call } = await setup([
+      { ExtDimension1: ITEM(1), ExtDimension2: STORE(1), КоличествоBalanceDr: 1, СуммаBalanceDr: 10 },
+    ]);
+    const s = (await call({ groupBy: "warehouse" })).structuredContent as unknown as {
+      note: string;
+      items: Item[];
+    } & Record<string, unknown>;
+    expect(s).not.toHaveProperty("warehouseTracked");
+    expect(s.note).toContain("определить нельзя");
+    expect(s.note).not.toContain("ведутся без разбивки");
+    expect(s.items[0]!.item).toBe("Бумага");
+  });
+  it("примечание про byWarehouse только там, где он есть", async () => {
+    const many = [
+      ...Array.from({ length: 8 }, (_, i) =>
+        row(
+          [
+            [ITEM(100 + i), NOM],
+            [STORE(1), WH],
+          ],
+          1,
+          10,
+        ),
+      ),
+      row([[ITEM(200), NOM]], 1, 5),
+    ];
+    const { call } = await setup(many);
+    const first = (await call({ groupBy: "warehouse", limit: 4 })).structuredContent as unknown as {
+      note: string;
+    };
+    const next = (await call({ groupBy: "warehouse", limit: 4, offset: 4 })).structuredContent as unknown as {
+      note?: string;
+    };
+    expect(first.note).toContain("byWarehouse");
+    expect(next.note ?? "").not.toContain("byWarehouse");
+  });
+});

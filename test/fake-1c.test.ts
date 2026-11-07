@@ -322,15 +322,23 @@ const OPTIONAL_OMIT: Record<string, string[]> = {
   "write.document.copy_document": ["lines"], // правки строк по номеру, не новые строки
 };
 
+/** Аргументы, с которыми инструмент законно отказывает: отбор без данных или взаимоисключающие параметры. */
+const FLAGS_OMIT: Record<string, string[]> = {
+  "read.analytics.get_inventory": ["group"],
+  "read.document.search_documents": ["kind"],
+};
+
 describe("чтение со всеми необязательными флагами", () => {
-  // В прогонах выше флаги остаются false: ветка aging у должников из-за этого не выполнялась ни разу.
+  // В прогонах выше флаги остаются false, а отказ инструмента не проверяется. Содержимое веток с данными
+  // проверяют точечные тесты: в подделке сальдо нулевое (см. test/page-load.test.ts).
   const reads = manifest.tools.filter((t) => t.name.startsWith("read."));
   it.each(reads.map((t) => [t.name, t] as const))("%s", async (name, tool) => {
     const raw: Record<string, unknown> = { ...argsFor(tool, true), ...OVERRIDES[name] };
-    for (const arg of OPTIONAL_OMIT[name] ?? []) delete raw[arg];
+    for (const arg of [...(OPTIONAL_OMIT[name] ?? []), ...(FLAGS_OMIT[name] ?? [])]) delete raw[arg];
     const props = (tool.inputSchema as { properties?: Record<string, { type?: string }> }).properties ?? {};
     for (const [key, schema] of Object.entries(props)) if (schema.type === "boolean") raw[key] = true;
-    const { fake } = await call(name, raw);
+    const { fake, r, text } = await call(name, raw);
+    expect(r.isError, `${name}: ${text.slice(0, 200)}`).toBeFalsy();
     expect(fake.violations, "запросы к полям, которых нет в схеме БП 3.0").toEqual([]);
   });
 });

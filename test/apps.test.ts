@@ -42,6 +42,7 @@ describe("settlements.html: неполный список", () => {
     const html = loadAppHtml("settlements.html");
     const body = /function render\(p\) \{[\s\S]*?\n\}/.exec(html)![0];
     expect(body).toContain("p.truncated");
+    expect(body).toContain("p.count");
     expect(body).not.toMatch(/\bdata\.truncated\b/);
   });
 });

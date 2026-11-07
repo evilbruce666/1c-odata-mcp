@@ -35,6 +35,94 @@ describe("должники и кредиторы с aging: настоящий к
   });
 });
 
+describe("aging: обход всех страниц со строками", () => {
+  const ref = (i: number) => `cccccccc-0000-4000-8000-${String(i).padStart(12, "0")}`;
+  const balance = Array.from({ length: 60 }, (_, i) => ({
+    Account_Key: "",
+    ExtDimension1: ref(i),
+    ExtDimension1_Type: "StandardODATA.Catalog_Контрагенты",
+    СуммаBalanceDr: 100 + (i % 7),
+    СуммаBalanceCr: 0,
+  }));
+  const total = balance.reduce((s, r) => s + r.СуммаBalanceDr, 0);
+
+  function setup() {
+    const f = fake1C({ READ_ONLY: "true" });
+    const realGet = f.conn.client.getCollection.bind(f.conn.client);
+    const nameFilters: string[] = [];
+    vi.spyOn(f.conn.client, "getCollection").mockImplementation((async (url: string) => {
+      const u = decodeURIComponent(url);
+      if (u.includes("/Balance")) return { value: balance.map((r) => ({ ...r })) };
+      if (u.startsWith("Catalog_Контрагенты")) {
+        nameFilters.push(u);
+        const refs = [...u.matchAll(/guid'([^']+)'/g)].map((m) => m[1]!);
+        return { value: refs.map((Ref_Key) => ({ Ref_Key, Description: `Имя ${Ref_Key}` })) };
+      }
+      return realGet(url);
+    }) as never);
+    return { f, nameFilters };
+  }
+
+  interface Debtor {
+    ref: string;
+    counterparty: string;
+    amount: number;
+    debt: number;
+    overdue: number;
+  }
+
+  it.each([[25], [1000]])(
+    "limit %s: все строки с именами, суммы сходятся, продолжение закрывается",
+    async (limit) => {
+      const { f } = setup();
+      const client = await connect(f);
+      const seen: Debtor[] = [];
+      let offset = 0;
+      for (let i = 0; i < 80; i++) {
+        const r = (await client.callTool({
+          name: "read.analytics.get_debtors",
+          arguments: { aging: true, limit, offset },
+        })) as {
+          isError?: boolean;
+          content: { text: string }[];
+          structuredContent: {
+            debtors: Debtor[];
+            count: number;
+            totalReceivable: number;
+            nextOffset?: number;
+          };
+        };
+        expect(r.isError, r.content[0]!.text.slice(0, 200)).toBeFalsy();
+        const s = r.structuredContent;
+        expect(s.count).toBe(60);
+        expect(s.totalReceivable).toBe(total);
+        seen.push(...s.debtors);
+        if (s.nextOffset === undefined) break;
+        offset = s.nextOffset;
+      }
+      expect(new Set(seen.map((d) => d.ref)).size).toBe(60);
+      expect(seen).toHaveLength(60);
+      expect(seen.reduce((t, d) => t + d.amount, 0)).toBe(total);
+      for (const d of seen) {
+        expect(d.counterparty).toBe(`Имя ${d.ref}`);
+        expect(d.debt).toBe(d.amount);
+        expect(typeof d.overdue).toBe("number");
+      }
+    },
+  );
+
+  it("overdueOnly с должниками: ответ строится, отказа нет", async () => {
+    const { f } = setup();
+    const client = await connect(f);
+    const r = (await client.callTool({
+      name: "read.analytics.get_debtors",
+      arguments: { overdueOnly: true, limit: 10 },
+    })) as { isError?: boolean; content: { text: string }[]; structuredContent: { count: number } };
+    expect(r.isError, r.content[0]!.text.slice(0, 200)).toBeFalsy();
+    expect(typeof r.structuredContent.count).toBe("number");
+  });
+});
+
 describe("нагрузка на 1С при чтении по offset", () => {
   const stub = (f: ReturnType<typeof fake1C>, rows: object[]) => {
     const stats = { contracts: [] as string[] };
