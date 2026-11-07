@@ -16,7 +16,8 @@ import pino from "pino";
  */
 function makeDestination(): pino.DestinationStream {
   const forceStderr = process.env.MCP_LOG_STDERR === "1" || process.env.MCP_LOG_STDERR === "true";
-  const underClient = !process.stdin.isTTY;
+  // В HTTP-режиме клиента на stdin нет, а журнал контейнера — это stderr.
+  const underClient = !process.stdin.isTTY && process.env.MCP_TRANSPORT !== "http";
   if (!forceStderr && underClient) {
     try {
       // sync: файл открывается сразу. Асинхронный пишет только после открытия — ошибка старта,

@@ -15,6 +15,13 @@ interface CallContext {
 }
 
 const store = new AsyncLocalStorage<CallContext>();
+const connection = new AsyncLocalStorage<AbortSignal>();
+
+/**
+ * Соединение HTTP-запроса. Без сессии сообщение об отмене приходит отдельным запросом и до вызова не доходит,
+ * поэтому признак ухода клиента в этом режиме — разрыв соединения.
+ */
+export const withConnection = <T>(signal: AbortSignal, fn: () => T): T => connection.run(signal, fn);
 
 /** Выполняет вызов инструмента с отменой от клиента и лимитом времени (0 — без лимита). */
 export function withToolCall<T>(
@@ -23,7 +30,7 @@ export function withToolCall<T>(
 ): Promise<T> {
   const deadline =
     o.deadlineMs > 0 ? { signal: AbortSignal.timeout(o.deadlineMs), ms: o.deadlineMs } : undefined;
-  const signals = [o.signal, deadline?.signal].filter((s): s is AbortSignal => !!s);
+  const signals = [o.signal, connection.getStore(), deadline?.signal].filter((s): s is AbortSignal => !!s);
   return store.run(
     {
       ...(signals.length ? { signal: AbortSignal.any(signals) } : {}),

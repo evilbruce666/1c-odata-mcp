@@ -10,12 +10,19 @@ import { uuidV1 } from "./uuid-v1.js";
 import { RequestLimiter } from "./limiter.js";
 import { callAbortError, callSignal, detachedFromCall, untilCallAborted } from "./call-context.js";
 
+/** Как часто перечитывать схему у долгоживущего процесса: после обновления 1С старая давала бы ложные отказы. */
+export const METADATA_TTL_MS = 60 * 60_000;
+/** Пауза до новой попытки, если фоновое обновление схемы не удалось. */
+const METADATA_RETRY_MS = 5 * 60_000;
+
 /** HTTP-методы только для чтения; остальные (POST/PATCH) считаются записью и гейтуются. */
 const READ_METHODS = new Set(["GET", "HEAD"]);
 
 export class ODataClient {
   private readonly authHeader: string;
   private metaPromise: Promise<MetadataMap> | undefined;
+  /** С какого момента схема считается устаревшей; undefined — обновление уже идёт или схемы нет. */
+  private metaStaleAt: number | undefined;
   private journal: WriteOperationJournal | undefined;
   /** Необязательный предел одновременных HTTP этого подключения (#57); 0 — без предела. */
   readonly limiter: RequestLimiter;
@@ -30,7 +37,27 @@ export class ODataClient {
   }
 
   getMetadata(): Promise<MetadataMap> {
-    return this.metaPromise ? untilCallAborted(this.metaPromise) : this.refreshMetadata();
+    if (!this.metaPromise) return this.refreshMetadata();
+    if (this.metaStaleAt !== undefined && Date.now() >= this.metaStaleAt) this.refreshInBackground();
+    return untilCallAborted(this.metaPromise);
+  }
+
+  /** Устаревшая схема: ответ не ждёт обновления, при сбое остаётся прежняя схема и предупреждение в журнале. */
+  private refreshInBackground(): void {
+    this.metaStaleAt = undefined;
+    detachedFromCall(() => loadMetadata(this)).then(
+      (meta) => {
+        this.metaPromise = Promise.resolve(meta);
+        this.metaStaleAt = Date.now() + METADATA_TTL_MS;
+      },
+      (error: unknown) => {
+        this.metaStaleAt = Date.now() + METADATA_RETRY_MS;
+        logger.warn(
+          { database: this.conn.name, err: error instanceof Error ? error.message : String(error) },
+          "Схему 1С обновить не удалось, ответы строятся на прежней",
+        );
+      },
+    );
   }
 
   /** Явно перечитывает схему; последующие инструменты используют этот же кеш. */
@@ -42,6 +69,13 @@ export class ODataClient {
       throw error;
     });
     this.metaPromise = pending;
+    this.metaStaleAt = undefined;
+    void pending.then(
+      () => {
+        if (this.metaPromise === pending) this.metaStaleAt = Date.now() + METADATA_TTL_MS;
+      },
+      () => undefined,
+    );
     return untilCallAborted(pending);
   }
 

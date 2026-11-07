@@ -192,7 +192,7 @@ export const healthCheckResultSchema = z
     label: z.string().optional(),
     odataVersion: z.string().optional(),
     entityCount: z.number(),
-    baseUrl: z.string(),
+    baseUrl: z.string().optional(),
     readOnly: z.boolean(),
     regulatedCurrency: z.object({ code: z.string(), source: z.enum(["database", "global", "default"]) }),
     writeJournal: z

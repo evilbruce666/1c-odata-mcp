@@ -239,7 +239,6 @@
           "status",
           "database",
           "entityCount",
-          "baseUrl",
           "readOnly",
           "regulatedCurrency"
         ],

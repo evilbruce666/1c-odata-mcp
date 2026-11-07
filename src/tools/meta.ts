@@ -70,7 +70,8 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
           label: conn.cfg.label,
           odataVersion: meta.odataVersion,
           entityCount: meta.entities.size,
-          baseUrl: conn.cfg.baseUrl,
+          // Адрес базы нужен при настройке на своём компьютере; держателю токена и модели в сети он ни к чему.
+          ...(conn.behavior.networkTransport ? {} : { baseUrl: conn.cfg.baseUrl }),
           readOnly: conn.behavior.readOnly,
           regulatedCurrency: {
             code: conn.behavior.regulatedCurrencyCode,

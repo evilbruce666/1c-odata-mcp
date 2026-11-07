@@ -69,6 +69,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@modelcontextprotocol/node": "^2.1.2",
     "@modelcontextprotocol/server": "^2.4.0",
     "fast-xml-parser": "^5.11.2",
     "pino": "^10.4.0",

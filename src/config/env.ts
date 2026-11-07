@@ -58,6 +58,8 @@ export interface Behavior {
   toolDeadlineMs: number;
   /** Предел текста ответа инструмента чтения, символов: только уменьшение нормы для клиентов с малым контекстом. */
   maxResponseChars: number;
+  /** Сервер доступен по сети: ответы не раскрывают адрес базы. */
+  networkTransport?: boolean;
   /** Какие инструменты видит клиент: all — все, read — только чтение. Запись защищена не этим, а READ_ONLY. */
   toolsProfile: "all" | "read";
   /** Точный список инструментов вместо профиля. */
@@ -70,6 +72,15 @@ export interface Behavior {
   regulatedCurrencySource?: "global" | "default";
 }
 
+/** Настройки HTTP-транспорта. Без них сервер работает через stdio. */
+export interface HttpTransport {
+  host: string;
+  port: number;
+  token: string;
+  /** Допустимые имена в заголовках Host и Origin; без списка — только loopback. */
+  allowedHosts?: string[] | undefined;
+}
+
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
 
 export interface RuntimeConfig {
@@ -77,6 +88,7 @@ export interface RuntimeConfig {
   defaultName: string;
   behavior: Behavior;
   logLevel: LogLevel;
+  http?: HttpTransport | undefined;
 }
 
 const normalizeUrl = (u: string): string => (u.endsWith("/") ? u : `${u}/`);
@@ -112,6 +124,14 @@ const BehaviorSchema = z.object({
   ODATA_MAX_RESPONSE_CHARS: z.coerce.number().int().min(10_000).max(45_000).default(45_000),
   TOOLS_PROFILE: z.preprocess((v) => (v === "" ? undefined : v), z.enum(["all", "read"]).optional()),
   TOOLS_ALLOW: z.string().optional(),
+  MCP_TRANSPORT: z.preprocess((v) => (v === "" ? undefined : v), z.enum(["stdio", "http"]).default("stdio")),
+  MCP_HTTP_HOST: z.preprocess((v) => (v === "" ? undefined : v), z.string().default("127.0.0.1")),
+  MCP_HTTP_PORT: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.coerce.number().int().min(0).max(65_535).default(8787),
+  ),
+  MCP_HTTP_TOKEN: z.string().optional(),
+  MCP_HTTP_ALLOWED_HOSTS: z.string().optional(),
   // Пустое значение (обычное в шаблонах .env) = «не задано», а не ошибка старта.
   ODATA_REGULATED_CURRENCY_CODE: CurrencyCodeSchema,
   LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"),
@@ -188,7 +208,32 @@ export function loadConfig(): RuntimeConfig {
   return cached;
 }
 
-/** Список имён из TOOLS_ALLOW; пустое значение (обычное в шаблонах .env) — «не задано». */
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+const MIN_TOKEN_LENGTH = 32;
+
+/**
+ * Требования к сетевому режиму. Отказ при старте, а не предупреждение: сервер с паролем 1С без токена доступен
+ * всем в сети, а запись в этом режиме не защищена. Журнал без тома теряется вместе с контейнером и повтор создаёт
+ * дубль, а держатель токена неотличим от человека, подтверждающего запись.
+ */
+function httpIssues(b: z.infer<typeof BehaviorSchema>): string[] {
+  if (b.MCP_TRANSPORT !== "http") return [];
+  const issues: string[] = [];
+  if ((b.MCP_HTTP_TOKEN?.length ?? 0) < MIN_TOKEN_LENGTH) {
+    issues.push(`MCP_HTTP_TOKEN обязателен при MCP_TRANSPORT=http, не короче ${MIN_TOKEN_LENGTH} символов`);
+  }
+  if (b.READ_ONLY !== "true") {
+    issues.push("MCP_TRANSPORT=http работает только для чтения: задайте READ_ONLY=true");
+  }
+  if (!LOOPBACK_HOSTS.has(b.MCP_HTTP_HOST) && !toolList(b.MCP_HTTP_ALLOWED_HOSTS)) {
+    issues.push(
+      `MCP_HTTP_ALLOWED_HOSTS обязателен, если MCP_HTTP_HOST=${b.MCP_HTTP_HOST}: перечислите имена, по которым клиент обращается к серверу`,
+    );
+  }
+  return issues;
+}
+
+/** Список имён через запятую; пустое значение (обычное в шаблонах .env) — «не задано». */
 const toolList = (value: string | undefined): string[] | undefined => {
   const names = (value ?? "")
     .split(",")
@@ -213,6 +258,8 @@ export function parseConfig(env: Env): RuntimeConfig {
   ) {
     issues.push("TOOLS_PROFILE и TOOLS_ALLOW вместе не задаются: оставьте одну из настроек");
   }
+
+  if (behaviorParsed.success) issues.push(...httpIssues(behaviorParsed.data));
 
   const raw = collectRawConnections(env);
   if (raw.length === 0) {
@@ -251,6 +298,15 @@ export function parseConfig(env: Env): RuntimeConfig {
     connections,
     defaultName,
     logLevel: b.LOG_LEVEL,
+    http:
+      b.MCP_TRANSPORT === "http"
+        ? {
+            host: b.MCP_HTTP_HOST,
+            port: b.MCP_HTTP_PORT,
+            token: b.MCP_HTTP_TOKEN!,
+            allowedHosts: toolList(b.MCP_HTTP_ALLOWED_HOSTS),
+          }
+        : undefined,
     behavior: {
       timeoutMs: b.ODATA_TIMEOUT_MS,
       retries: b.ODATA_RETRIES,
@@ -264,6 +320,7 @@ export function parseConfig(env: Env): RuntimeConfig {
       queueTimeoutMs: b.ODATA_QUEUE_TIMEOUT_MS,
       toolDeadlineMs: b.ODATA_TOOL_DEADLINE_MS,
       maxResponseChars: b.ODATA_MAX_RESPONSE_CHARS,
+      networkTransport: b.MCP_TRANSPORT === "http",
       toolsProfile: b.TOOLS_PROFILE ?? "all",
       toolsAllow: toolList(b.TOOLS_ALLOW),
       regulatedCurrencyCode: b.ODATA_REGULATED_CURRENCY_CODE ?? "643",
