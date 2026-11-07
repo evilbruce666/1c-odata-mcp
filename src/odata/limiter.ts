@@ -19,21 +19,33 @@ export class RequestLimiter {
     private readonly waitTimeoutMs: number,
   ) {}
 
-  /** Занимает место; возвращает идемпотентную функцию освобождения. */
-  async acquire(): Promise<() => void> {
+  /**
+   * Занимает место; возвращает идемпотентную функцию освобождения. signal прерывает ожидание: отменённому
+   * вызову место уже не нужно, а причину сообщает вызывающий код.
+   */
+  async acquire(signal?: AbortSignal): Promise<() => void> {
     if (this.limit <= 0) return () => undefined;
     if (this.active < this.limit) {
       this.active += 1;
       return this.releaser();
     }
     await new Promise<void>((resolve, reject) => {
-      const wake = () => {
+      const leave = () => {
         clearTimeout(timer);
-        resolve();
-      };
-      const timer = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
         const i = this.waiting.indexOf(wake);
         if (i >= 0) this.waiting.splice(i, 1);
+      };
+      const wake = () => {
+        leave();
+        resolve();
+      };
+      const onAbort = () => {
+        leave();
+        reject(new DOMException("Ожидание места прервано", "AbortError"));
+      };
+      const timer = setTimeout(() => {
+        leave();
         reject(
           new ODataError({
             kind: "busy",
@@ -44,6 +56,7 @@ export class RequestLimiter {
           }),
         );
       }, this.waitTimeoutMs);
+      signal?.addEventListener("abort", onAbort, { once: true });
       this.waiting.push(wake);
     });
     // Место передано освобождающим (active не уменьшался), FIFO.

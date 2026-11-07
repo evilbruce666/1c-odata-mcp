@@ -144,7 +144,7 @@ async function fixture(
     },
   );
   const tools = (
-    createServer({ db: () => conn, databases: () => [] } as never) as unknown as {
+    createServer({ db: () => conn, databases: () => [], behavior: {} } as never) as unknown as {
       _registeredTools: Record<string, { handler: (args: object, extra: object) => Promise<CallToolResult> }>;
     }
   )._registeredTools;
@@ -462,7 +462,7 @@ describe("exact contract saved settlement settings", () => {
     const operationId = data(p).operationId;
     await f.run({ confirm: true, operationId });
     const tools = (
-      createServer({ db: () => f.conn, databases: () => [] } as never) as unknown as {
+      createServer({ db: () => f.conn, databases: () => [], behavior: {} } as never) as unknown as {
         _registeredTools: Record<
           string,
           { handler: (args: object, extra: object) => Promise<CallToolResult> }

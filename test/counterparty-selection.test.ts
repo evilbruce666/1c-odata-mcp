@@ -19,7 +19,7 @@ function fixture() {
     client: { getCollection, getEntity: async () => row },
   };
   const tools = (
-    createServer({ db: () => conn, databases: () => [] } as never) as unknown as {
+    createServer({ db: () => conn, databases: () => [], behavior: {} } as never) as unknown as {
       _registeredTools: Record<
         string,
         { handler: (args: object, extra: object) => Promise<{ structuredContent?: Record<string, unknown> }> }
@@ -79,7 +79,7 @@ function combinedFixture() {
     client: { getCollection },
   };
   const tools = (
-    createServer({ db: () => conn, databases: () => [] } as never) as unknown as {
+    createServer({ db: () => conn, databases: () => [], behavior: {} } as never) as unknown as {
       _registeredTools: Record<
         string,
         { handler: (args: object, extra: object) => Promise<{ structuredContent?: Record<string, unknown> }> }

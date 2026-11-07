@@ -8,9 +8,7 @@
   "entities": [
     {
       "entitySet": "Document_СписаниеСРасчетногоСчета",
-      "keys": [
-        "Ref_Key"
-      ],
+      "keys": ["Ref_Key"],
       "properties": [
         {
           "name": "Ref_Key",
@@ -356,9 +354,7 @@
     },
     {
       "entitySet": "Document_ПоступлениеНаРасчетныйСчет",
-      "keys": [
-        "Ref_Key"
-      ],
+      "keys": ["Ref_Key"],
       "properties": [
         {
           "name": "Ref_Key",
@@ -664,12 +660,7 @@
     },
     {
       "entitySet": "InformationRegister_СчетаУчетаРасчетовСКонтрагентами",
-      "keys": [
-        "Организация_Key",
-        "Контрагент_Key",
-        "Договор_Key",
-        "ВидРасчетовПоДоговору"
-      ],
+      "keys": ["Организация_Key", "Контрагент_Key", "Договор_Key", "ВидРасчетовПоДоговору"],
       "properties": [
         {
           "name": "Организация_Key",
@@ -745,9 +736,7 @@
     },
     {
       "entitySet": "Catalog_Контрагенты",
-      "keys": [
-        "Ref_Key"
-      ],
+      "keys": ["Ref_Key"],
       "properties": [
         {
           "name": "Ref_Key",
@@ -963,9 +952,7 @@
     },
     {
       "entitySet": "Catalog_ДоговорыКонтрагентов",
-      "keys": [
-        "Ref_Key"
-      ],
+      "keys": ["Ref_Key"],
       "properties": [
         {
           "name": "Ref_Key",
@@ -1156,10 +1143,7 @@
     },
     {
       "entitySet": "Document_СписаниеСРасчетногоСчета_РасшифровкаПлатежа",
-      "keys": [
-        "Ref_Key",
-        "LineNumber"
-      ],
+      "keys": ["Ref_Key", "LineNumber"],
       "properties": [
         {
           "name": "Ref_Key",
@@ -1245,10 +1229,7 @@
     },
     {
       "entitySet": "Document_ПоступлениеНаРасчетныйСчет_РасшифровкаПлатежа",
-      "keys": [
-        "Ref_Key",
-        "LineNumber"
-      ],
+      "keys": ["Ref_Key", "LineNumber"],
       "properties": [
         {
           "name": "Ref_Key",

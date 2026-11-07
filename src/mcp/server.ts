@@ -9,6 +9,7 @@ import { z } from "zod";
 import type { ServerContext } from "../context.js";
 import { createResultSchema } from "../schemas/output.js";
 import { fingerprintWriteInput, withWriteOperation } from "../odata/write-operation-context.js";
+import { callAbortError, withToolCall } from "../odata/call-context.js";
 import { registerMetaTools } from "../tools/meta.js";
 import { registerCounterpartyTools } from "../tools/counterparties.js";
 import { registerDocumentTools } from "../tools/documents.js";
@@ -247,9 +248,14 @@ export function createServer(ctx: ServerContext): McpServer {
         // Инструмент считает с начала: чтобы дойти до этой страницы, ему нужно offset + limit строк.
         const toolArgs =
           offset > 0 && typeof args.limit === "number" ? { ...args, limit: args.limit + offset } : args;
-        return limitResponseSize(withDatabaseInfo(ctx, args, await cb(toolArgs, extra)), {
-          offset,
-          continuable,
+        const signal = (extra as { mcpReq?: { signal?: AbortSignal } } | undefined)?.mcpReq?.signal;
+        return withToolCall({ signal, deadlineMs: ctx.behavior.toolDeadlineMs }, async () => {
+          const result = await cb(toolArgs, extra);
+          // Прерванный вызов не отдаёт результат: часть инструментов переживает сбой отдельного запроса
+          // и показала бы неполные данные как обычный ответ.
+          const aborted = callAbortError();
+          if (aborted) return fail(`[${aborted.kind}] ${aborted.message}`);
+          return limitResponseSize(withDatabaseInfo(ctx, args, result), { offset, continuable });
         });
       });
     }

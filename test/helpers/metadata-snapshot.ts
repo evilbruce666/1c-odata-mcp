@@ -96,7 +96,7 @@ export type SnapshotTool = {
 
 export function snapshotTools(conn: Connection): Record<string, SnapshotTool> {
   return (
-    createServer({ db: () => conn, databases: () => [] } as never) as unknown as {
+    createServer({ db: () => conn, databases: () => [], behavior: {} } as never) as unknown as {
       _registeredTools: Record<string, SnapshotTool>;
     }
   )._registeredTools;

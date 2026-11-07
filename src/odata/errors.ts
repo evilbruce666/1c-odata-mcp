@@ -14,6 +14,8 @@ export type ODataErrorKind =
   | "network" // DNS/соединение
   | "parse" // не удалось разобрать ответ
   | "busy" // не дождались места под запрос (ODATA_MAX_CONCURRENT_REQUESTS) — запрос не отправлялся
+  | "cancelled" // клиент отменил вызов инструмента — повторять нельзя, ответ уже никому не нужен
+  | "deadline" // вызов не уложился в ODATA_TOOL_DEADLINE_MS — повторять внутри вызова незачем
   | "unknown";
 
 export class ODataError extends Error {
@@ -49,6 +51,8 @@ const RETRYABLE_DEFAULT: Record<ODataErrorKind, boolean> = {
   network: true,
   parse: false,
   busy: false,
+  cancelled: false,
+  deadline: false,
   unknown: false,
 };
 

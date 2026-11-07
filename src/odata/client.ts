@@ -8,6 +8,7 @@ import { loadMetadata } from "./metadata.js";
 import type { MetadataMap } from "../types/odata.js";
 import { uuidV1 } from "./uuid-v1.js";
 import { RequestLimiter } from "./limiter.js";
+import { callAbortError, callSignal, detachedFromCall, untilCallAborted } from "./call-context.js";
 
 /** HTTP-методы только для чтения; остальные (POST/PATCH) считаются записью и гейтуются. */
 const READ_METHODS = new Set(["GET", "HEAD"]);
@@ -29,18 +30,19 @@ export class ODataClient {
   }
 
   getMetadata(): Promise<MetadataMap> {
-    return this.metaPromise ?? this.refreshMetadata();
+    return this.metaPromise ? untilCallAborted(this.metaPromise) : this.refreshMetadata();
   }
 
   /** Явно перечитывает схему; последующие инструменты используют этот же кеш. */
   refreshMetadata(): Promise<MetadataMap> {
-    const pending = loadMetadata(this).catch((error) => {
+    // Схему ждут и другие вызовы: отмена начавшего загрузку прерывает только его ожидание.
+    const pending = detachedFromCall(() => loadMetadata(this)).catch((error) => {
       // Отказ старого запроса не должен сбрасывать более новое обновление.
       if (this.metaPromise === pending) this.metaPromise = undefined;
       throw error;
     });
     this.metaPromise = pending;
-    return pending;
+    return untilCallAborted(pending);
   }
 
   /** Журнал операций записи создаётся при первом обращении: чтению и read-only он не нужен. */
@@ -93,11 +95,14 @@ export class ODataClient {
     const url = this.url(path);
     // Любая запись, включая bodyless Post/Unpost, отправляется один раз; retry только чтению.
     const maxAttempts = READ_METHODS.has(method) ? this.behavior.retries + 1 : 1;
+    // Отмена и лимит вызова — только чтению: обрыв отправленной записи оставил бы неизвестный исход.
+    const signal = READ_METHODS.has(method) ? callSignal() : undefined;
 
     let lastErr: ODataError | undefined;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (signal?.aborted) throw callAbortError();
       // Место под HTTP — до тайм-аута запроса: ожидание места в тайм-аут 1С не входит.
-      const release = await this.limiter.acquire();
+      const release = await this.acquire(signal);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.behavior.timeoutMs);
       const started = performance.now();
@@ -112,7 +117,7 @@ export class ODataClient {
             ...headers,
           },
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-          signal: controller.signal,
+          signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
         });
 
         const ms = Math.round(performance.now() - started);
@@ -123,7 +128,7 @@ export class ODataClient {
           if (err.retryable && attempt < maxAttempts) {
             lastErr = err;
             release(); // пауза между повторами не держит место
-            await backoff(attempt, res.headers.get("Retry-After"));
+            await backoff(attempt, res.headers.get("Retry-After"), signal);
             continue;
           }
           throw err;
@@ -134,12 +139,13 @@ export class ODataClient {
         const text = await res.text();
         return parseBody<T>(text, res.headers.get("Content-Type"), url, method);
       } catch (e) {
+        if (signal?.aborted) throw callAbortError();
         const err = normalize(e, url);
         if (err.retryable && attempt < maxAttempts) {
           lastErr = err;
           logger.warn({ url, kind: err.kind, attempt }, "retrying");
           release();
-          await backoff(attempt);
+          await backoff(attempt, undefined, signal);
           continue;
         }
         throw err;
@@ -298,14 +304,16 @@ export class ODataClient {
   async getText(path: string): Promise<string> {
     this.assertWritable("GET");
     const url = this.url(path);
-    const release = await this.limiter.acquire();
+    const signal = callSignal();
+    if (signal?.aborted) throw callAbortError();
+    const release = await this.acquire(signal);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.behavior.timeoutMs);
     try {
       const res = await fetch(url, {
         method: "GET",
         headers: { Authorization: this.authHeader },
-        signal: controller.signal,
+        signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
       });
       if (!res.ok) {
         const body = await res.text().catch(() => undefined);
@@ -315,10 +323,21 @@ export class ODataClient {
       if (isHtml(text, res.headers.get("Content-Type"))) throw htmlPageError(text, url, "GET");
       return text;
     } catch (e) {
+      if (signal?.aborted) throw callAbortError();
       throw normalize(e, url);
     } finally {
       clearTimeout(timer);
       release();
+    }
+  }
+
+  /** Место под запрос; прерванное ожидание — ошибка отмены или лимита вызова. */
+  private async acquire(signal: AbortSignal | undefined): Promise<() => void> {
+    try {
+      return await this.limiter.acquire(signal);
+    } catch (e) {
+      if (signal?.aborted) throw callAbortError();
+      throw e;
     }
   }
 }
@@ -389,11 +408,20 @@ function normalize(e: unknown, url: string): ODataError {
 }
 
 /** Экспоненциальная пауза с учётом заголовка Retry-After (если есть). */
-async function backoff(attempt: number, retryAfter?: string | null): Promise<void> {
+async function backoff(attempt: number, retryAfter?: string | null, signal?: AbortSignal): Promise<void> {
   let ms = Math.min(1_000 * 2 ** (attempt - 1), 10_000);
   if (retryAfter) {
     const sec = Number(retryAfter);
     if (Number.isFinite(sec)) ms = Math.max(ms, sec * 1_000);
   }
-  await new Promise((r) => setTimeout(r, ms));
+  await new Promise<void>((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+    if (signal?.aborted) done();
+  });
 }

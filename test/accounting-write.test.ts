@@ -92,7 +92,7 @@ function fixture(config: object, register = false, settlement?: "both" | "settle
     };
   });
   const tools = (
-    createServer({ db: () => conn, databases: () => [] } as never) as unknown as {
+    createServer({ db: () => conn, databases: () => [], behavior: {} } as never) as unknown as {
       _registeredTools: Record<
         string,
         {

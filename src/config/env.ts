@@ -54,6 +54,8 @@ export interface Behavior {
   maxConcurrentRequests: number;
   /** Сколько ждать свободного места под запрос, мс. */
   queueTimeoutMs: number;
+  /** Общий лимит времени на вызов инструмента чтения, мс; 0 — без лимита (по умолчанию). */
+  toolDeadlineMs: number;
   /**
    * Код валюты регламентированного учёта (по справочнику «Валюты»): по нему договор относится к виду
    * расчётов «в валюте регламентированного учёта» при подборе счетов расчётов. По умолчанию 643 (рубль).
@@ -100,6 +102,7 @@ const BehaviorSchema = z.object({
   // Предел одновременных HTTP-запросов к одной базе (0 — без предела) и сколько ждать места.
   ODATA_MAX_CONCURRENT_REQUESTS: z.coerce.number().int().min(0).max(64).default(0),
   ODATA_QUEUE_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  ODATA_TOOL_DEADLINE_MS: z.coerce.number().int().min(0).default(0),
   // Пустое значение (обычное в шаблонах .env) = «не задано», а не ошибка старта.
   ODATA_REGULATED_CURRENCY_CODE: CurrencyCodeSchema,
   LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"),
@@ -233,6 +236,7 @@ export function parseConfig(env: Env): RuntimeConfig {
       previewView: b.ODATA_PREVIEW_VIEW === "true",
       maxConcurrentRequests: b.ODATA_MAX_CONCURRENT_REQUESTS,
       queueTimeoutMs: b.ODATA_QUEUE_TIMEOUT_MS,
+      toolDeadlineMs: b.ODATA_TOOL_DEADLINE_MS,
       regulatedCurrencyCode: b.ODATA_REGULATED_CURRENCY_CODE ?? "643",
       regulatedCurrencySource: b.ODATA_REGULATED_CURRENCY_CODE ? "global" : "default",
       writeJournalDir: resolve(

@@ -27,7 +27,7 @@ function tool(opts: { before: Doc; after: Doc | Error; response?: unknown }) {
     client: { action, getEntity, getCollection: async () => ({ value: [] }) },
   };
   const t = (
-    createServer({ db: () => connection, databases: () => [] } as never) as unknown as {
+    createServer({ db: () => connection, databases: () => [], behavior: {} } as never) as unknown as {
       _registeredTools: Record<
         string,
         { handler: (a: Record<string, unknown>, e: unknown) => Promise<CallToolResult> }

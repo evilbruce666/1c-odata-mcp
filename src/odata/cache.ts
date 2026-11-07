@@ -5,6 +5,8 @@
  * вместе с ним). Хранится промис: параллельные вызовы ждут одну загрузку. Ошибка не кэшируется.
  */
 
+import { detachedFromCall, untilCallAborted } from "./call-context.js";
+
 export const REFERENCE_TTL_MS = 10 * 60_000;
 
 interface Entry {
@@ -27,14 +29,15 @@ export function cached<T>(
     store.set(owner, map);
   }
   const hit = map.get(key);
-  if (hit && now() - hit.at < ttlMs) return hit.value as Promise<T>;
-  const value = load();
+  if (hit && now() - hit.at < ttlMs) return untilCallAborted(hit.value as Promise<T>);
+  // Загрузку ждут и другие вызовы: отмена начавшего её прерывает только его ожидание.
+  const value = detachedFromCall(load);
   const entry: Entry = { at: now(), value };
   map.set(key, entry);
   value.catch(() => {
     if (map.get(key) === entry) map.delete(key);
   });
-  return value;
+  return untilCallAborted(value);
 }
 
 /** Сбросить запись — например, когда нужного объекта в кэше нет (его могли только что создать в 1С). */

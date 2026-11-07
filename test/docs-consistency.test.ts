@@ -21,7 +21,7 @@ const changelog = read("CHANGELOG.md");
 
 type Registered = Record<string, { inputSchema?: { shape?: Record<string, unknown> } }>;
 const registered = (
-  createServer({ db: () => undefined, databases: () => [] } as never) as unknown as {
+  createServer({ db: () => undefined, databases: () => [], behavior: {} } as never) as unknown as {
     _registeredTools: Registered;
   }
 )._registeredTools;
