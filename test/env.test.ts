@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseConfig } from "../src/config/env.js";
+import { parseConfig, unencryptedDatabases } from "../src/config/env.js";
 
 describe("parseConfig — одна база (обратная совместимость)", () => {
   it("ODATA_BASE_URL → база default, дефолты, read-only", () => {
@@ -56,5 +56,28 @@ describe("parseConfig — несколько баз", () => {
   });
   it("без баз — бросает понятную ошибку", () => {
     expect(() => parseConfig({})).toThrow(/Некорректная конфигурация/);
+  });
+});
+
+describe("адрес 1С без шифрования", () => {
+  const names = (urls: Record<string, string>) => {
+    const env: Record<string, string> = {};
+    for (const [name, url] of Object.entries(urls)) {
+      env[`ODATA_DB_${name}_BASE_URL`] = url;
+      env[`ODATA_DB_${name}_USERNAME`] = "u";
+      env[`ODATA_DB_${name}_PASSWORD`] = "p";
+    }
+    return unencryptedDatabases(parseConfig(env).connections);
+  };
+  it("http не на этой машине называется, https и loopback — нет", () => {
+    expect(
+      names({
+        OFFICE: "http://192.168.1.5/buh/odata/standard.odata/",
+        CLOUD: "https://1c.example/odata/standard.odata/",
+        LOCAL: "http://localhost/odata/",
+        LOOP: "http://127.0.0.1:8080/odata/",
+        V6: "http://[::1]/odata/",
+      }),
+    ).toEqual(["office"]);
   });
 });

@@ -209,6 +209,7 @@ export function loadConfig(): RuntimeConfig {
 }
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+const LOOPBACK_URL_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 const MIN_TOKEN_LENGTH = 32;
 
 /**
@@ -241,6 +242,19 @@ const toolList = (value: string | undefined): string[] | undefined => {
     .filter(Boolean);
   return names.length ? names : undefined;
 };
+
+/**
+ * Базы с нешифрованным адресом не на этой машине: логин и пароль 1С идут по такому каналу открытым текстом.
+ * Только имена: адрес в журнал не нужен. Локальная сеть может быть защищена, поэтому это предупреждение, а не отказ.
+ */
+export function unencryptedDatabases(connections: readonly ConnectionConfig[]): string[] {
+  return connections
+    .filter((c) => {
+      const { protocol, hostname } = new URL(c.baseUrl);
+      return protocol === "http:" && !LOOPBACK_URL_HOSTS.has(hostname);
+    })
+    .map((c) => c.name);
+}
 
 /** Чистый разбор конфигурации из объекта env (без кеша) — удобно для тестов. */
 export function parseConfig(env: Env): RuntimeConfig {

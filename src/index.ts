@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
-import { loadConfig, type HttpTransport } from "./config/env.js";
+import { loadConfig, unencryptedDatabases, type HttpTransport } from "./config/env.js";
 import { ServerContext } from "./context.js";
 import { createServer } from "./mcp/server.js";
 import { logger } from "./logger.js";
@@ -9,6 +9,13 @@ const SHUTDOWN_TIMEOUT_MS = 8_000;
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
+  const unencrypted = unencryptedDatabases(cfg.connections);
+  if (unencrypted.length) {
+    logger.warn(
+      { databases: unencrypted },
+      "Адрес 1С без HTTPS: логин и пароль идут открытым текстом. Если сеть не защищена, используйте https://",
+    );
+  }
   const ctx = new ServerContext(cfg);
   if (cfg.http) return runHttp(ctx, cfg.http);
   const server = createServer(ctx);
