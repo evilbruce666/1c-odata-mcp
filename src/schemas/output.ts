@@ -500,6 +500,7 @@ export const getInventoryResultSchema = z
     ),
     groupBy: z.string().optional(),
     warehouseTracked: z.boolean().optional(),
+    query: z.string().optional(),
     itemGroup: z.object({ name: z.string(), ref: z.string() }).passthrough().optional(),
     withoutNomenclature: z.object({ quantity: z.number(), amount: z.number() }).passthrough().optional(),
     byWarehouse: z

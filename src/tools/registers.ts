@@ -29,6 +29,8 @@ import {
   hasSubcontoTypes,
   loadItemGroups,
   nomenclatureSet,
+  matchesItemQuery,
+  readAllItems,
   readItemAttributes,
   readItemsInGroups,
   resolveItemGroup,
@@ -724,7 +726,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         "groupBy=warehouse разбивает по складам и на первой странице добавляет итоги byWarehouse; если склад в субконто этих счетов не ведётся, " +
         "ответ скажет об этом (warehouseTracked=false), сумму и количество по складам из документов он не выводит. " +
         "Сумма на счетах без номенклатуры в субконто (например, 41.12) — в withoutNomenclature, она входит в totalAmount. " +
-        "count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть. Поиска по названию товара здесь нет. (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
+        "query находит товар по названию или артикулу (все слова запроса, без учёта регистра); итоги — только по найденному. count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть. (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
@@ -741,11 +743,17 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           .describe(
             "Группа номенклатуры: Ref_Key, название целиком или его часть (несколько совпадений — отказ со списком). Подгруппы входят. Итоги — только по этой группе",
           ),
+        query: z
+          .string()
+          .trim()
+          .min(1)
+          .optional()
+          .describe("Поиск товара: слова из названия или артикул. Можно вместе с group"),
         limit: z.number().int().positive().max(1000).default(200).describe("Сколько позиций вернуть"),
       }),
       outputSchema: getInventoryResultSchema,
     },
-    ({ database, organization, asOf, groupBy, group, limit }) =>
+    ({ database, organization, asOf, groupBy, group, query, limit }) =>
       guard("read.analytics.get_inventory", async () => {
         const t0 = Date.now();
         const conn = ctx.db(database);
@@ -784,6 +792,15 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           for (const [ref, a] of await readItemsInGroups(conn, nomSet, allowed)) attributes.set(ref, a);
           lines = lines.filter((l) => !!l.itemRef && attributes.has(l.itemRef));
         }
+        if (query) {
+          if (!nomSet)
+            throw new InputError("Справочник номенклатуры не опубликован: поиск по товару невозможен.");
+          if (!group) for (const [ref, a] of await readAllItems(conn, nomSet)) attributes.set(ref, a);
+          lines = lines.filter((l) => {
+            const item = l.itemRef ? attributes.get(l.itemRef) : undefined;
+            return !!item && matchesItemQuery(item, query);
+          });
+        }
 
         const withItem = lines
           .filter((l): l is StockLine & { itemRef: string } => !!l.itemRef)
@@ -797,7 +814,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         const shown = withItem.slice(0, limit);
         // Строки до начала страницы обёртка отбросит: сведения для них у 1С не запрашиваем.
         const page = shown.slice(pageStart);
-        if (!group) await readAttributes(page.map((l) => l.itemRef));
+        if (!group && !query) await readAttributes(page.map((l) => l.itemRef));
 
         const parentRefs = [...new Set(page.flatMap((l) => attributes.get(l.itemRef)?.groupRef ?? []))];
         const groupNames = groups
@@ -863,6 +880,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           ...(byWarehouse
             ? { groupBy, ...(anyStock && typesKnown ? { warehouseTracked: tracked } : {}) }
             : {}),
+          ...(query ? { query } : {}),
           ...(selectedGroup
             ? { itemGroup: { name: selectedGroup.name, ref: selectedGroup.ref, includesSubgroups: true } }
             : {}),

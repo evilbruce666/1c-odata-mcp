@@ -155,6 +155,30 @@ export async function readItemAttributes(
   return new Map([...rows].map(([ref, r]) => [ref, toAttributes(r)]));
 }
 
+/**
+ * Вся номенклатура без групп. Поиск идёт здесь, а не через substringof: 1С превращает его строку в регулярное
+ * выражение, и скобки в названии товара дали бы ошибку 500.
+ */
+export async function readAllItems(conn: Connection, set: string): Promise<Map<string, ItemAttributes>> {
+  const { rows } = await fetchAllForAggregation(
+    conn,
+    set,
+    { filter: cmp("IsFolder", "eq", "false"), select: await itemFields(conn, set) },
+    "номенклатура",
+  );
+  return new Map(rows.map((r) => [String(r["Ref_Key"]), toAttributes(r)]));
+}
+
+/** Все слова запроса есть в названии или артикуле, без учёта регистра: «бумага а4» находит «Бумага офисная A4». */
+export function matchesItemQuery(item: ItemAttributes, query: string): boolean {
+  const text = `${item.name ?? ""} ${item.article ?? ""}`.toLowerCase();
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((word) => text.includes(word));
+}
+
 /** Групп в одном $filter: длинный or упирается в лимит вложенности условий 1С. */
 const GROUP_FILTER_BATCH = 10;
 

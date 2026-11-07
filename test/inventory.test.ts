@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createServer } from "../src/mcp/server.js";
-import { aggregateStock, dimensionOf, resolveItemGroup, subtreeOf } from "../src/odata/inventory.js";
+import {
+  aggregateStock,
+  dimensionOf,
+  matchesItemQuery,
+  resolveItemGroup,
+  subtreeOf,
+} from "../src/odata/inventory.js";
 import { fake1C } from "./helpers/fake-1c.js";
 
 afterEach(() => {
@@ -57,6 +63,13 @@ async function setup(balance: object[]) {
     seenReads.push(u);
     if (u.includes("/Balance")) return { value: balance };
     if (/^ChartOfAccounts/.test(u)) return realGet(url);
+    if (u.startsWith("Catalog_Номенклатура") && u.includes("IsFolder eq false")) {
+      return {
+        value: Object.entries(CATALOG)
+          .filter(([ref, v]) => !v.IsFolder && ref.startsWith("a"))
+          .map(([Ref_Key, v]) => ({ Ref_Key, ...v })),
+      };
+    }
     if (u.startsWith("Catalog_Номенклатура") && u.includes("IsFolder eq true")) {
       return {
         value: Object.entries(CATALOG)
@@ -480,5 +493,91 @@ describe("разбивка без типов субконто и на следу
     };
     expect(first.note).toContain("byWarehouse");
     expect(next.note ?? "").not.toContain("byWarehouse");
+  });
+});
+
+describe("поиск по товару", () => {
+  const balance = () => [
+    row([[ITEM(1), NOM]], 1, 10),
+    row([[ITEM(2), NOM]], 2, 20),
+    row([[ITEM(3), NOM]], 3, 40),
+    row([[STORE(2), WH]], 0, 70),
+  ];
+  const names = (s: unknown) => (s as { items: Item[] }).items.map((i) => i.item);
+
+  it("по названию и по артикулу дают разный результат, итог только по найденному", async () => {
+    const { call } = await setup(balance());
+    const byName = (await call({ query: "ручка" })).structuredContent as unknown as {
+      items: Item[];
+      totalAmount: number;
+      count: number;
+      query: string;
+      withoutNomenclature?: unknown;
+    };
+    expect(names(byName)).toEqual(["Ручка"]);
+    expect(byName.totalAmount).toBe(20);
+    expect(byName.count).toBe(1);
+    expect(byName.query).toBe("ручка");
+    expect(byName.withoutNomenclature).toBeUndefined();
+    const byArticle = (await call({ query: "a-1" })).structuredContent;
+    expect(names(byArticle)).toEqual(["Бумага"]);
+    expect((byArticle as unknown as { items: Item[] }).items[0]).toMatchObject({
+      article: "A-1",
+      group: "Бумажное",
+    });
+  });
+  it("ничего не найдено — пусто без ошибки, справочник читается одним запросом", async () => {
+    const { call, reads } = await setup(balance());
+    const r = await call({ query: "нет такого" });
+    expect(r.isError).toBeFalsy();
+    expect(names(r.structuredContent)).toEqual([]);
+    expect((r.structuredContent as unknown as { totalAmount: number }).totalAmount).toBe(0);
+    expect(reads().filter((u) => u.startsWith("Catalog_Номенклатура"))).toHaveLength(1);
+  });
+  it("вместе с группой — пересечение", async () => {
+    const { call } = await setup(balance());
+    expect(names((await call({ query: "стол", group: "Канцелярия" })).structuredContent)).toEqual([]);
+    expect(names((await call({ query: "бумага", group: "Канцелярия" })).structuredContent)).toEqual([
+      "Бумага",
+    ]);
+  });
+  it("вместе с разбивкой по складам", async () => {
+    const { call } = await setup([
+      row(
+        [
+          [ITEM(1), NOM],
+          [STORE(1), WH],
+        ],
+        1,
+        10,
+      ),
+      row(
+        [
+          [ITEM(2), NOM],
+          [STORE(2), WH],
+        ],
+        1,
+        5,
+      ),
+    ]);
+    const s = (await call({ query: "бумага", groupBy: "warehouse" })).structuredContent as unknown as {
+      items: Item[];
+      byWarehouse: unknown[];
+    };
+    expect(s.items.map((i) => i.warehouse)).toEqual(["Основной"]);
+    expect(s.byWarehouse).toHaveLength(1);
+  });
+  it("в запросе к 1С нет substringof: скобки не сломают его", async () => {
+    const { call, reads } = await setup(balance());
+    const r = await call({ query: "бумага (А4)" });
+    expect(r.isError).toBeFalsy();
+    expect(reads().join(" ")).not.toContain("substringof");
+  });
+  it("слова в любом порядке, без учёта регистра", () => {
+    const item = { name: "Бумага офисная (A4)", article: "БМ-1" };
+    expect(matchesItemQuery(item, "a4 БУМАГА")).toBe(true);
+    expect(matchesItemQuery(item, "бм-1")).toBe(true);
+    expect(matchesItemQuery(item, "(a4)")).toBe(true);
+    expect(matchesItemQuery(item, "бумага ручка")).toBe(false);
   });
 });
