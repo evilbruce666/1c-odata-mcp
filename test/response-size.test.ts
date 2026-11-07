@@ -337,8 +337,21 @@ describe("offset у инструментов со списком по limit", ()
     const s = r.structuredContent as { rows: Array<{ ref: string }>; offset: number; returned: number };
     expect(s).toMatchObject({ offset: 10, returned: 10 });
     expect(s.rows[0]!.ref).toBe("cccccccc-0000-4000-8000-000000000010");
-    expect(r.structuredContent).toMatchObject({ count: 10, listTotal: 20 });
+    // Окно заполнено: сколько строк всего, неизвестно, но продолжение есть.
+    expect(r.structuredContent).toMatchObject({ count: 10, truncated: true, nextOffset: 20 });
+    expect(r.structuredContent).not.toHaveProperty("listTotal");
     expect(decodeURIComponent(String(spy.mock.calls[0]![0]))).toContain("Контрагент");
+
+    const seen: string[] = [];
+    let offset = 0;
+    for (let i = 0; i < 10; i++) {
+      const page = await tool.handler(tool.inputSchema.parse({ query: "Контрагент", limit: 10, offset }), {});
+      const p = page.structuredContent as { rows: Array<{ ref: string }>; nextOffset?: number };
+      seen.push(...p.rows.map((x) => x.ref));
+      if (p.nextOffset === undefined) break;
+      offset = p.nextOffset;
+    }
+    expect(seen).toEqual(rows.map((x) => x.Ref_Key));
   });
 });
 

@@ -27,7 +27,7 @@ body:
     id: versions
     attributes:
       label: Версии
-      placeholder: "1c-odata-mcp x.y.z, Node 20.x, ОС"
+      placeholder: "1c-odata-mcp x.y.z, Node 22.x, ОС"
   - type: textarea
     id: logs
     attributes:

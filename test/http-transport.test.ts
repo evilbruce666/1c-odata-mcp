@@ -67,6 +67,9 @@ describe("настройка HTTP", () => {
     ["профиль all", { TOOLS_PROFILE: "all" }, /только для чтения/],
     ["запись в TOOLS_ALLOW", { TOOLS_ALLOW: "read.a.b,write.sales.create_invoice" }, /только для чтения/],
     ["порт в списке имён", { MCP_HTTP_ALLOWED_HOSTS: "mcp.local:8787" }, /без схемы и порта/],
+    ["кавычки в токене", { MCP_HTTP_TOKEN: `"${TOKEN}"` }, /без пробелов и кавычек/],
+    ["кириллица в токене", { MCP_HTTP_TOKEN: "я".repeat(32) }, /латиница/],
+    ["звёздочка в списке имён", { MCP_HTTP_ALLOWED_HOSTS: "*" }, /без схемы и порта/],
     ["схема в списке имён", { MCP_HTTP_ALLOWED_HOSTS: "https://mcp.local" }, /без схемы и порта/],
   ])("%s — отказ при старте", (_name, extra, message) => {
     expect(() => parseConfig({ ...good, ...extra } as Record<string, string>)).toThrow(message);

@@ -179,11 +179,23 @@ function fitNestedLists(data: Record<string, unknown>, maxChars: number, skip?: 
   while (sizeOf() > maxChars && cuts.length < MAX_LIST_CUTS) {
     const list = largestList(fitted, "", skip);
     if (!list || list.chars < minChars) break;
-    const room = maxChars - (sizeOf() - list.chars) - 300;
+    const before = sizeOf();
+    const room = maxChars - (before - list.chars) - 300;
     const kept = fitToChars(list.holder, 0, Math.max(room, 0)).length;
     if (kept >= list.holder.length) break;
-    cuts.push({ path: list.path, total: list.holder.length, returned: kept });
+    const known = cuts.find((c) => c.path === list.path);
+    const removed = list.holder.slice(kept);
+    const undo = known ? { ...known } : undefined;
+    if (known) known.returned = kept;
+    else cuts.push({ path: list.path, total: list.holder.length, returned: kept });
     list.holder.length = kept;
+    // Описание среза длиннее убранного: данные потеряны, а ответ вырос. Такой срез не нужен.
+    if (sizeOf() >= before) {
+      list.holder.push(...removed);
+      if (known && undo) known.returned = undo.returned;
+      else cuts.pop();
+      break;
+    }
   }
   return { fitted, cuts };
 }
@@ -198,7 +210,7 @@ function fitNestedLists(data: Record<string, unknown>, maxChars: number, skip?: 
  */
 export function limitResponseSize(
   result: CallToolResult,
-  o: { offset?: number; continuable?: boolean } = {},
+  o: { offset?: number; continuable?: boolean; limit?: number | undefined } = {},
 ): CallToolResult {
   const data = result.structuredContent as Record<string, unknown> | undefined;
   const first = result.content[0];
@@ -209,14 +221,18 @@ export function limitResponseSize(
   // Без настройки срабатывает на норме, а страницы считаются с запасом к ней; настроенный предел строгий.
   const limit = responseCharsLimit();
   const trigger = limit >= MAX_RESPONSE_CHARS ? RESPONSE_CHARS_NORM : limit;
-  if ((ownPage || offset === 0) && first.text.length <= trigger) return result;
   const lists = Object.keys(data)
     .filter((k) => Array.isArray(data[k]))
     .sort((a, b) => elementChars(data[b]) - elementChars(data[a]));
+  // Инструмент считает с начала и отдаёт limit+offset строк. Заполненное окно не значит «всё»: дальше могут быть ещё.
+  const windowSize = o.continuable && o.limit !== undefined ? o.limit + offset : undefined;
+  const windowList =
+    windowSize === undefined ? undefined : lists.find((k) => (data[k] as unknown[]).length === windowSize);
+  if ((ownPage || offset === 0) && first.text.length <= trigger && !windowList) return result;
   // Своя страница — тот список, длину которого инструмент назвал в returned.
   const field = ownPage
     ? (lists.find((k) => (data[k] as unknown[]).length === data["returned"]) ?? undefined)
-    : lists[0];
+    : (windowList ?? lists[0]);
   // С запасом к бюджету страницы ниже: иначе элемент с урезанным списком всё равно не войдёт в неё.
   const before =
     field && !o.continuable && !ownPage
@@ -239,22 +255,26 @@ export function limitResponseSize(
         ...rest,
         [field]: kept,
         returned: kept.length,
-        ...(data["count"] === list.length ? { count: kept.length } : {}),
+        // count у rows — строки страницы; у остальных это «всего», и срез страницы его не меняет.
+        ...(field === "rows" && data["count"] === list.length ? { count: kept.length } : {}),
         ...(cut ? { truncated: true, nextOffset: next } : {}),
       };
     } else {
-      const more = next < list.length;
+      const windowFull = field === windowList && kept.length > 0;
+      const more = next < list.length || windowFull;
+      staleNote = more && !!o.continuable;
       hint = !more
         ? ""
         : o.continuable
-          ? `Показаны строки ${offset + 1}–${next} из ${list.length} списка ${field}. Следующая страница: offset=${next}.`
+          ? `Показаны строки ${offset + 1}–${next}${windowFull && next >= list.length ? "" : ` из ${list.length} списка ${field}`}. Следующая страница: offset=${next}.`
           : `Показаны строки ${offset + 1}–${next} из ${list.length} списка ${field}, больше не помещается. Уточните отбор или период.`;
       structured = {
         ...rest,
         [field]: kept,
         listField: field,
-        listTotal: list.length,
-        ...(data["count"] === list.length ? { count: kept.length } : {}),
+        // Заполненное окно не знает, сколько строк всего.
+        ...(windowFull ? {} : { listTotal: list.length }),
+        ...(field === "rows" && data["count"] === list.length ? { count: kept.length } : {}),
         offset,
         returned: kept.length,
         truncated: more || data["truncated"] === true,
@@ -275,25 +295,39 @@ export function limitResponseSize(
         }
       : cut;
   const cuts = [...(before?.cuts ?? []), ...after.cuts.map(shift)];
-  const overLimit = renderJson(after.fitted).length > trigger;
-  if (!field && !cuts.length && !overLimit) return result;
+  if (!field && !cuts.length && renderJson(after.fitted).length <= trigger) return result;
   const cutHint = cuts.length
     ? `Списки показаны не полностью, продолжения нет: ${cuts
         .map((c) => `${c.path} — ${c.returned} из ${c.total}`)
         .join(", ")}. Уточните отбор или период.`
     : "";
-  const overHint = overLimit ? `Ответ больше предела ${trigger} символов: его нечем сократить.` : "";
-  // Текст инструмента называет страницу, которой больше нет: два противоречащих диапазона сбили бы клиента.
+  // Текст инструмента называет страницу, которой больше нет, или говорит, что продолжения нет: рядом с новым
+  // диапазоном это сбило бы клиента.
   const baseNote = staleNote
-    ? String(data["note"] ?? "").replace(/Показаны [^.]*\.(?: [^.]*offset=\d+\.)?\s*/, "")
+    ? String(data["note"] ?? "")
+        .replace(/Показаны [^.]*\.(?: [^.]*offset=\d+\.)?\s*/, "")
+        .replace(
+          /Выборка упёрлась в лимит строк, продолжения нет: показаны не все\. Уточните фильтр или период\.\s*/,
+          "",
+        )
+        .replace(/Результат усечён до \d+ строк\. Уточните фильтр или период\.\s*/, "")
     : data["note"];
-  const note = [baseNote, hint, cutHint, overHint].filter(Boolean).join(" ");
-  const structuredContent = {
+  const note = [baseNote, hint, cutHint].filter(Boolean).join(" ");
+  const fittedContent = {
     ...after.fitted,
     ...(cuts.length ? { truncated: true, truncatedLists: cuts } : {}),
-    ...(overLimit ? { overLimit: true } : {}),
     ...(note ? { note } : {}),
   };
+  const overLimit = renderJson(fittedContent).length > trigger;
+  const structuredContent = overLimit
+    ? {
+        ...fittedContent,
+        overLimit: true,
+        note: [note, `Ответ больше предела ${trigger} символов: его нечем сократить.`]
+          .filter(Boolean)
+          .join(" "),
+      }
+    : fittedContent;
   return {
     ...result,
     content: [{ type: "text", text: renderJson(structuredContent) }, ...result.content.slice(1)],
@@ -407,7 +441,11 @@ export function createServer(ctx: ServerContext): McpServer {
           const aborted = callAbortError();
           if (aborted) return fail(`[${aborted.kind}] ${aborted.message}`, aborted.kind);
           return summaryFirst(
-            limitResponseSize(withDatabaseInfo(ctx, args, result), { offset, continuable }),
+            limitResponseSize(withDatabaseInfo(ctx, args, result), {
+              offset,
+              continuable,
+              limit: continuable && typeof args.limit === "number" ? args.limit : undefined,
+            }),
           );
         });
       });

@@ -223,17 +223,22 @@ const MIN_TOKEN_LENGTH = 32;
 function httpIssues(b: z.infer<typeof BehaviorSchema>): string[] {
   if (b.MCP_TRANSPORT !== "http") return [];
   const issues: string[] = [];
-  if ((b.MCP_HTTP_TOKEN?.length ?? 0) < MIN_TOKEN_LENGTH || /\s/.test(b.MCP_HTTP_TOKEN ?? "")) {
-    // Пробел в значении — обычно комментарий из шаблона .env, попавший в токен.
+  // Пробел или кавычка в значении — обычно комментарий или кавычки из шаблона .env, попавшие в токен;
+  // не-ASCII нельзя передать в заголовке HTTP.
+  if (
+    (b.MCP_HTTP_TOKEN?.length ?? 0) < MIN_TOKEN_LENGTH ||
+    !/^[\x21-\x7e]+$/.test(b.MCP_HTTP_TOKEN ?? "") ||
+    /["']/.test(b.MCP_HTTP_TOKEN ?? "")
+  ) {
     issues.push(
-      `MCP_HTTP_TOKEN обязателен при MCP_TRANSPORT=http: не короче ${MIN_TOKEN_LENGTH} символов, без пробелов`,
+      `MCP_HTTP_TOKEN обязателен при MCP_TRANSPORT=http: не короче ${MIN_TOKEN_LENGTH} символов, латиница и цифры, без пробелов и кавычек`,
     );
   }
   if (b.TOOLS_PROFILE === "all" || toolList(b.TOOLS_ALLOW)?.some((name) => !name.startsWith("read."))) {
     issues.push("MCP_TRANSPORT=http работает только для чтения: инструменты записи подключить нельзя");
   }
   for (const host of toolList(b.MCP_HTTP_ALLOWED_HOSTS) ?? []) {
-    if (/[:/]/.test(host.replace(/^\[.*\]$/, ""))) {
+    if (!/^(\[[0-9a-f:]+\]|[a-z0-9.-]+)$/i.test(host)) {
       issues.push(`MCP_HTTP_ALLOWED_HOSTS: «${host}» — нужно только имя, без схемы и порта`);
     }
   }

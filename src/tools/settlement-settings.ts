@@ -27,16 +27,18 @@ export function registerSettlementSettingsTools(server: McpServer, ctx: ServerCo
         description:
           "Читает точную настройку независимого регистра. scope=contract требует договор; counterparty/group означает контрагента или группу в том же поле Контрагент_Key без договора. Организация и вид расчётов обязательны. Для counterparty/group пустой GUID организации означает все организации, субъект остаётся точным. Унаследованные настройки не подставляются. Отсутствующая или несовместимая схема блокирует операцию. Старое имя get_contract_settlement_settings поддерживает только договор.",
         inputSchema: z.object({ database: databaseField, ...scope }),
-        outputSchema: z.object({
-          database: z.string(),
-          entitySet: z.string(),
-          recordPath: z.string(),
-          found: z.boolean(),
-          key: z.record(z.string(), z.string()),
-          record: z.record(z.string(), z.unknown()).optional(),
-          contractKind: z.unknown().optional(),
-          scope: z.enum(["contract", "counterparty", "group"]),
-        }),
+        outputSchema: z
+          .object({
+            database: z.string(),
+            entitySet: z.string(),
+            recordPath: z.string(),
+            found: z.boolean(),
+            key: z.record(z.string(), z.string()),
+            record: z.record(z.string(), z.unknown()).optional(),
+            contractKind: z.unknown().optional(),
+            scope: z.enum(["contract", "counterparty", "group"]),
+          })
+          .passthrough(),
       },
       (args: { database?: string; confirm?: boolean } & Record<string, unknown>) =>
         guard(readName, async () =>

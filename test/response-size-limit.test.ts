@@ -284,3 +284,167 @@ describe("срез чужой страницы сдвигает продолже
     expect(limitResponseSize(small)).toBe(small);
   });
 });
+
+describe("инструмент с limit без своих страниц: окно limit+offset", () => {
+  /** Как инструмент: считает всё заново и отдаёт первые limit+offset строк из total. */
+  const tool = (data: unknown[], limit: number, offset: number) =>
+    limitResponseSize(
+      ok({ rows: data.slice(0, limit + offset), count: Math.min(data.length, limit + offset) }),
+      {
+        offset,
+        continuable: true,
+        limit,
+      },
+    );
+  const walk = (data: { id: number }[], limit: number) => {
+    const seen: number[] = [];
+    let offset = 0;
+    for (let i = 0; i < 2000; i++) {
+      const s = tool(data, limit, offset).structuredContent as {
+        rows: { id: number }[];
+        nextOffset?: number;
+      };
+      const page = offset === 0 && s.nextOffset === undefined ? s.rows : s.rows;
+      seen.push(...page.map((r) => r.id));
+      if (s.nextOffset === undefined) break;
+      offset = s.nextOffset;
+    }
+    return seen;
+  };
+  const short = (n: number) => Array.from({ length: n }, (_, id) => ({ id }));
+  const longThenShort = (n: number) =>
+    Array.from({ length: n }, (_, id) => ({ id, text: id < 100 ? "я".repeat(600) : "я" }));
+
+  it("короткие строки: окно заполнено — есть продолжение, все строки читаются", () => {
+    const first = tool(short(300), 100, 0).structuredContent as {
+      truncated: boolean;
+      nextOffset: number;
+      rows: unknown[];
+    };
+    expect(first.rows).toHaveLength(100);
+    expect(first.truncated).toBe(true);
+    expect(first.nextOffset).toBe(100);
+    expect(walk(short(300), 100)).toEqual(short(300).map((r) => r.id));
+  });
+
+  it.each([undefined, 10_000, 20_000])(
+    "длинные, затем короткие строки, предел %s: 2000 из 2000",
+    async (limit) => {
+      const run = () => {
+        const seen = walk(longThenShort(2000), 100);
+        expect(seen).toEqual(longThenShort(2000).map((r) => r.id));
+      };
+      if (limit) await atLimit(limit, run);
+      else run();
+    },
+  );
+
+  it("строк меньше limit: ответ не меняется, продолжения нет", () => {
+    const r = ok({ rows: short(5), count: 5 });
+    expect(limitResponseSize(r, { offset: 0, continuable: true, limit: 100 })).toBe(r);
+  });
+
+  it("строк ровно limit: следующая страница пустая и завершает чтение", () => {
+    const s = tool(short(100), 100, 100).structuredContent as {
+      rows: unknown[];
+      truncated: boolean;
+      nextOffset?: number;
+    };
+    expect(s.rows).toEqual([]);
+    expect(s.truncated).toBe(false);
+    expect(s.nextOffset).toBeUndefined();
+  });
+
+  it("страница режется по списку с длиной окна, даже если другой список крупнее", () => {
+    const s = limitResponseSize(ok({ accounts: rows(3), rows: short(10) }), {
+      offset: 5,
+      continuable: true,
+      limit: 5,
+    }).structuredContent as { listField: string; rows: { id: number }[]; accounts: unknown[] };
+    expect(s.listField).toBe("rows");
+    expect(s.rows.map((r) => r.id)).toEqual([5, 6, 7, 8, 9]);
+    expect(s.accounts).toHaveLength(3);
+  });
+});
+
+describe("общие поля при срезе", () => {
+  it("count со смыслом «всего» не заменяется размером страницы", async () => {
+    await atLimit(10_000, () => {
+      const s = limitResponseSize(ok({ offset: 0, returned: 100, count: 100, entries: rows(100) }))
+        .structuredContent as { count: number; returned: number };
+      expect(s.count).toBe(100);
+      expect(s.returned).toBeLessThan(100);
+    });
+  });
+
+  it("срез мелких списков, который не сокращает ответ, откатывается", async () => {
+    const lists = Object.fromEntries(Array.from({ length: 300 }, (_, i) => [`l${i}`, [{ a: 1 }, { a: 2 }]]));
+    await atLimit(10_000, () => {
+      const r = limitResponseSize(ok({ ...lists }));
+      expect(textOf(r).length).toBeLessThanOrEqual(JSON.stringify(lists).length + 200);
+      const s = r.structuredContent as { overLimit?: boolean };
+      expect(s.overLimit).toBe(textOf(r).length > 10_000 ? true : undefined);
+    });
+  });
+
+  it("один путь в truncatedLists один раз, с исходным total", async () => {
+    const data = { a: rows(1000), b: { c: rows(200) } };
+    await atLimit(10_000, () => {
+      const s = limitResponseSize(ok({ x: data, y: { z: rows(1000) } })).structuredContent as {
+        truncatedLists: { path: string; total: number }[];
+      };
+      const paths = s.truncatedLists.map((c) => c.path);
+      expect(new Set(paths).size).toBe(paths.length);
+      expect(s.truncatedLists.find((c) => c.path === "x.a")!.total).toBe(1000);
+    });
+  });
+
+  it("при срезе нет противоречия «продолжения нет» и «следующая страница»", async () => {
+    await atLimit(10_000, () => {
+      const s = limitResponseSize(
+        ok({
+          offset: 0,
+          returned: 100,
+          truncated: true,
+          note: "Выборка упёрлась в лимит строк, продолжения нет: показаны не все. Уточните фильтр или период.",
+          rows: rows(100),
+        }),
+      ).structuredContent as { note: string; nextOffset: number };
+      expect(s.nextOffset).toBeGreaterThan(0);
+      expect(s.note).not.toContain("продолжения нет");
+    });
+  });
+});
+
+describe("схемы ответов чтения открыты", () => {
+  it("служебные поля обёртки не могут нарушить outputSchema настоящего клиента", async () => {
+    const { default: manifest } = (await import("../manifest.json", { with: { type: "json" } })) as {
+      default: { tools: { name: string; outputSchema?: { additionalProperties?: unknown } }[] };
+    };
+    const closed = manifest.tools
+      .filter((t) => t.name.startsWith("read.") && t.outputSchema?.additionalProperties === false)
+      .map((t) => t.name);
+    expect(closed).toEqual([]);
+  });
+
+  it("настоящий клиент: настройки счетов без database при нескольких базах", async () => {
+    const { Client, InMemoryTransport } = await import("@modelcontextprotocol/client");
+    const f = fake1C({
+      ODATA_DB_A_BASE_URL: "http://1c.test/a/",
+      ODATA_DB_A_USERNAME: "u",
+      ODATA_DB_A_PASSWORD: "p",
+      ODATA_DB_B_BASE_URL: "http://1c.test/b/",
+      ODATA_DB_B_USERNAME: "u",
+      ODATA_DB_B_PASSWORD: "p",
+    });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await createServer(f.ctx).connect(a);
+    const client = new Client({ name: "t", version: "1" });
+    await client.connect(b);
+    const { tools } = await client.listTools();
+    const schema = tools.find((t) => t.name === "read.accounting.get_settlement_settings")!.outputSchema as {
+      additionalProperties?: unknown;
+    };
+    expect(schema.additionalProperties).not.toBe(false);
+  });
+});
