@@ -570,12 +570,6 @@ export const getItemSalesResultSchema = z
         latest: z.string().nullable(),
         completeThrough: z.string().nullable(),
         unknown: z.number().optional(),
-        behind: z.number(),
-        oldest: z.array(
-          z
-            .object({ warehouse: z.string(), warehouseRef: z.string(), lastReport: z.string().nullable() })
-            .passthrough(),
-        ),
       })
       .passthrough()
       .optional(),

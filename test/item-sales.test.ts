@@ -143,8 +143,6 @@ interface Sales {
     latest: string | null;
     completeThrough: string | null;
     unknown?: number;
-    behind: number;
-    oldest: { warehouseRef: string; lastReport: string | null }[];
   };
   warehouseFilter?: { ref: string; type?: string }[];
   note?: string;
@@ -287,16 +285,14 @@ describe("get_sales_register: итоги совпадают с ручным ра
     expect(r.text).toContain("Аксессуары/01. Apple");
   });
 
-  it("отчёты о рознице: отставание — от самого свежего отчёта, а не от конца периода", async () => {
+  it("отчёты о рознице: только факты — число складов, самый свежий отчёт, дата полной розницы", async () => {
     const { call } = await setup();
     const s = (await call()).structuredContent;
-    // Розница — на W(1) и W(2); отчёт есть только у W(1), последний 30.10. Отстаёт только W(2): у него отчётов нет.
+    // Розница — на W(1) и W(2); отчёт есть только у W(1), последний 30.10; у W(2) отчётов нет — полной даты нет.
     expect(s.retailReports).toEqual({
       warehouses: 2,
       latest: "2026-10-30",
       completeThrough: null,
-      behind: 1,
-      oldest: [expect.objectContaining({ warehouseRef: W(2), lastReport: null })],
     });
   });
 
@@ -315,8 +311,6 @@ describe("get_sales_register: итоги совпадают с ручным ра
         warehouses: 2,
         latest: "2026-11-14",
         completeThrough: "2026-11-14",
-        behind: 0,
-        oldest: [],
       });
       // Одно окно на неделю, без поиска по одному складу.
       expect(seen.filter((q) => q.base === "Document_ОтчетОРозничныхПродажах").length - before).toBe(1);
@@ -334,8 +328,6 @@ describe("get_sales_register: итоги совпадают с ручным ра
       warehouses: 2,
       latest: "2026-10-31",
       completeThrough: "2026-10-31",
-      behind: 0,
-      oldest: [],
     });
   });
 
