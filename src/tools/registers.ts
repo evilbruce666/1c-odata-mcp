@@ -36,6 +36,8 @@ import {
 } from "../odata/inventory.js";
 import { InputError } from "../errors.js";
 import { stockInsteadOfAccounts } from "../odata/stock.js";
+import { tradeWithoutAccounting } from "../odata/configuration.js";
+import { RETAIL_NOT_INCLUDED } from "./sales.js";
 import { callPageStart } from "../odata/call-context.js";
 import { collectDocuments, emptyMeta, addMeta, type ScanMeta } from "../odata/aggregate.js";
 import {
@@ -546,7 +548,9 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           period: { from, to },
           total: fromCents(r.totalCents),
           byDocument: r.perSet,
-          note: "Сумма документов реализации, включая деньги комитентов при агентской схеме. Выручка в учёте — кредитовый оборот 90.01.",
+          note: (await tradeWithoutAccounting(conn))
+            ? RETAIL_NOT_INCLUDED
+            : "Сумма документов реализации, включая деньги комитентов при агентской схеме. Выручка в учёте — кредитовый оборот 90.01.",
           scan: { documentsScanned: r.meta.rowsScanned, windows: r.meta.chunks, elapsedMs: Date.now() - t0 },
         });
       }),
@@ -721,7 +725,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         "groupBy=warehouse разбивает по складам и на первой странице добавляет итоги byWarehouse; если склад в субконто этих счетов не ведётся, " +
         "ответ скажет об этом (warehouseTracked=false), сумму и количество по складам из документов он не выводит. " +
         "Сумма на счетах без номенклатуры в субконто (например, 41.12) — в withoutNomenclature, она входит в totalAmount. " +
-        "query находит товар по части названия или артикулу: все части запроса, без учёта регистра; похожие буквы кириллицы и латиницы совпадают, только если точных совпадений нет, остальные названы в otherSimilar; словоформы не распознаются (пишите основу: «бумаг»). Итоги — только по найденному; при пустом ответе примечание говорит, есть ли товар в справочнике или группе. count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть. (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков. В УТ Хозрасчётного нет: остатки по складам — get_stock.)",
+        "query находит товар по части названия или артикулу: все части запроса, без учёта регистра; похожие буквы кириллицы и латиницы совпадают, только если точных совпадений нет, остальные названы в otherSimilar; словоформы не распознаются (пишите основу: «бумаг»). Итоги — только по найденному; при пустом ответе примечание говорит, есть ли товар в справочнике или группе. count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть. (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков. В УТ Хозрасчётного нет: остатки по складам — get_warehouse_stock.)",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,

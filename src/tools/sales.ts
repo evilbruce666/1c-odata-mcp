@@ -1,4 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
+import { contractField } from "../odata/doc-fields.js";
+import { tradeWithoutAccounting } from "../odata/configuration.js";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
 import { ok, fail, guard, databaseField, organizationField, dateField } from "./_shared.js";
@@ -38,6 +40,8 @@ interface Args {
   contractRef?: string | undefined;
   groupBy: (typeof SALES_GROUP_BY)[number];
   limit: number;
+  /** Добавить примечание, что розница не входит (только для продаж). */
+  retailNote?: boolean;
 }
 
 async function aggregate(
@@ -54,6 +58,14 @@ async function aggregate(
     return fail(`Документ «${humanName}» не опубликован в OData. Добавьте в «Состав OData».`);
   }
   const org = args.organization ? await resolveOrganization(conn, args.organization) : undefined;
+  const props = new Set((await conn.getMetadata()).entities.get(set)?.properties.map((p) => p.name));
+  // ДоговорКонтрагента_Key в БП, Договор_Key в УТ: несуществующее поле 1С отвергает целиком.
+  const contract = contractField(props, resolveEntity(CATALOGS.contracts, available));
+  if (args.contractRef && !contract)
+    return fail(`В документе ${set} нет поля договора: отбор по договору невозможен.`);
+  if (args.groupBy === "contract" && !contract) {
+    return fail(`В документе ${set} нет поля договора: разбивка по договору невозможна.`);
+  }
   const kindSet = args.counterpartyKind
     ? await counterpartyRefsByKind(conn, args.counterpartyKind)
     : undefined;
@@ -65,10 +77,15 @@ async function aggregate(
       org ? cmp(DOC_FIELDS.organization, "eq", odataGuid(org.ref)) : undefined,
       cmp(DOC_FIELDS.posted, "eq", "true"),
       args.counterpartyRef ? cmp(DOC_FIELDS.counterparty, "eq", odataGuid(args.counterpartyRef)) : undefined,
-      args.contractRef ? cmp("ДоговорКонтрагента_Key", "eq", odataGuid(args.contractRef)) : undefined,
+      args.contractRef && contract ? contract.filter(args.contractRef) : undefined,
     ) || undefined;
 
-  const select = [DOC_FIELDS.date, DOC_FIELDS.amount, DOC_FIELDS.counterparty, "ДоговорКонтрагента_Key"];
+  const select = [
+    DOC_FIELDS.date,
+    DOC_FIELDS.amount,
+    DOC_FIELDS.counterparty,
+    ...(contract ? [contract.field] : []),
+  ];
   const { rows, meta } = await collectDocuments(conn, set, {
     baseFilter,
     dateField: DOC_FIELDS.date,
@@ -101,7 +118,7 @@ async function aggregate(
     } else if (args.groupBy === "month") {
       key = String(r[DOC_FIELDS.date] ?? "").slice(0, 7);
     } else if (args.groupBy === "contract") {
-      key = String(r["ДоговорКонтрагента_Key"] ?? "").toLowerCase();
+      key = String(r[contract!.field] ?? "").toLowerCase();
       if (key) contractKeys.add(key);
     } else key = "ИТОГО";
     bump(key, cents);
@@ -144,9 +161,15 @@ async function aggregate(
     documents: docCount,
     total: fromCents(totalC),
     groups,
+    ...(args.retailNote && (await tradeWithoutAccounting(conn)) ? { note: RETAIL_NOT_INCLUDED } : {}),
     scan: { documentsScanned: meta.rowsScanned, windows: meta.chunks, elapsedMs: Date.now() - t0 },
   });
 }
+
+/** Продажи по документам в торговой базе: розница идёт отчётами о розничных продажах и сюда не входит. */
+export const RETAIL_NOT_INCLUDED =
+  "Только документы реализации клиентам: розница (отчёты о розничных продажах) сюда не входит. Продажи вместе с " +
+  "розницей, в штуках и с выручкой — read.analytics.get_sales_register.";
 
 export function registerSalesTools(server: McpServer, ctx: ServerContext): void {
   const commonInput = {
@@ -184,7 +207,10 @@ export function registerSalesTools(server: McpServer, ctx: ServerContext): void 
     },
     (a) =>
       guard("read.analytics.get_sales_breakdown", async () =>
-        aggregate(ctx.db(a.database), DOCUMENTS.sales, "Реализация товаров и услуг", a),
+        aggregate(ctx.db(a.database), DOCUMENTS.sales, "Реализация товаров и услуг", {
+          ...a,
+          retailNote: true,
+        }),
       ),
   );
 

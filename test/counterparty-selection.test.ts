@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createServer } from "../src/mcp/server.js";
+import { bp30Metadata } from "./helpers/metadata-snapshot.js";
 const G = "22222222-2222-4222-8222-222222222222";
 const P = "33333333-3333-4333-8333-333333333333";
 function fixture() {
@@ -16,6 +17,8 @@ function fixture() {
     cfg: { name: "test" },
     available: async () => new Set(["Catalog_Контрагенты"]),
     behavior: { pageSize: 100, maxRows: 100 },
+    // Схема БП: поиск берёт поля из неё (в УТ у контрагентов нет кода и групп).
+    getMetadata: async () => bp30Metadata(),
     client: { getCollection, getEntity: async () => row },
   };
   const tools = (
@@ -76,6 +79,8 @@ function combinedFixture() {
     cfg: { name: "test" },
     available: async () => new Set([CAT, CONTRACTS]),
     behavior: { pageSize: 100, maxRows: 100 },
+    // Схема БП: поиск берёт поля из неё (в УТ у контрагентов нет кода и групп).
+    getMetadata: async () => bp30Metadata(),
     client: { getCollection },
   };
   const tools = (

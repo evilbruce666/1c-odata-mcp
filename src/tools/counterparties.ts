@@ -57,31 +57,42 @@ export async function counterpartyRoles(
   const out = new Map<string, { roles: string[]; contracts: number }>();
   const set = resolveEntity(CATALOGS.contracts, await conn.available());
   if (!set || refs.length === 0) return out;
+  // В БП договор подчинён контрагенту (Owner_Key, ВидДоговора), в УТ — ссылка Контрагент_Key и ТипДоговора
+  // с теми же значениями. Поля берутся из схемы: запрос несуществующего поля 1С отвергает целиком.
+  const fields = await fieldsOf(conn, set);
+  const owner = ["Owner_Key", "Контрагент_Key"].find((f) => fields.has(f));
+  const kindField = ["ВидДоговора", "ТипДоговора"].find((f) => fields.has(f));
+  if (!owner) return out;
   const BATCH = 20;
   for (let i = 0; i < refs.length; i += BATCH) {
     const batch = refs.slice(i, i + BATCH);
     const filter = and(
-      or(...batch.map((k) => cmp("Owner_Key", "eq", odataGuid(k)))),
+      or(...batch.map((k) => cmp(owner, "eq", odataGuid(k)))),
       cmp("DeletionMark", "eq", "false"),
     );
     const { rows } = await fetchAll(
       conn.client,
       set,
-      { filter, select: ["Owner_Key", "ВидДоговора"] },
+      { filter, select: [owner, ...(kindField ? [kindField] : [])] },
       conn.behavior.pageSize,
       conn.behavior.maxRows,
     );
     for (const row of rows) {
-      const owner = String(row["Owner_Key"] ?? "");
-      const kind = String(row["ВидДоговора"] ?? "");
-      const cur = out.get(owner) ?? { roles: [], contracts: 0 };
+      const ownerRef = String(row[owner] ?? "");
+      const kind = kindField ? String(row[kindField] ?? "") : "";
+      const cur = out.get(ownerRef) ?? { roles: [], contracts: 0 };
       cur.contracts += 1;
       const role = kind ? (CONTRACT_ROLES[kind] ?? kind) : undefined;
       if (role && !cur.roles.includes(role)) cur.roles.push(role);
-      out.set(owner, cur);
+      out.set(ownerRef, cur);
     }
   }
   return out;
+}
+
+/** Поля объекта по схеме базы. */
+async function fieldsOf(conn: Connection, set: string): Promise<Set<string>> {
+  return new Set((await conn.getMetadata()).entities.get(set)?.properties.map((p) => p.name));
 }
 
 const counterpartySet = (conn: Connection): Promise<string> =>
@@ -110,10 +121,19 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
       guard("read.counterparty.find_counterparty", async () => {
         const conn = ctx.db(database);
         const set = await counterpartySet(conn);
+        // В УТ у контрагентов нет кода и групп (группы — у партнёров): запрос этих полей 1С отвергает целиком.
+        const fields = await fieldsOf(conn, set);
+        const hierarchical = fields.has(CF.isFolder);
+        if (subjectKind === "group" && !hierarchical) {
+          return fail(
+            "В этой базе справочник контрагентов без групп (в Управлении торговлей группы ведутся у партнёров).",
+            "refused",
+          );
+        }
         const isInn = /^\d{10,12}$/.test(query.trim());
         const filter = and(
           isInn ? cmp(CF.inn, "eq", odataString(query.trim())) : contains(CF.name, query),
-          subjectKind === "all"
+          subjectKind === "all" || !hierarchical
             ? undefined
             : cmp(CF.isFolder, "eq", subjectKind === "group" ? "true" : "false"),
         );
@@ -136,7 +156,7 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
               "Parent_Key",
               "DataVersion",
               "DeletionMark",
-            ],
+            ].filter((f) => fields.has(f)),
           },
           conn.behavior.pageSize,
           cap + 1,

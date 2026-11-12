@@ -37,7 +37,7 @@ const total = (rows: readonly SalesRow[], pick: (q: number) => number) =>
 
 export function registerItemSalesTools(server: McpServer, ctx: ServerContext): void {
   server.registerTool(
-    "read.analytics.get_item_sales",
+    "read.analytics.get_sales_register",
     {
       title: "Продажи по номенклатуре (УТ 11, КА 2, ERP 2)",
       description:
@@ -46,9 +46,11 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
         "продаж, в регистре они с минусом); byOperation — то же по хозяйственным операциям (РеализацияВРозницу, " +
         "РеализацияКлиенту, ВозвратТоваровОтКлиентаПрошлыхПериодов, СторноРеализации…). Розница попадает в регистр только " +
         "отчётом о розничных продажах после закрытия смены: retailReports.completeThrough — дата, по которую розница " +
-        "видна по всем складам выборки, lagging — склады, чей последний отчёт раньше конца периода (с датой). Отбор: warehouses — Ref_Key складов (как в get_stock), group — группа " +
+        "видна по всем складам выборки, lagging — склады, чей последний отчёт раньше конца периода (с датой). Отбор: warehouses — Ref_Key складов (как в get_warehouse_stock), group — группа " +
         "номенклатуры с подгруппами (Ref_Key, название или путь «Телефоны/Смартфоны/Apple»), query — часть названия или " +
-        "артикул. groupBy=warehouse — по складам. Сумм выручки ответ не даёт. count — всего позиций; длинный список " +
+        "артикул. groupBy=warehouse — по складам. revenue и revenueExVat — выручка с НДС и без НДС, нетто (возвраты и сторно " +
+        "вычитаются), в валюте управленческого учёта базы (обычно рубли): розница с комиссионным товаром сверена с отчётами " +
+        "о розничных продажах до рубля. count — всего позиций; длинный список " +
         "читайте с offset=nextOffset, пока он есть.",
       inputSchema: z.object({
         database: databaseField,
@@ -87,7 +89,7 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
       outputSchema: getItemSalesResultSchema,
     },
     ({ database, from, to, warehouses, groupBy, group, query, limit }) =>
-      guard("read.analytics.get_item_sales", async () => {
+      guard("read.analytics.get_sales_register", async () => {
         const t0 = Date.now();
         checkPeriod(from, to);
         const conn = ctx.db(database);
@@ -191,6 +193,8 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
             quantity: l.quantity,
             sold: l.sold,
             returns: l.returns,
+            revenue: l.revenue,
+            revenueExVat: l.revenueExVat,
           };
         });
 
@@ -216,22 +220,38 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
           );
         }
 
-        const byOperation = new Map<string, { quantity: number; sold: number; returns: number }>();
+        const byOperation = new Map<
+          string,
+          { quantity: number; sold: number; returns: number; revenueCents: number; revenueExVatCents: number }
+        >();
         for (const r of sel.lines) {
-          const t = byOperation.get(r.operation) ?? { quantity: 0, sold: 0, returns: 0 };
+          const t = byOperation.get(r.operation) ?? {
+            quantity: 0,
+            sold: 0,
+            returns: 0,
+            revenueCents: 0,
+            revenueExVatCents: 0,
+          };
           t.quantity += r.quantity;
+          t.revenueCents += r.revenueCents;
+          t.revenueExVatCents += r.revenueExVatCents;
           if (r.quantity >= 0) t.sold += r.quantity;
           else t.returns -= r.quantity;
           byOperation.set(r.operation, t);
         }
-        const byWarehouseTotals = new Map<string, { positions: Set<string>; quantity: number }>();
+        const byWarehouseTotals = new Map<
+          string,
+          { positions: Set<string>; quantity: number; revenueCents: number }
+        >();
         for (const r of sel.lines) {
           const t = byWarehouseTotals.get(r.warehouseRef ?? "") ?? {
             positions: new Set<string>(),
             quantity: 0,
+            revenueCents: 0,
           };
           if (r.itemRef) t.positions.add(`${r.itemRef}|${r.characteristicRef ?? ""}`);
           t.quantity += r.quantity;
+          t.revenueCents += r.revenueCents;
           byWarehouseTotals.set(r.warehouseRef ?? "", t);
         }
 
@@ -259,6 +279,8 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
           totalQuantity: total(sel.lines, (q) => q),
           sold: total(sel.lines, (q) => Math.max(q, 0)),
           returns: total(sel.lines, (q) => Math.max(-q, 0)),
+          revenue: sel.lines.reduce((t, r) => t + r.revenueCents, 0) / 100,
+          revenueExVat: sel.lines.reduce((t, r) => t + r.revenueExVatCents, 0) / 100,
           // Всего, а не на странице: сколько в этом ответе — длина списка и returned (его добавляет обёртка страниц).
           count: withItem.length,
           ...(first
@@ -269,6 +291,8 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
                     quantity: qty(t.quantity),
                     sold: qty(t.sold),
                     returns: qty(t.returns),
+                    revenue: t.revenueCents / 100,
+                    revenueExVat: t.revenueExVatCents / 100,
                   }))
                   .sort((a, b) => b.quantity - a.quantity || a.operation.localeCompare(b.operation)),
               }
@@ -284,6 +308,7 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
                       ...(w?.type ? { type: w.type } : {}),
                       positions: t.positions.size,
                       quantity: qty(t.quantity),
+                      revenue: t.revenueCents / 100,
                     };
                   })
                   .sort(

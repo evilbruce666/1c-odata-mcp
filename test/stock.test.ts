@@ -153,7 +153,7 @@ async function setup({
   const client = new Client({ name: "t", version: "1" });
   await client.connect(b);
   // Настоящий клиент: ответ проходит outputSchema.
-  const call = async (args: object = {}, name = "read.analytics.get_stock") => {
+  const call = async (args: object = {}, name = "read.analytics.get_warehouse_stock") => {
     const r = (await client.callTool({ name, arguments: args })) as {
       isError?: boolean;
       structuredContent: Stock;
@@ -169,7 +169,7 @@ const qtyOf = (s: Stock, ref: string, extra: Partial<StockItem> = {}) =>
     .filter((i) => i.ref === ref && Object.entries(extra).every(([k, v]) => i[k as keyof StockItem] === v))
     .reduce((t, i) => t + i.inStock, 0);
 
-describe("get_stock: итоги совпадают с ручным расчётом", () => {
+describe("get_warehouse_stock: итоги совпадают с ручным расчётом", () => {
   it("все склады: серии сворачиваются, характеристики раздельно, нулевые строки не показаны", async () => {
     const { call, fake } = await setup();
     const r = await call();
@@ -280,7 +280,7 @@ describe("get_stock: итоги совпадают с ручным расчёт�
   });
 });
 
-describe("get_stock: группа номенклатуры", () => {
+describe("get_warehouse_stock: группа номенклатуры", () => {
   it("полный путь выбирает одну из одноимённых групп, подгруппы входят", async () => {
     const { call } = await setup();
     const s = (await call({ group: "Телефоны/Смартфоны/01. Apple" })).structuredContent;
@@ -337,7 +337,7 @@ describe("get_stock: группа номенклатуры", () => {
   });
 });
 
-describe("get_stock: большая ветка групп", () => {
+describe("get_warehouse_stock: большая ветка групп", () => {
   it("больше 30 папок — справочник читается целиком, а не пачками по 10; итог тот же", async () => {
     const extraGroups = Array.from({ length: 40 }, (_, i) => ({
       Ref_Key: G(200 + i),
@@ -370,7 +370,7 @@ describe("get_stock: большая ветка групп", () => {
   });
 });
 
-describe("get_stock: каждый параметр меняет результат", () => {
+describe("get_warehouse_stock: каждый параметр меняет результат", () => {
   it("warehouses, group, query, groupBy, asOf", async () => {
     const { call } = await setup({ balanceOnDate: [bal(I(1), W(1), 1)] });
     const base = (await call()).structuredContent;
@@ -393,7 +393,7 @@ describe("get_stock: каждый параметр меняет результа
   });
 });
 
-describe("get_stock: страницы", () => {
+describe("get_warehouse_stock: страницы", () => {
   it("страницы с offset дают все позиции ровно по разу, итоги — по всему отбору", async () => {
     const { call } = await setup();
     const seen: string[] = [];
@@ -412,7 +412,7 @@ describe("get_stock: страницы", () => {
 });
 
 describe("неопубликованные регистры: понятный отказ", () => {
-  it("get_stock в Бухгалтерии — не опубликован регистр «Товары на складах»", async () => {
+  it("get_warehouse_stock в Бухгалтерии — не опубликован регистр «Товары на складах»", async () => {
     const { call } = await setup({ schema: "bp30" });
     const r = await call();
     expect(r.isError).toBe(true);
@@ -422,11 +422,11 @@ describe("неопубликованные регистры: понятный о
     );
   });
 
-  it("get_inventory в УТ — отказ ведёт к get_stock, а не к публикации Хозрасчётного", async () => {
+  it("get_inventory в УТ — отказ ведёт к get_warehouse_stock, а не к публикации Хозрасчётного", async () => {
     const { call } = await setup();
     const r = await call({}, "read.analytics.get_inventory");
     expect(r.isError).toBe(true);
-    expect(r.text).toContain("read.analytics.get_stock");
+    expect(r.text).toContain("read.analytics.get_warehouse_stock");
     expect(r.text).not.toContain("Добавьте их в 1С");
   });
 });

@@ -17,6 +17,7 @@ import { CATALOGS, DOC_FIELDS, DOCUMENTS, resolveEntity } from "../config/mappin
 import { resolveOrganization } from "../odata/orgs.js";
 import { resolveNames, num } from "../odata/accounting.js";
 import { counterpartyRefsByKind, resolveCashflowItems } from "../odata/refilters.js";
+import { TAX_PAYMENT_OPERATION, contractField, operationField } from "../odata/doc-fields.js";
 import {
   collectDocuments,
   fetchAllForAggregation,
@@ -176,6 +177,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           isIn: boolean;
           cp: ReturnType<typeof counterpartyField>;
           hasCfi: boolean;
+          op: string | undefined;
           baseFilter: string | undefined;
           select: string[];
         }
@@ -189,7 +191,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           const hasCfi = props.has("СтатьяДвиженияДенежныхСредств_Key");
           if (cashflowItem && !hasCfi) continue;
           const cp = counterpartyField(props);
-          const hasOp = props.has("ВидОперации");
+          const op = operationField(props);
 
           const baseFilter =
             and(
@@ -202,10 +204,10 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
 
           const select: string[] = [DOC_FIELDS.date, DOC_FIELDS.amount];
           if (cp) select.push(cp.field);
-          if (hasOp) select.push("ВидОперации");
+          if (op) select.push(op);
           if (hasCfi) select.push("СтатьяДвиженияДенежныхСредств_Key");
 
-          plans.push({ set, isIn: inSets.has(candidate), cp, hasCfi, baseFilter, select });
+          plans.push({ set, isIn: inSets.has(candidate), cp, hasCfi, op, baseFilter, select });
         }
         if (plans.length === 0) {
           return fail("Банковские/кассовые документы не опубликованы в OData. Добавьте их в «Состав OData».");
@@ -246,7 +248,8 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
             const cpNorm = plan.cp ? normGuid(r[plan.cp.field]) : "";
             if (cpRef && !(plan.cp?.serverFilterable ?? false) && cpNorm !== cpRef) continue;
             if (kindSet && (!cpNorm || !kindSet.has(cpNorm))) continue;
-            if (opType && String(r["ВидОперации"] ?? "") !== opType) continue;
+            const operation = plan.op ? String(r[plan.op] ?? "") : "";
+            if (opType && operation !== opType) continue;
 
             const cents = toCents(r[DOC_FIELDS.amount]);
             docCount += 1;
@@ -254,7 +257,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
             else outflowC += cents;
 
             let key: string;
-            if (groupBy === "operation") key = String(r["ВидОперации"] ?? "—");
+            if (groupBy === "operation") key = operation || "—";
             else if (groupBy === "month") key = String(r[DOC_FIELDS.date] ?? "").slice(0, 7);
             else if (groupBy === "counterparty") {
               key = cpNorm;
@@ -375,11 +378,13 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           ...DOCUMENTS.cashOut,
         ];
         const inSets = new Set<string>([...DOCUMENTS.bankIn, ...DOCUMENTS.cashIn]);
+        const contractSet = resolveEntity(CATALOGS.contracts, available);
 
         interface Plan {
           set: string;
           isIn: boolean;
           cp: ReturnType<typeof counterpartyField>;
+          op: string | undefined;
           filter: string | undefined;
           select: string[];
         }
@@ -389,9 +394,10 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           if (!set) continue;
           const props = await propsOf(conn, set);
           const hasPurpose = props.has("НазначениеПлатежа");
-          const hasContract = props.has("ДоговорКонтрагента_Key");
+          const contract = contractField(props, contractSet);
           if (dealKey && !hasPurpose) continue;
-          if (contractRef && !hasContract) continue;
+          if (contractRef && !contract) continue;
+          const op = operationField(props);
           const cp = counterpartyField(props);
           const filter =
             and(
@@ -400,13 +406,13 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
               to ? cmp(DOC_FIELDS.date, "le", `datetime'${to}T23:59:59'`) : undefined,
               org ? cmp(DOC_FIELDS.organization, "eq", odataGuid(org.ref)) : undefined,
               dealKey ? contains("НазначениеПлатежа", dealKey) : undefined,
-              contractRef ? cmp("ДоговорКонтрагента_Key", "eq", odataGuid(contractRef)) : undefined,
+              contractRef && contract ? contract.filter(contractRef) : undefined,
             ) || undefined;
           const select: string[] = [DOC_FIELDS.date, DOC_FIELDS.number, DOC_FIELDS.amount];
-          if (props.has("ВидОперации")) select.push("ВидОперации");
+          if (op) select.push(op);
           if (hasPurpose) select.push("НазначениеПлатежа");
           if (cp) select.push(cp.field);
-          plans.push({ set, isIn: inSets.has(candidate), cp, filter, select });
+          plans.push({ set, isIn: inSets.has(candidate), cp, op, filter, select });
         }
 
         // Сделка/договор узкие по своей природе — одиночная выборка с громким переполнением.
@@ -445,7 +451,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
               number: String(r[DOC_FIELDS.number] ?? ""),
               cents: toCents(r[DOC_FIELDS.amount]),
               direction: plan.isIn ? "in" : "out",
-              operation: r["ВидОперации"] ? String(r["ВидОперации"]) : undefined,
+              operation: plan.op && r[plan.op] ? String(r[plan.op]) : undefined,
               counterpartyRef: cpVal || undefined,
               purpose: r["НазначениеПлатежа"] ? String(r["НазначениеПлатежа"]) : undefined,
             });
@@ -557,7 +563,8 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           const set = resolveEntity([candidate], available);
           if (!set) continue;
           const props = await propsOf(conn, set);
-          if (!props.has("ВидОперации")) continue;
+          const op = operationField(props);
+          if (!op) continue;
           const hasCfi = props.has("СтатьяДвиженияДенежныхСредств_Key");
           if (cashflowItem && !hasCfi) continue;
           const cp = counterpartyField(props);
@@ -565,7 +572,8 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
             and(
               cmp(DOC_FIELDS.posted, "eq", "true"),
               org ? cmp(DOC_FIELDS.organization, "eq", odataGuid(org.ref)) : undefined,
-              cmp("ВидОперации", "eq", "'ПеречислениеНалога'"), // КЛЮЧЕВОЙ маркер уплаты налога
+              // КЛЮЧЕВОЙ маркер уплаты налога: в БП и УТ значение своё.
+              cmp(op, "eq", `'${TAX_PAYMENT_OPERATION[op]}'`),
               hasCfi ? cashflowItemFilter(itemRefs) : undefined,
             ) || undefined;
           const select: string[] = [DOC_FIELDS.date, DOC_FIELDS.amount];

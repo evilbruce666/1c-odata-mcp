@@ -495,11 +495,20 @@ export const getItemSalesResultSchema = z
     totalQuantity: z.number(),
     sold: z.number(),
     returns: z.number(),
+    revenue: z.number(),
+    revenueExVat: z.number(),
     count: z.number(),
     byOperation: z
       .array(
         z
-          .object({ operation: z.string(), quantity: z.number(), sold: z.number(), returns: z.number() })
+          .object({
+            operation: z.string(),
+            quantity: z.number(),
+            sold: z.number(),
+            returns: z.number(),
+            revenue: z.number(),
+            revenueExVat: z.number(),
+          })
           .passthrough(),
       )
       .optional(),
@@ -512,6 +521,7 @@ export const getItemSalesResultSchema = z
             type: z.string().optional(),
             positions: z.number(),
             quantity: z.number(),
+            revenue: z.number(),
           })
           .passthrough(),
       )
@@ -545,6 +555,8 @@ export const getItemSalesResultSchema = z
           quantity: z.number(),
           sold: z.number(),
           returns: z.number(),
+          revenue: z.number(),
+          revenueExVat: z.number(),
         })
         .passthrough(),
     ),

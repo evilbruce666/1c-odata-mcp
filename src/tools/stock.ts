@@ -28,7 +28,7 @@ const sum = (lines: readonly WarehouseStockLine[], field: "inStock" | "toShip") 
 
 export function registerStockTools(server: McpServer, ctx: ServerContext): void {
   server.registerTool(
-    "read.analytics.get_stock",
+    "read.analytics.get_warehouse_stock",
     {
       title: "Остатки на складах (УТ 11, КА 2, ERP 2)",
       description:
@@ -80,7 +80,7 @@ export function registerStockTools(server: McpServer, ctx: ServerContext): void 
       outputSchema: getStockResultSchema,
     },
     ({ database, asOf, warehouses, groupBy, group, query, limit }) =>
-      guard("read.analytics.get_stock", async () => {
+      guard("read.analytics.get_warehouse_stock", async () => {
         const t0 = Date.now();
         const conn = ctx.db(database);
         const byWarehouse = groupBy === "warehouse";

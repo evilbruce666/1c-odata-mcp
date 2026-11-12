@@ -45,8 +45,8 @@ const SETTINGS_UPDATE = { mode: "update", singleWriter: true, accounts: { custom
 
 /** Аргументы, которые не подобрать по имени поля. Новый инструмент обычно сюда не нужен. */
 const OVERRIDES: Record<string, Record<string, unknown>> = {
-  "read.analytics.get_stock": { warehouses: [id] },
-  "read.analytics.get_item_sales": { warehouses: [id] },
+  "read.analytics.get_warehouse_stock": { warehouses: [id] },
+  "read.analytics.get_sales_register": { warehouses: [id] },
   "read.document.get_document": { entitySet: "Document_РеализацияТоваровУслуг", ref: id },
   "read.document.search_documents": { entitySet: "Document_РеализацияТоваровУслуг" },
   "read.accounting.get_document_postings": {
@@ -194,8 +194,8 @@ type Tools = Record<
  * только отказ (тест ниже).
  */
 const TOOL_SCHEMA: Record<string, FakeSchema> = {
-  "read.analytics.get_stock": "ut11",
-  "read.analytics.get_item_sales": "ut11",
+  "read.analytics.get_warehouse_stock": "ut11",
+  "read.analytics.get_sales_register": "ut11",
 };
 
 /** Вызов инструмента так же, как SDK: аргументы проходят схему (значения по умолчанию, проверка типов). */
@@ -251,6 +251,48 @@ describe("все инструменты против поддельной 1С н
       return;
     }
     expect(manifest.tools.map((t) => t.name).filter((n) => budget[n] === undefined)).toEqual([]);
+  });
+});
+
+/**
+ * Инструменты чтения на схеме УТ 11: каждый отвечает или отказывает понятно (не опубликовано, не поддерживается,
+ * неверный ввод), но ни один не шлёт запрос к полю, которого в УТ нет. Так на живой УТ падали find_counterparty (Code)
+ * и get_sales_breakdown (ДоговорКонтрагента_Key).
+ */
+const UT_ALLOWED_ERRORS = new Set(["not_published", "refused", "input"]);
+
+describe("все инструменты чтения на снимке схемы УТ 11", () => {
+  const reads = manifest.tools.filter((t) => t.name.startsWith("read."));
+  it.each(reads.map((t) => [t.name, t] as const))("%s", async (name, tool) => {
+    for (const optional of [false, true]) {
+      const raw: Record<string, unknown> = { ...argsFor(tool, optional), ...OVERRIDES[name] };
+      for (const arg of [...(OPTIONAL_OMIT[name] ?? []), ...(FLAGS_OMIT[name] ?? [])]) delete raw[arg];
+      const { fake, r, text } = await call(name, raw, "ut11");
+      expect(fake.violations, `${name}: запросы к полям, которых нет в схеме УТ`).toEqual([]);
+      if (r.isError) {
+        const kind = (r as { _meta?: Record<string, string> })._meta?.["odata-1c/errorKind"];
+        expect(UT_ALLOWED_ERRORS.has(kind ?? ""), `${name}: ${kind} — ${text.slice(0, 200)}`).toBe(true);
+      }
+    }
+  });
+});
+
+describe("запись на снимке схемы УТ 11 отказывает до предпросмотра", () => {
+  const writes = manifest.tools.filter(
+    (t) => t.name.startsWith("write.") && t.name !== "write.operation.status",
+  );
+  it.each(writes.map((t) => [t.name, t] as const))("%s", async (name, tool) => {
+    // Без READ_ONLY: запись включена, и остановить её должна именно проверка конфигурации.
+    const fake = fake1C({ READ_ONLY: "false", ODATA_WRITABLE: "true" }, { schema: "ut11" });
+    const registered = (createServer(fake.ctx) as unknown as { _registeredTools: Tools })._registeredTools[
+      name
+    ]!;
+    const args = registered.inputSchema ? registered.inputSchema.parse(argsFor(tool)) : argsFor(tool);
+    const r = await registered.handler(args, {});
+    const text = (r.content ?? []).map((c) => c.text ?? "").join("");
+    expect(r.isError, `${name}: ${text.slice(0, 160)}`).toBe(true);
+    expect(text).toContain("только для Бухгалтерии");
+    expect(fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
   });
 });
 
@@ -336,8 +378,8 @@ const OPTIONAL_OMIT: Record<string, string[]> = {
 /** Аргументы, с которыми инструмент законно отказывает: отбор без данных или взаимоисключающие параметры. */
 const FLAGS_OMIT: Record<string, string[]> = {
   "read.analytics.get_inventory": ["group"],
-  "read.analytics.get_stock": ["group"],
-  "read.analytics.get_item_sales": ["group"],
+  "read.analytics.get_warehouse_stock": ["group"],
+  "read.analytics.get_sales_register": ["group"],
   "read.document.search_documents": ["kind"],
 };
 

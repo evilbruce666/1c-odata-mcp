@@ -52,6 +52,9 @@ const sale = (item: string, wh: string | null, operation: string, quantity: numb
   Склад_Type: wh ? WH_TYPE : "StandardODATA.Undefined",
   ХозяйственнаяОперация: operation,
   КоличествоTurnover: quantity,
+  // Цена 100,10 за штуку с НДС 20 %: возврат уменьшает выручку так же, как количество.
+  СуммаВыручкиTurnover: Math.round(quantity * 100.1 * 100) / 100,
+  СуммаВыручкиБезНДСTurnover: Math.round((quantity * 100.1 * 100) / 1.2) / 100,
 });
 
 // Ручной расчёт рядом с данными.
@@ -155,7 +158,7 @@ async function setup(
   await client.connect(b);
   const call = async (args: object = {}) => {
     const r = (await client.callTool({
-      name: "read.analytics.get_item_sales",
+      name: "read.analytics.get_sales_register",
       arguments: { from: "2026-10-01", to: "2026-10-31", ...args },
     })) as { isError?: boolean; structuredContent: Sales; content: { text: string }[] };
     return { ...r, text: r.content.map((c) => c.text).join("") };
@@ -163,13 +166,19 @@ async function setup(
   return { call, fake, seen };
 }
 
-describe("get_item_sales: итоги совпадают с ручным расчётом", () => {
+describe("get_sales_register: итоги совпадают с ручным расчётом", () => {
   it("все склады: нетто, продано и возвраты; возвраты и сторно вычитаются", async () => {
     const { call, fake } = await setup();
     const r = await call();
     expect(r.isError, r.text).toBeFalsy();
     const s = r.structuredContent;
     expect([s.totalQuantity, s.sold, s.returns]).toEqual([16, 19, 3]);
+    // Выручка нетто: 16 штук × 100,10 = 1601,60; без НДС — сумма строк, каждая округлена до копейки.
+    const sx = s as Sales & { revenue: number; revenueExVat: number };
+    expect(sx.revenue).toBe(1601.6);
+    expect(sx.revenueExVat).toBe(
+      SALES.reduce((t, r) => t + Math.round(r.СуммаВыручкиБезНДСTurnover * 100), 0) / 100,
+    );
     const i1 = s.items.find((i) => i.ref === I(1))!;
     // 5 + 2 − 1 + 3 − 1.
     expect([i1.quantity, i1.sold, i1.returns]).toEqual([8, 10, 2]);
@@ -180,11 +189,41 @@ describe("get_item_sales: итоги совпадают с ручным расч
     ]);
     expect(s.items.find((i) => i.ref === I(5))).toMatchObject({ quantity: 0, sold: 1, returns: 1 });
     expect(s.byOperation).toEqual([
-      { operation: "РеализацияВРозницу", quantity: 13, sold: 13, returns: 0 },
-      { operation: "РеализацияКлиенту", quantity: 4, sold: 4, returns: 0 },
-      { operation: "РеализацияКомиссионногоТовара", quantity: 2, sold: 2, returns: 0 },
-      { operation: "СторноРеализации", quantity: -1, sold: 0, returns: 1 },
-      { operation: "ВозвратТоваровОтКлиентаПрошлыхПериодов", quantity: -2, sold: 0, returns: 2 },
+      expect.objectContaining({
+        operation: "РеализацияВРозницу",
+        quantity: 13,
+        sold: 13,
+        returns: 0,
+        revenue: 1301.3,
+      }),
+      expect.objectContaining({
+        operation: "РеализацияКлиенту",
+        quantity: 4,
+        sold: 4,
+        returns: 0,
+        revenue: 400.4,
+      }),
+      expect.objectContaining({
+        operation: "РеализацияКомиссионногоТовара",
+        quantity: 2,
+        sold: 2,
+        returns: 0,
+        revenue: 200.2,
+      }),
+      expect.objectContaining({
+        operation: "СторноРеализации",
+        quantity: -1,
+        sold: 0,
+        returns: 1,
+        revenue: -100.1,
+      }),
+      expect.objectContaining({
+        operation: "ВозвратТоваровОтКлиентаПрошлыхПериодов",
+        quantity: -2,
+        sold: 0,
+        returns: 2,
+        revenue: -200.2,
+      }),
     ]);
     expect(fake.violations).toEqual([]);
   });
@@ -311,7 +350,7 @@ describe("get_item_sales: итоги совпадают с ручным расч
   });
 });
 
-describe("get_item_sales: поле returned занято обёрткой страниц", () => {
+describe("get_sales_register: поле returned занято обёрткой страниц", () => {
   it("на короткой странице возвраты не затираются числом строк (на живой базе было 1 вместо 66)", async () => {
     const { call } = await setup();
     const s = (await call({ limit: 1 })).structuredContent as Sales & { returned?: number };
@@ -322,7 +361,7 @@ describe("get_item_sales: поле returned занято обёрткой стр
   });
 });
 
-describe("get_item_sales: каждый параметр меняет результат", () => {
+describe("get_sales_register: каждый параметр меняет результат", () => {
   it("warehouses, group, query, groupBy, период", async () => {
     const { call } = await setup();
     const sig = (s: Sales) =>
@@ -339,7 +378,7 @@ describe("get_item_sales: каждый параметр меняет резул�
   });
 });
 
-describe("get_item_sales: страницы", () => {
+describe("get_sales_register: страницы", () => {
   it("offset даёт все позиции ровно по разу, итоги — по всему отбору", async () => {
     const { call } = await setup();
     const seen: string[] = [];
@@ -356,7 +395,7 @@ describe("get_item_sales: страницы", () => {
   });
 });
 
-describe("get_item_sales: неопубликованный регистр", () => {
+describe("get_sales_register: неопубликованный регистр", () => {
   it("в Бухгалтерии — понятный отказ с именем регистра", async () => {
     const { call } = await setup("bp30");
     const r = await call();
@@ -369,12 +408,14 @@ describe("aggregateSales", () => {
   it("строка с нулём продаж и возвратов не показывается, дробные количества без хвостов float", () => {
     const lines = aggregateSales(
       [
-        { itemRef: I(1), operation: "x", quantity: 0.1 },
-        { itemRef: I(1), operation: "x", quantity: 0.2 },
-        { itemRef: I(2), operation: "x", quantity: 0 },
+        { itemRef: I(1), operation: "x", quantity: 0.1, revenueCents: 10, revenueExVatCents: 8 },
+        { itemRef: I(1), operation: "x", quantity: 0.2, revenueCents: 20, revenueExVatCents: 17 },
+        { itemRef: I(2), operation: "x", quantity: 0, revenueCents: 0, revenueExVatCents: 0 },
       ],
       false,
     );
-    expect(lines).toEqual([{ itemRef: I(1), quantity: 0.3, sold: 0.3, returns: 0 }]);
+    expect(lines).toEqual([
+      { itemRef: I(1), quantity: 0.3, sold: 0.3, returns: 0, revenue: 0.3, revenueExVat: 0.25 },
+    ]);
   });
 });

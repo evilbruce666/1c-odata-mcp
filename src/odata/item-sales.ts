@@ -49,6 +49,8 @@ const SELECT = [
   "Склад_Type",
   "ХозяйственнаяОперация",
   "КоличествоTurnover",
+  "СуммаВыручкиTurnover",
+  "СуммаВыручкиБезНДСTurnover",
 ];
 
 /** Строки оборотов; при складах — пачками, отбор на стороне 1С. Пачки не пересекаются, строки не задваиваются. */
@@ -97,6 +99,12 @@ export interface SalesRow {
   warehouseRef?: string;
   operation: string;
   quantity: number;
+  /**
+   * Выручка с НДС и без НДС в копейках, в валюте управленческого учёта. Сверено на УТ 11.5: розница за месяц вместе с
+   * комиссионным товаром совпала с суммой отчётов о розничных продажах до рубля.
+   */
+  revenueCents: number;
+  revenueExVatCents: number;
 }
 
 /** Склад строки — только если это склад из справочника складов; «Неопределено» и прочие типы — без склада. */
@@ -113,6 +121,8 @@ export function toSalesRows(rows: readonly ODataEntity[], warehouseSets: readonl
       ...(warehouseRef ? { warehouseRef } : {}),
       operation: String(r["ХозяйственнаяОперация"] ?? ""),
       quantity: num(r["КоличествоTurnover"]),
+      revenueCents: Math.round(num(r["СуммаВыручкиTurnover"]) * 100),
+      revenueExVatCents: Math.round(num(r["СуммаВыручкиБезНДСTurnover"]) * 100),
     };
   });
 }
@@ -125,6 +135,9 @@ export interface SalesLine {
   quantity: number;
   sold: number;
   returns: number;
+  /** Выручка с НДС и без НДС, нетто (возвраты и сторно уменьшают). */
+  revenue: number;
+  revenueExVat: number;
 }
 
 /** Свёртка по номенклатуре, характеристике и, при byWarehouse, складу. Нулевое нетто без движений не показывается. */
@@ -140,14 +153,26 @@ export function aggregateSales(rows: readonly SalesRow[], byWarehouse: boolean):
       quantity: 0,
       sold: 0,
       returns: 0,
+      revenue: 0,
+      revenueExVat: 0,
     };
     if (r.quantity >= 0) line.sold += r.quantity;
     else line.returns -= r.quantity;
+    // Копейки — целые: float-сумма тысяч строк дала бы дрейф.
+    line.revenue += r.revenueCents;
+    line.revenueExVat += r.revenueExVatCents;
     lines.set(key, line);
   }
   return [...lines.values()]
-    .map((l) => ({ ...l, sold: qty(l.sold), returns: qty(l.returns), quantity: qty(l.sold - l.returns) }))
-    .filter((l) => l.sold !== 0 || l.returns !== 0);
+    .map((l) => ({
+      ...l,
+      sold: qty(l.sold),
+      returns: qty(l.returns),
+      quantity: qty(l.sold - l.returns),
+      revenue: l.revenue / 100,
+      revenueExVat: l.revenueExVat / 100,
+    }))
+    .filter((l) => l.sold !== 0 || l.returns !== 0 || l.revenue !== 0);
 }
 
 /** Окно поиска последних отчётов назад от конца периода: за неделю отчётов немного даже у большой сети. */

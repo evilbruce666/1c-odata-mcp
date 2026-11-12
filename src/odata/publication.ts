@@ -1,5 +1,6 @@
 import type { Connection } from "../context.js";
 import { resolveEntity } from "../config/mapping.js";
+import { tradeRefusal, tradeWithoutAccounting } from "./configuration.js";
 
 /**
  * Требуемый объект отсутствует в доступной OData-схеме. guard() превращает ошибку
@@ -30,8 +31,17 @@ export async function requireEntity(
   label: string,
 ): Promise<string> {
   const set = resolveEntity(candidates, await conn.available());
-  if (!set) throw new NotPublishedError([{ label, candidates }]);
-  return set;
+  if (set) return set;
+  // Регистр бухгалтерии и план счетов в Управлении торговлей отсутствуют в самой конфигурации: совет опубликовать их
+  // неверен, отказ ведёт к инструментам, которые в такой базе работают.
+  const accounting = candidates.some((c) => /^(AccountingRegister|ChartOfAccounts)_/.test(c));
+  if (accounting && (await tradeWithoutAccounting(conn))) {
+    throw new NotPublishedError(
+      [{ label, candidates }],
+      tradeRefusal("Этот инструмент работает по бухгалтерскому учёту."),
+    );
+  }
+  throw new NotPublishedError([{ label, candidates }]);
 }
 
 /** Проверяет, что конкретный EntitySet опубликован (для имён, заданных пользователем). */

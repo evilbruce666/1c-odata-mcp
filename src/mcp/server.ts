@@ -16,6 +16,7 @@ import { registerDocumentTools } from "../tools/documents.js";
 import { registerRegisterTools } from "../tools/registers.js";
 import { registerStockTools } from "../tools/stock.js";
 import { registerItemSalesTools } from "../tools/item-sales.js";
+import { tradeWithoutAccounting } from "../odata/configuration.js";
 import { registerDebtTools } from "../tools/debts.js";
 import { registerMonthCloseTools } from "../tools/month-close.js";
 import { registerCardTools } from "../tools/card.js";
@@ -149,8 +150,8 @@ type PageList = { list: string; countIsTotal?: boolean };
 /** Угадывать по длине нельзя: список счетов в ответе остатков бывает длиннее самих остатков. */
 const PAGE_LISTS: Record<string, PageList> = {
   "read.analytics.get_inventory": { list: "items", countIsTotal: true },
-  "read.analytics.get_stock": { list: "items", countIsTotal: true },
-  "read.analytics.get_item_sales": { list: "items", countIsTotal: true },
+  "read.analytics.get_warehouse_stock": { list: "items", countIsTotal: true },
+  "read.analytics.get_sales_register": { list: "items", countIsTotal: true },
   "read.analytics.get_debtors": { list: "debtors", countIsTotal: true },
   "read.analytics.get_creditors": { list: "creditors", countIsTotal: true },
   "read.analytics.get_unpaid_invoices": { list: "invoices", countIsTotal: true },
@@ -401,6 +402,42 @@ export function requireDatabase(
   };
 }
 
+/** Инструменты write.*, которые ничего не пишут: статус операции читает журнал. */
+const WRITE_CHECKED_ELSEWHERE = new Set(["write.operation.status"]);
+
+/**
+ * Запись собирает документы и справочники Бухгалтерии. В базе без Хозрасчётного (Управление торговлей) поля и
+ * объекты другие, и запись не проверена ни на одной такой базе: отказ до предпросмотра, ничего не отправлено.
+ * Если база не определена (несколько баз без database), решает следующая проверка — она откажет сама.
+ */
+function refuseWriteToTrade(
+  ctx: ServerContext,
+  cb: (args: Record<string, unknown>, extra: unknown) => Promise<CallToolResult>,
+): (args: Record<string, unknown>, extra: unknown) => Promise<CallToolResult> {
+  return async (args, extra) => {
+    const several = ctx.databases().length > 1;
+    if (typeof args.database === "string" || !several) {
+      let trade = false;
+      try {
+        trade = await tradeWithoutAccounting(
+          ctx.db(typeof args.database === "string" ? args.database : undefined),
+        );
+      } catch {
+        // Неизвестная база или недоступная схема — сообщит сам инструмент, как раньше.
+      }
+      if (trade) {
+        return fail(
+          "Запись поддерживается только для Бухгалтерии: в этой базе нет регистра «Хозрасчётный» (похоже, это " +
+            "Управление торговлей). Документы и справочники в ней устроены иначе, запись на такой базе не проверена. " +
+            "Ничего не записано.",
+          "refused",
+        );
+      }
+    }
+    return cb(args, extra);
+  };
+}
+
 /** Создаёт MCP-сервер и регистрирует все инструменты (чтение + гейтованная запись). */
 export function createServer(ctx: ServerContext): McpServer {
   // Какие инструменты видит клиент. Это про объём контекста модели, запись защищают READ_ONLY и WRITABLE.
@@ -429,10 +466,14 @@ export function createServer(ctx: ServerContext): McpServer {
   const registerTool = (
     name: string,
     config: Record<string, unknown>,
-    cb: (args: Record<string, unknown>, extra: unknown) => Promise<CallToolResult>,
+    handler: (args: Record<string, unknown>, extra: unknown) => Promise<CallToolResult>,
   ) => {
     known.add(name);
     if (!listed(name)) return undefined;
+    const cb =
+      WRITE_CHECKED_ELSEWHERE.has(name) || !name.startsWith("write.")
+        ? handler
+        : refuseWriteToTrade(ctx, handler);
     const appMeta = appMetaFor(name);
     const annotatedConfig = {
       ...config,

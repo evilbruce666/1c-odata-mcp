@@ -6,6 +6,7 @@ import type { ODataEntity } from "../types/odata.js";
 import { fetchAllForAggregation } from "./aggregate.js";
 import { nextDay, num, readByRefs } from "./accounting.js";
 import { NotPublishedError, requireEntity } from "./publication.js";
+import { tradeRefusal, tradeWithoutAccounting } from "./configuration.js";
 import { cmp, odataGuid, or } from "./query.js";
 import { refOf } from "./settlements-aging.js";
 
@@ -26,13 +27,12 @@ export const WAREHOUSE_BATCH = 10;
  * в УТ неверен, его нет в самой конфигурации.
  */
 export async function stockInsteadOfAccounts(conn: Connection): Promise<void> {
-  const available = await conn.available();
-  const registers = accountingRegister(conn.cfg);
-  if (resolveEntity(registers, available) || !available.has(STOCK_REGISTER)) return;
+  if (!(await tradeWithoutAccounting(conn))) return;
   throw new NotPublishedError(
-    [{ label: "Регистр бухгалтерии «Хозрасчётный»", candidates: registers }],
-    "В этой базе нет регистра бухгалтерии «Хозрасчётный», но есть регистр «Товары на складах»: похоже, это " +
-      "Управление торговлей, а не Бухгалтерия. Остатки по складам (количество, без сумм) — read.analytics.get_stock.",
+    [{ label: "Регистр бухгалтерии «Хозрасчётный»", candidates: accountingRegister(conn.cfg) }],
+    tradeRefusal(
+      "Остатки по счетам 41/10/43 недоступны: используйте остатки на складах (количество, без сумм).",
+    ),
   );
 }
 
