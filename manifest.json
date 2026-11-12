@@ -4,7 +4,7 @@
   "display_name": "1С:Предприятие через OData",
   "version": "0.14.0",
   "description": "MCP-сервер для 1С:Предприятие через OData: аналитика (дебиторка, остатки, продажи, деньги, ОСВ, проводки) и создание/изменение документов — на естественном языке.",
-  "long_description": "Подключает любой MCP-клиент (Claude, Cursor, VS Code и др.) к базе 1С:Предприятие через стандартный интерфейс OData. Ничего не устанавливается внутри 1С. По умолчанию только чтение — 79 инструментов и 3 готовых сценария: аналитика (дебиторка и кредиторка по срокам, деньги на счетах, неоплаченные счета, проверка закрытия месяца, карточка счёта, акт сверки, остатки, продажи, движение денег, налоги, ОСВ по счёту, проводки документа, хронология для аудита), справочники и документы. Запись включается отдельно (readOnly=false) и всегда работает в режиме предпросмотра — сначала показывает, что будет создано/изменено, и пишет только после подтверждения.",
+  "long_description": "Подключает любой MCP-клиент (Claude, Cursor, VS Code и др.) к базе 1С:Предприятие через стандартный интерфейс OData. Ничего не устанавливается внутри 1С. По умолчанию только чтение — 80 инструментов и 3 готовых сценария: аналитика (дебиторка и кредиторка по срокам, деньги на счетах, неоплаченные счета, проверка закрытия месяца, карточка счёта, акт сверки, остатки, продажи, движение денег, налоги, ОСВ по счёту, проводки документа, хронология для аудита), справочники и документы. Запись включается отдельно (readOnly=false) и всегда работает в режиме предпросмотра — сначала показывает, что будет создано/изменено, и пишет только после подтверждения.",
   "author": {
     "name": "evilbruce666",
     "url": "https://github.com/evilbruce666"
@@ -2446,7 +2446,7 @@
     {
       "name": "read.analytics.get_sales_register",
       "title": "Продажи по номенклатуре (УТ 11, КА 2, ERP 2)",
-      "description": "Продажи товаров в штуках за период по регистру «Выручка и себестоимость продаж» (УТ 11, КА 2, ERP 2; проверено на УТ 11.5), включая розницу (в Бухгалтерии продажи по документам — get_sales_breakdown). quantity — нетто: sold (продано) минус returns (возвраты и сторно продаж, в регистре они с минусом); byOperation — то же по хозяйственным операциям (РеализацияВРозницу, РеализацияКлиенту, ВозвратТоваровОтКлиентаПрошлыхПериодов, СторноРеализации…). Розница попадает в регистр только отчётом о розничных продажах после закрытия смены: retailReports.completeThrough — дата, по которую розница видна по всем складам выборки, latest — самый свежий отчёт; какой склад отстаёт — отбор warehouses. Отбор: warehouses — Ref_Key складов (как в get_warehouse_stock), group — группа номенклатуры с подгруппами (Ref_Key, название или путь «Телефоны/Смартфоны/Apple»), query — часть названия или артикул. groupBy=warehouse — по складам. revenue и revenueExVat — выручка с НДС и без НДС, нетто (возвраты и сторно вычитаются), в валюте управленческого учёта базы (обычно рубли): розница с комиссионным товаром сверена с отчётами о розничных продажах до рубля. count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть.",
+      "description": "Продажи товаров в штуках за период по регистру «Выручка и себестоимость продаж» (УТ 11, КА 2, ERP 2; проверено на УТ 11.5), включая розницу (в Бухгалтерии продажи по документам — get_sales_breakdown). quantity — нетто: sold (продано) минус returns (возвраты и сторно продаж, в регистре они с минусом); byOperation — то же по хозяйственным операциям (РеализацияВРозницу, РеализацияКлиенту, ВозвратТоваровОтКлиентаПрошлыхПериодов, СторноРеализации…). Розница попадает в регистр только отчётом о розничных продажах после закрытия смены: retailReports.completeThrough — дата, по которую розница видна по всем складам выборки, latest — самый свежий отчёт; какой склад отстаёт — отбор warehouses. Отбор: warehouses — Ref_Key складов (как в get_warehouse_stock), group — группа номенклатуры с подгруппами (Ref_Key, название или путь «Телефоны/Смартфоны/Apple»), query — часть названия или артикул. groupBy=warehouse — по складам. excludeOwnOrganizations=true — без продаж своим организациям: в УТ это обычная продажа клиенту, и покупатель узнаётся по ИНН, совпавшему с ИНН организации базы; исключённые штуки, выручка и контрагенты — в excludedOwnOrganizations (организация без ИНН так не узнаётся, их число там же). revenue и revenueExVat — выручка с НДС и без НДС, нетто (возвраты и сторно вычитаются), в валюте управленческого учёта базы (обычно рубли): розница с комиссионным товаром сверена с отчётами о розничных продажах до рубля. count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2494,6 +2494,11 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 200
+          },
+          "excludeOwnOrganizations": {
+            "default": false,
+            "description": "Не считать продажи своим организациям: покупатель-контрагент с ИНН одной из организаций базы. Исключённое — в excludedOwnOrganizations",
+            "type": "boolean"
           },
           "limit": {
             "default": 200,
@@ -2592,6 +2597,49 @@
               "count",
               "quantity",
               "examples"
+            ],
+            "additionalProperties": {}
+          },
+          "excludedOwnOrganizations": {
+            "type": "object",
+            "properties": {
+              "quantity": {
+                "type": "number"
+              },
+              "revenue": {
+                "type": "number"
+              },
+              "counterparties": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "ref": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "inn": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ref",
+                    "name",
+                    "inn"
+                  ],
+                  "additionalProperties": {}
+                }
+              },
+              "organizationsWithoutInn": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "quantity",
+              "revenue",
+              "counterparties"
             ],
             "additionalProperties": {}
           },
@@ -3023,6 +3071,142 @@
           "aging",
           "count",
           "partners",
+          "scan"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "read.catalog.list_warehouses",
+      "title": "Склады",
+      "description": "Список складов справочника: ref (Ref_Key — для warehouses в get_warehouse_stock и get_sales_register), name, type (ТипСклада: РозничныйМагазин, ОптовыйСклад… — если поле есть в базе), path — путь папки, isFolder, deletionMark. Отбор: query — часть названия (без учёта регистра, ё как е), type — точный тип, kind — warehouses (по умолчанию), folders или all; помеченные на удаление не показываются без includeDeleted=true. Здесь все склады, в том числе без остатка и продаж. Набор складов (например, основные склады магазинов) собирайте по этим полям сами. count — всего; длинный список читайте с offset=nextOffset.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
+            "type": "string"
+          },
+          "query": {
+            "description": "Часть названия склада",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "type": {
+            "description": "Тип склада, точно: РозничныйМагазин, ОптовыйСклад…",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "kind": {
+            "default": "warehouses",
+            "description": "warehouses — склады (по умолчанию), folders — папки, all — всё",
+            "type": "string",
+            "enum": [
+              "warehouses",
+              "folders",
+              "all"
+            ]
+          },
+          "includeDeleted": {
+            "default": false,
+            "description": "Показывать помеченные на удаление",
+            "type": "boolean"
+          },
+          "limit": {
+            "default": 500,
+            "description": "Сколько строк вернуть",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 1000
+          },
+          "offset": {
+            "default": 0,
+            "description": "С какой строки начать (0 — с начала); значение из nextOffset прошлого ответа",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string"
+          },
+          "count": {
+            "type": "number"
+          },
+          "note": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ref": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "isFolder": {
+                  "type": "boolean"
+                },
+                "deletionMark": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ref",
+                "name",
+                "isFolder",
+                "deletionMark"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "scan": {
+            "type": "object",
+            "properties": {
+              "documentsScanned": {
+                "type": "number"
+              },
+              "rowsScanned": {
+                "type": "number"
+              },
+              "windows": {
+                "type": "number"
+              },
+              "elapsedMs": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "elapsedMs"
+            ],
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "database",
+          "count",
+          "items",
           "scan"
         ],
         "$schema": "https://json-schema.org/draft/2020-12/schema",

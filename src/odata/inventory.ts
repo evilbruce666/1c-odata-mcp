@@ -130,29 +130,51 @@ const pathIn = (group: ItemGroup, byRef: ReadonlyMap<string, ItemGroup>): string
     .map((g) => g.name.trim())
     .join(PATH_SEPARATOR);
 
-/** Путь для сравнения: пробелы вокруг «/» не важны («Телефоны / Смартфоны» = «Телефоны/Смартфоны»). */
-const pathKey = (text: string, fold: (text: string) => string) =>
-  fold(text)
-    .split(PATH_SEPARATOR)
-    .map((p) => p.trim())
-    .join(PATH_SEPARATOR);
+/**
+ * Название без номера в начале: «02. Смартфоны» → «Смартфоны», «1.Комплекты» → «Комплекты». Название из одного номера
+ * («1.») остаётся как есть, иначе группа без текста совпала бы с любым пустым запросом.
+ */
+export function withoutNumber(name: string): string {
+  const rest = name.replace(/^\s*\d+(?:\.\d+)*(?:\.\s*|\s+)/, "");
+  return rest.trim() ? rest : name;
+}
 
 /**
  * Группы, полный путь которых равен запросу или заканчивается им: «Смартфоны/Apple» находит Apple внутри любых
  * «Смартфонов». Сравнивается строка пути, а не части по «/»: в названии группы бывает «/» («Кабели/переходники»), и
- * путь из текста отказа обязан находить ту же группу. Сначала буквально, похожие буквы — только если буквально нет.
+ * путь из текста отказа обязан находить ту же группу. Ступени — пока ничего не найдено: буквально, похожие буквы,
+ * затем без номеров в начале названий папок («1. Телефоны/02. Смартфоны/Apple» по запросу «Телефоны/Смартфоны/Apple»).
+ * Каждая ступень только расширяет поиск; неоднозначность — по-прежнему отказ со списком полных путей.
  */
 function byPath(query: string, groups: readonly ItemGroup[]): ItemGroup[] {
   const index = new Map(groups.map((g) => [g.ref, g]));
-  const matching = (fold: (text: string) => string) => {
-    const q = pathKey(query, fold);
+  const matching = (fold: (text: string) => string, unnumbered: boolean) => {
+    const name = (text: string) => (unnumbered ? withoutNumber(text) : text);
+    const q = query
+      .split(PATH_SEPARATOR)
+      .map((p) => fold(name(p.trim())).trim())
+      .join(PATH_SEPARATOR);
     return groups.filter((g) => {
-      const full = pathKey(pathIn(g, index), fold);
+      // Пробелы вокруг «/» не важны и внутри названия («Кабели / переходники»).
+      const full = ancestry(g, index)
+        .map((link) => fold(name(link.name.trim())).trim())
+        .join(PATH_SEPARATOR)
+        .split(PATH_SEPARATOR)
+        .map((p) => p.trim())
+        .join(PATH_SEPARATOR);
       return full === q || full.endsWith(`${PATH_SEPARATOR}${q}`);
     });
   };
-  const literal = matching(strictText);
-  return literal.length ? literal : matching(foldText);
+  for (const [fold, unnumbered] of [
+    [strictText, false],
+    [foldText, false],
+    [strictText, true],
+    [foldText, true],
+  ] as const) {
+    const found = matching(fold, unnumbered);
+    if (found.length) return found;
+  }
+  return [];
 }
 
 /**

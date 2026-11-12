@@ -98,6 +98,11 @@ function data(seen: FakeQuery[], reports = REPORTS, sales = SALES) {
       const allowed = new Set(guidsIn(condition));
       return sales.filter((r) => allowed.has(String(r.Склад).toLowerCase()));
     }
+    if (q.base === "Catalog_Организации") return ORGS;
+    if (q.base === "Catalog_Контрагенты") {
+      const inns = [...filter.matchAll(/ИНН eq '([^']+)'/g)].map((m) => m[1]);
+      return BUYERS.filter((c) => inns.includes(c.ИНН));
+    }
     if (q.base === "Document_ОтчетОРозничныхПродажах") {
       const wh = guidsIn(filter);
       const ge = /Date ge datetime'([^']+)'/.exec(filter)?.[1] ?? "";
@@ -382,6 +387,60 @@ describe("get_sales_register: поле returned занято обёрткой с
     // Обёртка пишет в returned число строк этого ответа — поле не наше.
     expect(s.returned).toBe(1);
     expect(s.items).toHaveLength(1);
+  });
+});
+
+// Покупатели: клиент и контрагент с ИНН своей организации (в УТ это обычная продажа клиенту).
+const ORGS = [
+  { Ref_Key: uuid("9", 1), ИНН: "7700000099" },
+  { Ref_Key: uuid("9", 2), ИНН: "" }, // организация без ИНН — так не узнаётся
+];
+const BUYERS = [
+  { Ref_Key: uuid("8", 1), Description: "Клиент", ИНН: "7711111111" },
+  { Ref_Key: uuid("8", 2), Description: "Своя организация как контрагент", ИНН: "7700000099" },
+];
+const withBuyer = (row: ReturnType<typeof sale>, buyer: string) => ({
+  ...row,
+  АналитикаУчетаПоПартнерам_Key: uuid("7", buyer === BUYERS[0]!.Ref_Key ? 1 : 2),
+  АналитикаУчетаПоПартнерам: { Контрагент: buyer, Контрагент_Type: "StandardODATA.Catalog_Контрагенты" },
+});
+const INTERCOMPANY = [
+  withBuyer(sale(I(1), W(4), "РеализацияКлиенту", 5), BUYERS[0]!.Ref_Key), // клиенту
+  withBuyer(sale(I(1), W(4), "РеализацияКлиенту", 3), BUYERS[1]!.Ref_Key), // своей организации
+  withBuyer(sale(I(2), W(4), "ВозвратТоваровОтКлиентаПрошлыхПериодов", -1), BUYERS[0]!.Ref_Key), // возврат клиента
+];
+
+describe("get_sales_register: без продаж своим организациям", () => {
+  it("флаг выключен — как раньше; включён — продажа своей организации исключена и названа", async () => {
+    const { call, seen } = await setup("ut11", { sales: INTERCOMPANY as never });
+    const base = (await call()).structuredContent as Sales & {
+      revenue: number;
+      excludedOwnOrganizations?: unknown;
+    };
+    // 5 + 3 − 1 = 7.
+    expect([base.totalQuantity, base.sold, base.returns]).toEqual([7, 8, 1]);
+    expect(base.excludedOwnOrganizations).toBeUndefined();
+    // Без флага покупатель не запрашивается: лишнее измерение — лишние строки.
+    expect(seen.find((q) => q.fn === "Turnovers")!.params.get("$expand")).toBe("АналитикаУчетаНоменклатуры");
+
+    const s = (await call({ excludeOwnOrganizations: true })).structuredContent as Sales & {
+      revenue: number;
+      excludedOwnOrganizations: {
+        quantity: number;
+        revenue: number;
+        counterparties: { ref: string; inn: string }[];
+        organizationsWithoutInn?: number;
+      };
+    };
+    // Остаётся 5 − 1 = 4; исключено 3 штуки и 300,30 выручки.
+    expect([s.totalQuantity, s.sold, s.returns]).toEqual([4, 5, 1]);
+    expect(s.excludedOwnOrganizations).toMatchObject({
+      quantity: 3,
+      revenue: 300.3,
+      counterparties: [{ ref: BUYERS[1]!.Ref_Key, inn: "7700000099" }],
+      organizationsWithoutInn: 1,
+    });
+    expect(s.revenue + s.excludedOwnOrganizations.revenue).toBeCloseTo(base.revenue, 2);
   });
 });
 

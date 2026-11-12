@@ -22,6 +22,7 @@
   "read.analytics.get_unpaid_invoices": 6,
   "read.analytics.get_warehouse_stock": 2,
   "read.audit.get_document_history": 4,
+  "read.catalog.list_warehouses": 1,
   "read.counterparty.find_counterparty": 2,
   "read.counterparty.get_counterparty": 1,
   "read.counterparty.get_customer_history": 2,

@@ -1,11 +1,11 @@
 import type { Connection } from "../context.js";
-import { resolveEntity } from "../config/mapping.js";
+import { CATALOGS, resolveEntity } from "../config/mapping.js";
 import { InputError } from "../errors.js";
 import type { ODataEntity } from "../types/odata.js";
 import { AggregateOverflowError, fetchAllForAggregation } from "./aggregate.js";
 import { nextDay, num } from "./accounting.js";
 import { requireEntity } from "./publication.js";
-import { and, buildQuery, cmp, odataGuid, or } from "./query.js";
+import { and, buildQuery, cmp, odataGuid, odataString, or } from "./query.js";
 import { entitySetOfType, localToday, refOf } from "./settlements-aging.js";
 import { WAREHOUSE_BATCH, qty } from "./stock.js";
 
@@ -18,6 +18,9 @@ import { WAREHOUSE_BATCH, qty } from "./stock.js";
 export const SALES_REGISTER = "AccumulationRegister_ВыручкаИСебестоимостьПродаж";
 const SALES_LABEL = "Регистр накопления «Выручка и себестоимость продаж»";
 const KEY_NAV = "АналитикаУчетаНоменклатуры";
+/** Ключ аналитики по партнёрам: покупатель строки (контрагент). Раскрывается тем же запросом, когда он нужен. */
+const PARTNER_NAV = "АналитикаУчетаПоПартнерам";
+const PARTNER_SELECT = [`${PARTNER_NAV}_Key`, `${PARTNER_NAV}/Контрагент`, `${PARTNER_NAV}/Контрагент_Type`];
 export const RETAIL_REPORTS = ["Document_ОтчетОРозничныхПродажах"] as const;
 
 /**
@@ -61,11 +64,14 @@ export async function readItemSales(
     to,
     warehouses,
     warehouseSet,
+    withBuyer = false,
   }: {
     from: string;
     to: string;
     warehouses?: readonly string[] | undefined;
     warehouseSet?: string | undefined;
+    /** Покупатель строки: ещё одно измерение — без нужды строк больше (на УТ 11.5 за 45 дней +0,4 с, итоги те же). */
+    withBuyer?: boolean;
   },
 ): Promise<ODataEntity[]> {
   const register = await requireEntity(conn, [SALES_REGISTER], SALES_LABEL);
@@ -74,7 +80,9 @@ export async function readItemSales(
       await fetchAllForAggregation(
         conn,
         turnoversPath(register, from, to, condition),
-        { select: SELECT, expand: [KEY_NAV] },
+        withBuyer
+          ? { select: [...SELECT, ...PARTNER_SELECT], expand: [KEY_NAV, PARTNER_NAV] }
+          : { select: SELECT, expand: [KEY_NAV] },
         `${from}…${to}`,
       )
     ).rows;
@@ -98,6 +106,9 @@ export interface SalesRow {
   characteristicRef?: string;
   warehouseRef?: string;
   operation: string;
+  /** Покупатель (контрагент или организация) и его справочник; есть, только если читали с withBuyer. */
+  buyerRef?: string;
+  buyerSet?: string;
   quantity: number;
   /**
    * Выручка с НДС и без НДС в копейках, в валюте управленческого учёта. Сверено на УТ 11.5: розница за месяц вместе с
@@ -115,7 +126,12 @@ export function toSalesRows(rows: readonly ODataEntity[], warehouseSets: readonl
     const characteristicRef = refOf(key["Характеристика_Key"]);
     const set = entitySetOfType(r["Склад_Type"]);
     const warehouseRef = set && warehouseSets.includes(set) ? refOf(r["Склад"]) : undefined;
+    const partner = r[PARTNER_NAV] as ODataEntity | undefined;
+    const buyerRef = partner ? refOf(partner["Контрагент"]) : undefined;
+    const buyerSet = partner ? entitySetOfType(partner["Контрагент_Type"]) : undefined;
     return {
+      ...(buyerRef ? { buyerRef } : {}),
+      ...(buyerRef && buyerSet ? { buyerSet } : {}),
       ...(itemRef ? { itemRef } : {}),
       ...(characteristicRef ? { characteristicRef } : {}),
       ...(warehouseRef ? { warehouseRef } : {}),
@@ -265,3 +281,62 @@ export async function lastRetailReports(
   const unknown = windowStart > from ? lagging.slice(LAGGING_LOOKUPS) : [];
   return { last, unknown };
 }
+
+export interface OwnBuyers {
+  /** Ref_Key контрагентов, совпавших по ИНН с организациями базы. */
+  refs: Set<string>;
+  counterparties: { ref: string; name: string; inn: string }[];
+  organizations: number;
+  organizationsWithoutInn: number;
+}
+
+/**
+ * Свои организации как покупатели: в УТ продажа своей организации — обычная РеализацияКлиенту контрагенту, отдельной
+ * операции и предопределённого партнёра нет (проверено на УТ 11.5: 11 таких контрагентов, 2314 реализаций с 2025 года).
+ * Узнаются по ИНН контрагента, совпавшему с ИНН организации. Организация без ИНН так не узнаётся — её число в ответе.
+ */
+export async function ownBuyers(conn: Connection): Promise<OwnBuyers> {
+  const available = await conn.available();
+  const orgSet = resolveEntity(CATALOGS.organizations, available);
+  const cpSet = resolveEntity(CATALOGS.counterparties, available);
+  if (!orgSet || !cpSet)
+    return { refs: new Set(), counterparties: [], organizations: 0, organizationsWithoutInn: 0 };
+  const { rows: orgs } = await fetchAllForAggregation(
+    conn,
+    orgSet,
+    { select: ["Ref_Key", "ИНН"] },
+    "организации",
+  );
+  const inns = [...new Set(orgs.map((o) => String(o["ИНН"] ?? "").trim()).filter(Boolean))];
+  const counterparties: OwnBuyers["counterparties"] = [];
+  for (let i = 0; i < inns.length; i += INN_BATCH) {
+    const { rows } = await fetchAllForAggregation(
+      conn,
+      cpSet,
+      {
+        filter: or(...inns.slice(i, i + INN_BATCH).map((inn) => cmp("ИНН", "eq", odataString(inn)))),
+        select: ["Ref_Key", "Description", "ИНН"],
+      },
+      "контрагенты — свои организации",
+    );
+    for (const r of rows)
+      counterparties.push({
+        ref: String(r["Ref_Key"]),
+        name: String(r["Description"] ?? ""),
+        inn: String(r["ИНН"] ?? ""),
+      });
+  }
+  return {
+    refs: new Set(counterparties.map((c) => c.ref.toLowerCase())),
+    counterparties: counterparties.sort((a, b) => a.name.localeCompare(b.name) || a.ref.localeCompare(b.ref)),
+    organizations: orgs.length,
+    organizationsWithoutInn: orgs.filter((o) => !String(o["ИНН"] ?? "").trim()).length,
+  };
+}
+
+/** ИНН в одном $filter: длинное «или» упирается в лимит вложенности условий 1С. */
+const INN_BATCH = 10;
+
+/** Строка продаж своей организации: покупатель — контрагент из ownBuyers или сама организация. */
+export const isOwnBuyer = (row: SalesRow, own: OwnBuyers, orgSet: string | undefined): boolean =>
+  !!row.buyerRef && (own.refs.has(row.buyerRef.toLowerCase()) || (!!orgSet && row.buyerSet === orgSet));

@@ -8,7 +8,9 @@ import { nomenclatureSet, readItemAttributes, selectByItem, selectionNotes } fro
 import {
   aggregateSales,
   checkPeriod,
+  isOwnBuyer,
   lastRetailReports,
+  ownBuyers,
   readItemSales,
   toSalesRows,
   type SalesLine,
@@ -48,7 +50,9 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
         "отчётом о розничных продажах после закрытия смены: retailReports.completeThrough — дата, по которую розница " +
         "видна по всем складам выборки, latest — самый свежий отчёт; какой склад отстаёт — отбор warehouses. Отбор: warehouses — Ref_Key складов (как в get_warehouse_stock), group — группа " +
         "номенклатуры с подгруппами (Ref_Key, название или путь «Телефоны/Смартфоны/Apple»), query — часть названия или " +
-        "артикул. groupBy=warehouse — по складам. revenue и revenueExVat — выручка с НДС и без НДС, нетто (возвраты и сторно " +
+        "артикул. groupBy=warehouse — по складам. excludeOwnOrganizations=true — без продаж своим организациям: в УТ это " +
+        "обычная продажа клиенту, и покупатель узнаётся по ИНН, совпавшему с ИНН организации базы; исключённые штуки, " +
+        "выручка и контрагенты — в excludedOwnOrganizations (организация без ИНН так не узнаётся, их число там же). revenue и revenueExVat — выручка с НДС и без НДС, нетто (возвраты и сторно " +
         "вычитаются), в валюте управленческого учёта базы (обычно рубли): розница с комиссионным товаром сверена с отчётами " +
         "о розничных продажах до рубля. count — всего позиций; длинный список " +
         "читайте с offset=nextOffset, пока он есть.",
@@ -84,11 +88,17 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
           .max(200)
           .optional()
           .describe("Поиск товара: части слов из названия или артикул. Можно вместе с group"),
+        excludeOwnOrganizations: z
+          .boolean()
+          .default(false)
+          .describe(
+            "Не считать продажи своим организациям: покупатель-контрагент с ИНН одной из организаций базы. Исключённое — в excludedOwnOrganizations",
+          ),
         limit: z.number().int().positive().max(1000).default(200).describe("Сколько позиций вернуть"),
       }),
       outputSchema: getItemSalesResultSchema,
     },
-    ({ database, from, to, warehouses, groupBy, group, query, limit }) =>
+    ({ database, from, to, warehouses, groupBy, group, query, excludeOwnOrganizations, limit }) =>
       guard("read.analytics.get_sales_register", async () => {
         const t0 = Date.now();
         checkPeriod(from, to);
@@ -104,12 +114,18 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
           to,
           warehouses: filter?.map((w) => w.ref),
           warehouseSet,
+          withBuyer: excludeOwnOrganizations,
         });
         const nomSet = await nomenclatureSet(conn);
         // Отбор по товару — по строкам до свёртки: из них же считаются итоги по операциям.
         const sel = await selectByItem(conn, nomSet, toSalesRows(raw, CATALOGS.warehouses), { group, query });
+        // Свои организации-покупатели узнаются по ИНН; исключённое считается после отбора по товару и складу.
+        const own = excludeOwnOrganizations ? await ownBuyers(conn) : undefined;
+        const orgSet = own ? resolveEntity(CATALOGS.organizations, await conn.available()) : undefined;
+        const kept = own ? sel.lines.filter((r) => !isOwnBuyer(r, own, orgSet)) : sel.lines;
+        const excluded = own ? sel.lines.filter((r) => isOwnBuyer(r, own, orgSet)) : [];
         const { attributes, selectedGroup, groups, otherSimilar } = sel;
-        const lines = aggregateSales(sel.lines, byWarehouse);
+        const lines = aggregateSales(kept, byWarehouse);
         const pageStart = callPageStart();
 
         const withItem = lines
@@ -145,9 +161,7 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
         // Сводки — на первой странице, по всем строкам отбора; на остальных они вытесняли бы сами строки.
         const first = pageStart === 0;
         const retailWarehouses = new Set(
-          sel.lines
-            .filter((r) => r.operation === RETAIL_OPERATION && r.warehouseRef)
-            .map((r) => r.warehouseRef!),
+          kept.filter((r) => r.operation === RETAIL_OPERATION && r.warehouseRef).map((r) => r.warehouseRef!),
         );
         // Отчёты о рознице — только по складам с розничными продажами: розница в регистре и есть их отчёты.
         const reports =
@@ -159,7 +173,7 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
         const lastDates = reports ? [...retailWarehouses].map((w) => reports.last.get(w) ?? "") : [];
         const latest = lastDates.length ? [...lastDates].sort().at(-1) || undefined : undefined;
         const scope = new Set([
-          ...(first && byWarehouse ? sel.lines.flatMap((r) => (r.warehouseRef ? [r.warehouseRef] : [])) : []),
+          ...(first && byWarehouse ? kept.flatMap((r) => (r.warehouseRef ? [r.warehouseRef] : [])) : []),
           ...page.flatMap((l) => (l.warehouseRef ? [l.warehouseRef] : [])),
         ]);
         const known = new Map((filter ?? []).map((w) => [w.ref, w] as const));
@@ -203,7 +217,7 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
         }
         const noItem = lines.filter((l) => !l.itemRef);
         if (noItem.length) notes.push("Строки без номенклатуры не показаны, но входят в итоги.");
-        if (byWarehouse && first && sel.lines.some((r) => !r.warehouseRef)) {
+        if (byWarehouse && first && kept.some((r) => !r.warehouseRef)) {
           notes.push("Часть продаж без склада: они в byWarehouse со значением warehouse: null.");
         }
         if (reports?.unknown.length) {
@@ -221,7 +235,7 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
           string,
           { quantity: number; sold: number; returns: number; revenueCents: number; revenueExVatCents: number }
         >();
-        for (const r of sel.lines) {
+        for (const r of kept) {
           const t = byOperation.get(r.operation) ?? {
             quantity: 0,
             sold: 0,
@@ -240,7 +254,7 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
           string,
           { positions: Set<string>; quantity: number; revenueCents: number }
         >();
-        for (const r of sel.lines) {
+        for (const r of kept) {
           const t = byWarehouseTotals.get(r.warehouseRef ?? "") ?? {
             positions: new Set<string>(),
             quantity: 0,
@@ -273,11 +287,23 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
                 },
               }
             : {}),
-          totalQuantity: total(sel.lines, (q) => q),
-          sold: total(sel.lines, (q) => Math.max(q, 0)),
-          returns: total(sel.lines, (q) => Math.max(-q, 0)),
-          revenue: sel.lines.reduce((t, r) => t + r.revenueCents, 0) / 100,
-          revenueExVat: sel.lines.reduce((t, r) => t + r.revenueExVatCents, 0) / 100,
+          ...(own
+            ? {
+                excludedOwnOrganizations: {
+                  quantity: total(excluded, (q) => q),
+                  revenue: excluded.reduce((t, r) => t + r.revenueCents, 0) / 100,
+                  counterparties: own.counterparties,
+                  ...(own.organizationsWithoutInn
+                    ? { organizationsWithoutInn: own.organizationsWithoutInn }
+                    : {}),
+                },
+              }
+            : {}),
+          totalQuantity: total(kept, (q) => q),
+          sold: total(kept, (q) => Math.max(q, 0)),
+          returns: total(kept, (q) => Math.max(-q, 0)),
+          revenue: kept.reduce((t, r) => t + r.revenueCents, 0) / 100,
+          revenueExVat: kept.reduce((t, r) => t + r.revenueExVatCents, 0) / 100,
           // Всего, а не на странице: сколько в этом ответе — длина списка и returned (его добавляет обёртка страниц).
           count: withItem.length,
           ...(first

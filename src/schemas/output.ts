@@ -479,6 +479,27 @@ const warehouseFilterSchema = z
   .array(z.object({ ref: z.string(), name: z.string(), type: z.string().optional() }).passthrough())
   .optional();
 
+export const listWarehousesResultSchema = z
+  .object({
+    database: z.string(),
+    count: z.number(),
+    note: z.string().optional(),
+    items: z.array(
+      z
+        .object({
+          ref: z.string(),
+          name: z.string(),
+          type: z.string().optional(),
+          path: z.string().optional(),
+          isFolder: z.boolean(),
+          deletionMark: z.boolean(),
+        })
+        .passthrough(),
+    ),
+    scan: scanSchema,
+  })
+  .passthrough();
+
 export const partnerSettlementsResultSchema = z
   .object({
     database: z.string(),
@@ -528,6 +549,17 @@ export const getItemSalesResultSchema = z
     query: z.string().optional(),
     otherSimilar: z
       .object({ count: z.number(), quantity: z.number(), examples: z.array(z.string()) })
+      .passthrough()
+      .optional(),
+    excludedOwnOrganizations: z
+      .object({
+        quantity: z.number(),
+        revenue: z.number(),
+        counterparties: z.array(
+          z.object({ ref: z.string(), name: z.string(), inn: z.string() }).passthrough(),
+        ),
+        organizationsWithoutInn: z.number().optional(),
+      })
       .passthrough()
       .optional(),
     totalQuantity: z.number(),

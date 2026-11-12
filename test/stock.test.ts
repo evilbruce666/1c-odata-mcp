@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createServer } from "../src/mcp/server.js";
-import { groupPath, resolveItemGroup, type ItemGroup } from "../src/odata/inventory.js";
+import { groupPath, resolveItemGroup, withoutNumber, type ItemGroup } from "../src/odata/inventory.js";
 import { fake1C, type FakeQuery, type FakeSchema } from "./helpers/fake-1c.js";
 
 /**
@@ -460,6 +460,28 @@ describe("resolveItemGroup: пути", () => {
     expect(message).toContain("Кабели/переходники/USB");
     expect(resolveItemGroup("Кабели/переходники/USB", withSlash).ref).toBe(G(71));
     expect(resolveItemGroup("Кабели / переходники / USB", withSlash).ref).toBe(G(71));
+  });
+
+  it("номер в начале названия папки не мешает пути: «Телефоны/Смартфоны/Apple» находит «1. Телефоны/02. Смартфоны/Apple»", () => {
+    const numbered: ItemGroup[] = [
+      { ref: G(80), name: "1. Телефоны" },
+      { ref: G(81), name: "02. Смартфоны", parent: G(80) },
+      { ref: G(82), name: "Apple", parent: G(81) },
+      { ref: G(83), name: "3. Аксессуары" },
+      { ref: G(84), name: "01. Apple", parent: G(83) },
+      { ref: G(85), name: "1." },
+      { ref: G(86), name: "Apple", parent: G(85) },
+    ];
+    expect(resolveItemGroup("Телефоны/Смартфоны/Apple", numbered).ref).toBe(G(82));
+    expect(resolveItemGroup("Смартфоны/Apple", numbered).ref).toBe(G(82));
+    // Буквальное совпадение важнее: «1./Apple» — папка из одного номера, её название не обрезается.
+    expect(resolveItemGroup("1./Apple", numbered).ref).toBe(G(86));
+    // Имя без пути — по-прежнему отказ со списком полных путей.
+    expect(() => resolveItemGroup("Apple", numbered)).toThrow(/1\. Телефоны\/02\. Смартфоны\/Apple/);
+    expect(withoutNumber("02. Смартфоны")).toBe("Смартфоны");
+    expect(withoutNumber("1.Комплекты")).toBe("Комплекты");
+    expect(withoutNumber("1.")).toBe("1.");
+    expect(withoutNumber("2024")).toBe("2024");
   });
 
   it("название с «/» целиком важнее пути", () => {
