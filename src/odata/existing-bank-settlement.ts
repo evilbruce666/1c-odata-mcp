@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Connection } from "../context.js";
 import type { EntityMeta, ODataEntity } from "../types/odata.js";
 import { InputError } from "../errors.js";
-import { CATALOGS, DOCUMENTS, resolveEntity } from "../config/mapping.js";
+import { CATALOGS, WRITE_DOCUMENTS, resolveEntity } from "../config/mapping.js";
 import { accountingChart } from "../config/accounting.js";
 import { counterpartyCatalog, EMPTY_GUID, exactRef, readCounterparty } from "./counterparty-hierarchy.js";
 import { settlementAccountsFor, settlementSideOf } from "./settlement-accounts.js";
@@ -31,7 +31,7 @@ const CONTRACT = "ДоговорКонтрагента_Key",
   ACCOUNT = "СчетУчетаРасчетовСКонтрагентом_Key",
   ADVANCE = "СчетУчетаРасчетовПоАвансам_Key",
   ROWS = "РасшифровкаПлатежа";
-const bankSets: ReadonlySet<string> = new Set([...DOCUMENTS.bankIn, ...DOCUMENTS.bankOut]);
+const bankSets: ReadonlySet<string> = new Set([...WRITE_DOCUMENTS.bankIn, ...WRITE_DOCUMENTS.bankOut]);
 const same = (a: unknown, b: unknown) =>
   fingerprintWriteInput("compare", { a }) === fingerprintWriteInput("compare", { a: b });
 function requireTypes(meta: EntityMeta | undefined, fields: Record<string, string>): void {
@@ -192,7 +192,7 @@ export async function applyBankSettlementSettings(
   if ((side && side !== p.side) || (!side && contract.ВидДоговора !== "Прочее"))
     throw new InputError("Сторона расчётов не соответствует виду договора.");
   const operation = String(doc.ВидОперации ?? "");
-  const incoming = (DOCUMENTS.bankIn as readonly string[]).includes(p.entitySet);
+  const incoming = (WRITE_DOCUMENTS.bankIn as readonly string[]).includes(p.entitySet);
   if (
     (incoming && ["ОплатаПоставщику", "ПрочееСписание"].includes(operation)) ||
     (!incoming && ["ОплатаПокупателя", "ПрочееПоступление"].includes(operation))

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createServer } from "../src/mcp/server.js";
 import { ageBucket } from "../src/odata/partner-settlements.js";
+import { localToday } from "../src/odata/settlements-aging.js";
 import { fake1C, type FakeQuery } from "./helpers/fake-1c.js";
 
 /**
@@ -79,6 +80,12 @@ function data(q: FakeQuery) {
       { Ref_Key: ORG(2), Description: "Организация 2", ИНН: "7700000022" },
     ].filter((o) => !guidsIn(filter).length || guidsIn(filter).includes(o.Ref_Key));
   }
+  if (q.base === "Catalog_Контрагенты") {
+    // Контрагент 9 принадлежит партнёру 1.
+    return [{ Ref_Key: uuid("c", 9), Партнер_Key: PARTNER(1) }].filter((c) =>
+      guidsIn(filter).includes(c.Ref_Key),
+    );
+  }
   if (q.base === "Catalog_Партнеры") {
     return [
       { Ref_Key: PARTNER(1), Description: "Партнёр 1" },
@@ -131,6 +138,30 @@ describe("get_cash_balance в УТ — регистры денежных сре�
     expect(s["inTransit"]).toBe(0);
     await call("read.analytics.get_cash_balance", { asOf: "2026-10-31" });
     expect(fake.violations).toEqual([]);
+  });
+
+  it("деньги в пути в разных валютах одного вида не складываются; вид перевода — не Ref_Key (ревью)", async () => {
+    TRANSIT.push({
+      ВидПереводаДенежныхСредств: "ИнкассацияВБанк",
+      Организация_Key: ORG(1),
+      СуммаBalance: 100,
+      СуммаРеглBalance: 9000,
+      Валюта_Key: uuid("9", 1),
+    } as never);
+    try {
+      const { call } = await setup();
+      const s = (await call("read.analytics.get_cash_balance")).structuredContent;
+      const transit = (
+        s["balances"] as { kind: string; amount: number; currencyAmount?: number; holderRef?: string }[]
+      ).filter((b) => b.kind === "transit");
+      expect(transit.map((t) => [t.amount, t.currencyAmount])).toEqual([
+        [9000, 100],
+        [30, undefined],
+      ]);
+      expect(transit.every((t) => t.holderRef === undefined)).toBe(true);
+    } finally {
+      TRANSIT.pop();
+    }
   });
 
   it("отрицательные деньги в пути — примечание о незакрытых переводах", async () => {
@@ -243,6 +274,57 @@ describe("get_partner_settlements — расчёты по срокам", () => {
     };
     expect(r.isError).toBe(true);
     expect(r.content[0]!.text).toContain("Расчёты с поставщиками по срокам");
+  });
+
+  it("Ref_Key контрагента — расчёты его партнёра с примечанием; неизвестный Ref_Key — отказ (ревью: тихий ноль)", async () => {
+    const { call } = await setup();
+    const s = (
+      await call("read.analytics.get_partner_settlements", {
+        side: "clients",
+        partner: uuid("c", 9),
+        asOf: "2026-11-10",
+      })
+    ).structuredContent;
+    expect([s["debt"], s["prepayment"]]).toEqual([150, 20]);
+    expect(s["note"]).toContain("Ref_Key контрагента");
+    const unknown = await call("read.analytics.get_partner_settlements", {
+      side: "clients",
+      partner: uuid("c", 77),
+    });
+    expect(unknown.isError).toBe(true);
+    expect(unknown.text).toContain("не найден");
+  });
+
+  it("отрицательная строка долга входит в сроки и просрочку: просрочка не больше долга (ревью)", async () => {
+    CLIENT_ROWS.push({ k: 2, due: "2026-01-01T00:00:00", debt: -30, pre: 0 });
+    try {
+      const { call } = await setup();
+      const s = (
+        await call("read.analytics.get_partner_settlements", {
+          side: "clients",
+          partner: PARTNER(2),
+          asOf: "2026-11-10",
+        })
+      ).structuredContent;
+      expect([s["debt"], s["overdue"]]).toEqual([270, 270]);
+      const aging = s["aging"] as Record<string, number>;
+      expect(Object.values(aging).reduce((t, x) => t + x, 0)).toBe(270);
+    } finally {
+      CLIENT_ROWS.pop();
+    }
+  });
+
+  it("без asOf — местная дата, а не UTC (ревью: на востоке утром «сегодня» было вчера)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    // 23:30 по UTC — в часовом поясе восточнее UTC уже следующий день.
+    vi.setSystemTime(new Date("2026-11-12T23:30:00Z"));
+    try {
+      const { call } = await setup();
+      const s = (await call("read.analytics.get_partner_settlements", { side: "clients" })).structuredContent;
+      expect(s["on"]).toBe(localToday());
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("корзины сроков: граница — день в день в срок", () => {

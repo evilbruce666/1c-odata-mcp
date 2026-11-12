@@ -279,6 +279,23 @@ describe("все инструменты чтения на снимке схем�
   });
 });
 
+describe("запрет записи закрывается при сбое проверки базы (ревью: 503 на $metadata — и PATCH уходил)", () => {
+  it("update_entity с confirm: проверка не удалась — отказ, запросов на запись нет", async () => {
+    const fake = fake1C({ READ_ONLY: "false", ODATA_WRITABLE: "true" }, { schema: "ut11" });
+    vi.spyOn(fake.conn, "available").mockRejectedValueOnce(new Error("HTTP 503"));
+    const tool = manifest.tools.find((t) => t.name === "write.entity.update_entity")!;
+    const registered = (createServer(fake.ctx) as unknown as { _registeredTools: Tools })._registeredTools[
+      tool.name
+    ]!;
+    const args = registered.inputSchema!.parse({ ...argsFor(tool), confirm: true });
+    const r = await registered.handler(args, {});
+    const text = (r.content ?? []).map((c) => c.text ?? "").join("");
+    expect(r.isError, text).toBe(true);
+    expect(text).toContain("Не удалось проверить конфигурацию");
+    expect(fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
+  });
+});
+
 describe("запись на снимке схемы УТ 11 отказывает до предпросмотра", () => {
   const writes = manifest.tools.filter(
     (t) => t.name.startsWith("write.") && t.name !== "write.operation.status",

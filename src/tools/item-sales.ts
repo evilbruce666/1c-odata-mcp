@@ -30,6 +30,9 @@ const GUID = /^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0
 /** Операция продажи в розницу: она попадает в регистр только отчётом о розничных продажах после закрытия смены. */
 const RETAIL_OPERATION = "РеализацияВРозницу";
 
+/** Сколько самых отставших по отчётам о рознице складов показать. */
+const OLDEST_SHOWN = 10;
+
 type Line = SalesLine & { itemRef: string };
 
 const total = (rows: readonly SalesRow[], pick: (q: number) => number) =>
@@ -46,7 +49,8 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
         "продаж, в регистре они с минусом); byOperation — то же по хозяйственным операциям (РеализацияВРозницу, " +
         "РеализацияКлиенту, ВозвратТоваровОтКлиентаПрошлыхПериодов, СторноРеализации…). Розница попадает в регистр только " +
         "отчётом о розничных продажах после закрытия смены: retailReports.completeThrough — дата, по которую розница " +
-        "видна по всем складам выборки, lagging — склады, чей последний отчёт раньше конца периода (с датой). Отбор: warehouses — Ref_Key складов (как в get_warehouse_stock), group — группа " +
+        "видна по всем складам выборки, latest — самый свежий отчёт, behind — сколько складов отстают от него, oldest — до 10 " +
+        "самых отставших с датой. Отбор: warehouses — Ref_Key складов (как в get_warehouse_stock), group — группа " +
         "номенклатуры с подгруппами (Ref_Key, название или путь «Телефоны/Смартфоны/Apple»), query — часть названия или " +
         "артикул. groupBy=warehouse — по складам. revenue и revenueExVat — выручка с НДС и без НДС, нетто (возвраты и сторно " +
         "вычитаются), в валюте управленческого учёта базы (обычно рубли): розница с комиссионным товаром сверена с отчётами " +
@@ -154,12 +158,19 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
           first && retailWarehouses.size
             ? await lastRetailReports(conn, from, to, retailWarehouses)
             : undefined;
-        // В ответ — только отстающие склады: у сети в сотни магазинов полный список вытеснял итоги по складам.
-        const lagging = reports
-          ? [...retailWarehouses].filter(
-              (w) => (reports.last.get(w) ?? "") < to && !reports.unknown.includes(w),
-            )
+        // Отставание — от самого свежего отчёта по выборке, а не от конца периода: у периода «по сегодня» сегодняшняя
+        // смена ещё не закрыта, и отставали бы все склады. В ответ — не больше OLDEST_SHOWN самых отставших.
+        const lastDates = reports ? [...retailWarehouses].map((w) => reports.last.get(w) ?? "") : [];
+        const latest = lastDates.length ? [...lastDates].sort().at(-1) || undefined : undefined;
+        const behind = reports
+          ? [...retailWarehouses]
+              .filter((w) => !reports.unknown.includes(w) && (reports.last.get(w) ?? "") < (latest ?? ""))
+              .sort(
+                (a, b) =>
+                  (reports.last.get(a) ?? "").localeCompare(reports.last.get(b) ?? "") || a.localeCompare(b),
+              )
           : [];
+        const lagging = behind.slice(0, OLDEST_SHOWN);
         const scope = new Set([
           ...(first && byWarehouse ? sel.lines.flatMap((r) => (r.warehouseRef ? [r.warehouseRef] : [])) : []),
           ...lagging,
@@ -321,22 +332,16 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
             ? {
                 retailReports: {
                   warehouses: retailWarehouses.size,
-                  // Розница полная по всем складам выборки до этой даты включительно; null — у кого-то дата неизвестна.
-                  completeThrough: reports.unknown.length
-                    ? null
-                    : [...retailWarehouses].map((w) => reports.last.get(w) ?? "").sort()[0] || null,
+                  latest: latest ?? null,
+                  // Розница видна по всем складам выборки по эту дату включительно; null — у кого-то дата неизвестна.
+                  completeThrough: reports.unknown.length ? null : [...lastDates].sort()[0] || null,
                   ...(reports.unknown.length ? { unknown: reports.unknown.length } : {}),
-                  lagging: lagging
-                    .map((ref) => ({
-                      warehouse: warehouseOf(ref)?.name ?? ref,
-                      warehouseRef: ref,
-                      lastReport: reports.last.get(ref) ?? null,
-                    }))
-                    .sort(
-                      (a, b) =>
-                        String(a.lastReport).localeCompare(String(b.lastReport)) ||
-                        a.warehouseRef.localeCompare(b.warehouseRef),
-                    ),
+                  behind: behind.length,
+                  oldest: lagging.map((ref) => ({
+                    warehouse: warehouseOf(ref)?.name ?? ref,
+                    warehouseRef: ref,
+                    lastReport: reports.last.get(ref) ?? null,
+                  })),
                 },
               }
             : {}),

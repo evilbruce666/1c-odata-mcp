@@ -9,7 +9,7 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
 import { ok, fail, guard, databaseField, organizationField } from "./_shared.js";
-import { CATALOGS, DOCUMENTS, resolveEntity } from "../config/mapping.js";
+import { CATALOGS, WRITE_DOCUMENTS, resolveEntity } from "../config/mapping.js";
 import { resolveOrgOrDefault } from "../odata/orgs.js";
 import { ensurePublished, requireEntity } from "../odata/publication.js";
 import {
@@ -691,7 +691,7 @@ async function getDocInfo(
       services: doc["Услуги"] as unknown[] | undefined,
     },
     {
-      servicesAct: (DOCUMENTS.servicesAct as readonly string[]).includes(entitySet),
+      servicesAct: (WRITE_DOCUMENTS.servicesAct as readonly string[]).includes(entitySet),
       operationKind: doc["ВидОперации"],
     },
   );
@@ -822,11 +822,11 @@ async function buildSectionRows(
   section: Section,
 ): Promise<{ rows: Array<Record<string, unknown>>; total: number } | undefined> {
   const inList = (arr: readonly string[]): boolean => arr.includes(entitySet);
-  if (inList(DOCUMENTS.customerInvoice)) {
+  if (inList(WRITE_DOCUMENTS.customerInvoice)) {
     const rows = buildInvoiceRows(lines);
     return { rows, total: rowsTotal(rows) };
   }
-  if (inList(DOCUMENTS.servicesAct)) {
+  if (inList(WRITE_DOCUMENTS.servicesAct)) {
     const { lineAccountsFor } = await goodsAccounts(conn, orgKey, lines, "service");
     const rows = buildGoodsRows(lines, lineAccountsFor);
     return { rows, total: rowsTotal(rows) };
@@ -834,20 +834,24 @@ async function buildSectionRows(
   // Реализация/поступление и возвраты: возврат покупателя считается как реализация
   // (Дт 90/62), возврат поставщику — как поступление (Дт 41/19).
   if (
-    inList(DOCUMENTS.purchases) ||
-    inList(DOCUMENTS.sales) ||
-    inList(DOCUMENTS.returnFromCustomer) ||
-    inList(DOCUMENTS.returnToSupplier)
+    inList(WRITE_DOCUMENTS.purchases) ||
+    inList(WRITE_DOCUMENTS.sales) ||
+    inList(WRITE_DOCUMENTS.returnFromCustomer) ||
+    inList(WRITE_DOCUMENTS.returnToSupplier)
   ) {
-    const sale = inList(DOCUMENTS.sales) || inList(DOCUMENTS.returnFromCustomer);
+    const sale = inList(WRITE_DOCUMENTS.sales) || inList(WRITE_DOCUMENTS.returnFromCustomer);
     const kind = sale ? (section === "Услуги" ? "service" : "shipment") : "purchase";
     const { lineAccountsFor } = await goodsAccounts(conn, orgKey, lines, kind);
     const rows = buildGoodsRows(lines, lineAccountsFor);
     return { rows, total: rowsTotal(rows) };
   }
-  if (inList(DOCUMENTS.surplus) || inList(DOCUMENTS.writeoff) || inList(DOCUMENTS.transfer)) {
+  if (
+    inList(WRITE_DOCUMENTS.surplus) ||
+    inList(WRITE_DOCUMENTS.writeoff) ||
+    inList(WRITE_DOCUMENTS.transfer)
+  ) {
     const lineAcc = await goodsOnlyAccounts(conn, orgKey, lines);
-    const withSum = !inList(DOCUMENTS.transfer); // у перемещения в ТЧ нет суммы
+    const withSum = !inList(WRITE_DOCUMENTS.transfer); // у перемещения в ТЧ нет суммы
     const rows = lines.map((l, i) =>
       clean({
         ...carriedRowFields(l),
@@ -1097,14 +1101,16 @@ async function entityHasComment(conn: Connection, entitySet: string): Promise<bo
  */
 const CONTRACT_KIND_BY_DOC: ReadonlyMap<string, "СПокупателем" | "СПоставщиком"> = new Map([
   ...[
-    ...DOCUMENTS.sales,
-    ...DOCUMENTS.customerInvoice,
-    ...DOCUMENTS.servicesAct,
-    ...DOCUMENTS.returnFromCustomer,
+    ...WRITE_DOCUMENTS.sales,
+    ...WRITE_DOCUMENTS.customerInvoice,
+    ...WRITE_DOCUMENTS.servicesAct,
+    ...WRITE_DOCUMENTS.returnFromCustomer,
   ].map((set) => [set, "СПокупателем"] as const),
-  ...[...DOCUMENTS.purchases, ...DOCUMENTS.supplierInvoice, ...DOCUMENTS.returnToSupplier].map(
-    (set) => [set, "СПоставщиком"] as const,
-  ),
+  ...[
+    ...WRITE_DOCUMENTS.purchases,
+    ...WRITE_DOCUMENTS.supplierInvoice,
+    ...WRITE_DOCUMENTS.returnToSupplier,
+  ].map((set) => [set, "СПоставщиком"] as const),
 ]);
 
 const EMPTY_REF = "00000000-0000-0000-0000-000000000000";
@@ -1167,10 +1173,10 @@ const SETTLE_FIELD = "СчетУчетаРасчетовСКонтрагенто
 const ADVANCE_FIELD = "СчетУчетаРасчетовПоАвансам_Key";
 const PAYMENT_ROWS = "РасшифровкаПлатежа";
 const MONEY_DOCUMENTS: ReadonlySet<string> = new Set([
-  ...DOCUMENTS.bankIn,
-  ...DOCUMENTS.bankOut,
-  ...DOCUMENTS.cashIn,
-  ...DOCUMENTS.cashOut,
+  ...WRITE_DOCUMENTS.bankIn,
+  ...WRITE_DOCUMENTS.bankOut,
+  ...WRITE_DOCUMENTS.cashIn,
+  ...WRITE_DOCUMENTS.cashOut,
 ]);
 const LEVEL_TEXT = {
   договор: "настройки договора",
@@ -1580,7 +1586,7 @@ export function sameStoredValue(sent: unknown, stored: unknown, type: string): b
  * проведённого, и для непроведённого документа. Поддержанный путь — apply_bank_settlement_settings.
  */
 const BANK_SETTLEMENT_FIELDS = /^(ДоговорКонтрагента_Key|СчетУчетаРасчетов[\wА-Яа-яЁё]*_Key)$/;
-const BANK_DOCUMENTS = new Set<string>([...DOCUMENTS.bankIn, ...DOCUMENTS.bankOut]);
+const BANK_DOCUMENTS = new Set<string>([...WRITE_DOCUMENTS.bankIn, ...WRITE_DOCUMENTS.bankOut]);
 
 function bankSettlementPatchRefusal(entitySet: string, fields: Record<string, unknown>): string | undefined {
   if (!BANK_DOCUMENTS.has(entitySet)) return undefined;
@@ -2228,7 +2234,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const conn = ctx.db(database);
         const set = await requireEntity(
           conn,
-          DOCUMENTS.customerInvoice,
+          WRITE_DOCUMENTS.customerInvoice,
           "Документ «Счёт на оплату покупателю»",
         );
         const org = await resolveOrg(conn, organization);
@@ -2558,7 +2564,11 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     }) =>
       guard("write.purchase.create_purchase", async () => {
         const conn = ctx.db(database);
-        const set = await requireEntity(conn, DOCUMENTS.purchases, "Документ «Поступление товаров и услуг»");
+        const set = await requireEntity(
+          conn,
+          WRITE_DOCUMENTS.purchases,
+          "Документ «Поступление товаров и услуг»",
+        );
         const org = await resolveOrg(conn, organization);
         const warehouseKey = await resolveWarehouse(conn, warehouse);
         const { settlement, lineAccountsFor } = await goodsAccounts(conn, org.key, lines, "purchase");
@@ -2628,7 +2638,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const conn = ctx.db(database);
         const set = await requireEntity(
           conn,
-          DOCUMENTS.supplierInvoice,
+          WRITE_DOCUMENTS.supplierInvoice,
           "Документ «Счёт на оплату поставщика»",
         );
         const org = await resolveOrg(conn, organization);
@@ -2734,7 +2744,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     }) =>
       guard("write.money.create_payout_order", async () => {
         const conn = ctx.db(database);
-        const set = await requireEntity(conn, DOCUMENTS.paymentOrder, "Документ «Платёжное поручение»");
+        const set = await requireEntity(conn, WRITE_DOCUMENTS.paymentOrder, "Документ «Платёжное поручение»");
         const org = await resolveOrgOrDefault(conn, organization);
         const [resolvedOrgAccount, resolvedCurrency] = await Promise.all([
           // Через общий резолвер: принимает название/номер счёта, а не только Ref_Key.
@@ -2798,7 +2808,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     }) =>
       guard("write.sales.create_shipment", async () => {
         const conn = ctx.db(database);
-        const set = await requireEntity(conn, DOCUMENTS.sales, "Документ «Реализация товаров и услуг»");
+        const set = await requireEntity(conn, WRITE_DOCUMENTS.sales, "Документ «Реализация товаров и услуг»");
         const org = await resolveOrg(conn, organization);
         const warehouseKey = await resolveWarehouse(conn, warehouse);
         const bank = await resolveOrgBankAccount(conn, org.key, orgBankAccount);
@@ -2923,7 +2933,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const conn = ctx.db(database);
         const set = await requireEntity(
           conn,
-          DOCUMENTS.returnFromCustomer,
+          WRITE_DOCUMENTS.returnFromCustomer,
           "Документ «Возврат товаров от покупателя»",
         );
         const org = await resolveOrg(conn, organization);
@@ -2964,7 +2974,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const conn = ctx.db(database);
         const set = await requireEntity(
           conn,
-          DOCUMENTS.returnToSupplier,
+          WRITE_DOCUMENTS.returnToSupplier,
           "Документ «Возврат товаров поставщику»",
         );
         const org = await resolveOrg(conn, organization);
@@ -3007,7 +3017,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, organization, fromWarehouse, toWarehouse, date, lines, confirm }) =>
       guard("write.warehouse.create_transfer", async () => {
         const conn = ctx.db(database);
-        const set = await requireEntity(conn, DOCUMENTS.transfer, "Документ «Перемещение товаров»");
+        const set = await requireEntity(conn, WRITE_DOCUMENTS.transfer, "Документ «Перемещение товаров»");
         const org = await resolveOrg(conn, organization);
         const [fromKey, toKey] = await Promise.all([
           resolveWarehouse(conn, fromWarehouse),
@@ -3056,7 +3066,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, organization, warehouse, inventoryRef, date, lines, confirm }) =>
       guard("write.warehouse.create_surplus", async () => {
         const conn = ctx.db(database);
-        const set = await requireEntity(conn, DOCUMENTS.surplus, "Документ «Оприходование товаров»");
+        const set = await requireEntity(conn, WRITE_DOCUMENTS.surplus, "Документ «Оприходование товаров»");
         const org = await resolveOrg(conn, organization);
         const warehouseKey = await resolveWarehouse(conn, warehouse);
         const lineAcc = await goodsOnlyAccounts(conn, org.key, toGoodsLines(lines));
@@ -3104,7 +3114,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, organization, warehouse, inventoryRef, date, lines, confirm }) =>
       guard("write.warehouse.create_writeoff", async () => {
         const conn = ctx.db(database);
-        const set = await requireEntity(conn, DOCUMENTS.writeoff, "Документ «Списание товаров»");
+        const set = await requireEntity(conn, WRITE_DOCUMENTS.writeoff, "Документ «Списание товаров»");
         const org = await resolveOrg(conn, organization);
         const warehouseKey = await resolveWarehouse(conn, warehouse);
         const lineAcc = await goodsOnlyAccounts(conn, org.key, toGoodsLines(lines));
@@ -3164,7 +3174,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const conn = ctx.db(database);
         const set = await requireEntity(
           conn,
-          DOCUMENTS.inventory,
+          WRITE_DOCUMENTS.inventory,
           "Документ «Инвентаризация товаров на складе»",
         );
         const org = await resolveOrg(conn, organization);
@@ -3308,7 +3318,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
               services: payload["Услуги"] as unknown[] | undefined,
             },
             {
-              servicesAct: (DOCUMENTS.servicesAct as readonly string[]).includes(entitySet),
+              servicesAct: (WRITE_DOCUMENTS.servicesAct as readonly string[]).includes(entitySet),
               operationKind: payload["ВидОперации"],
             },
           );
@@ -3446,7 +3456,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     }) =>
       guard("write.sales.create_act", async () => {
         const conn = ctx.db(database);
-        const set = await requireEntity(conn, DOCUMENTS.sales, "Документ «Реализация товаров и услуг»");
+        const set = await requireEntity(conn, WRITE_DOCUMENTS.sales, "Документ «Реализация товаров и услуг»");
         const org = await resolveOrg(conn, organization);
         const bank = await resolveOrgBankAccount(conn, org.key, orgBankAccount);
         const { settlement, lineAccountsFor } = await goodsAccounts(conn, org.key, lines, "service", {
@@ -3520,7 +3530,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const conn = ctx.db(database);
         const set = await requireEntity(
           conn,
-          DOCUMENTS.servicesAct,
+          WRITE_DOCUMENTS.servicesAct,
           "Документ «Акт об оказании производственных услуг»",
         );
         const org = await resolveOrg(conn, organization);
@@ -3607,7 +3617,11 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     }) =>
       guard("write.money.create_payment", async () => {
         const conn = ctx.db(database);
-        const set = await requireEntity(conn, DOCUMENTS.bankIn, "Документ «Поступление на расчётный счёт»");
+        const set = await requireEntity(
+          conn,
+          WRITE_DOCUMENTS.bankIn,
+          "Документ «Поступление на расчётный счёт»",
+        );
         const org = await resolveOrg(conn, organization);
         const bank = await resolveOrgBankAccount(conn, org.key, orgBankAccount);
         const codes = conn.cfg?.accounting?.strictDefaults
@@ -3730,7 +3744,11 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     }) =>
       guard("write.money.create_bank_writeoff", async () => {
         const conn = ctx.db(database);
-        const set = await requireEntity(conn, DOCUMENTS.bankOut, "Документ «Списание с расчётного счёта»");
+        const set = await requireEntity(
+          conn,
+          WRITE_DOCUMENTS.bankOut,
+          "Документ «Списание с расчётного счёта»",
+        );
         const org = await resolveOrg(conn, organization);
         const bank = await resolveOrgBankAccount(conn, org.key, orgBankAccount);
         const bd = await buildSettlementRow(conn, operationKind, contractRef, amount);
@@ -3815,7 +3833,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     (a) =>
       guard("write.money.create_cash_receipt", async () => {
         const conn = ctx.db(a.database);
-        const set = await requireEntity(conn, DOCUMENTS.cashIn, "Документ «Приходный кассовый ордер»");
+        const set = await requireEntity(conn, WRITE_DOCUMENTS.cashIn, "Документ «Приходный кассовый ордер»");
         const org = await resolveOrg(conn, a.organization);
         const payload = await buildCashPayload(conn, org, a);
         return createOrPreview(conn, set, payload, a.confirm);
@@ -3838,7 +3856,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     (a) =>
       guard("write.money.create_cash_payment", async () => {
         const conn = ctx.db(a.database);
-        const set = await requireEntity(conn, DOCUMENTS.cashOut, "Документ «Расходный кассовый ордер»");
+        const set = await requireEntity(conn, WRITE_DOCUMENTS.cashOut, "Документ «Расходный кассовый ордер»");
         const org = await resolveOrg(conn, a.organization);
         const payload = await buildCashPayload(conn, org, a);
         return createOrPreview(conn, set, payload, a.confirm);
@@ -3871,10 +3889,18 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, baseDocumentRef, baseDocumentEntity, operationCode, date, confirm }) =>
       guard("write.sales.create_issued_invoice", async () => {
         const conn = ctx.db(database);
-        const set = await requireEntity(conn, DOCUMENTS.issuedInvoice, "Документ «Счёт-фактура выданный»");
+        const set = await requireEntity(
+          conn,
+          WRITE_DOCUMENTS.issuedInvoice,
+          "Документ «Счёт-фактура выданный»",
+        );
         const baseSet =
           baseDocumentEntity ??
-          (await requireEntity(conn, DOCUMENTS.sales, "Документ-основание «Реализация товаров и услуг»"));
+          (await requireEntity(
+            conn,
+            WRITE_DOCUMENTS.sales,
+            "Документ-основание «Реализация товаров и услуг»",
+          ));
         const b = await invoiceBasis(conn, baseSet, baseDocumentRef);
         const d = odataDate(date ? new Date(`${date}T00:00:00`) : new Date());
         const baseGuid = baseDocumentRef.replace(/[{}']/g, "");
@@ -3929,14 +3955,14 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const conn = ctx.db(database);
         const set = await requireEntity(
           conn,
-          DOCUMENTS.receivedInvoice,
+          WRITE_DOCUMENTS.receivedInvoice,
           "Документ «Счёт-фактура полученный»",
         );
         const baseSet =
           baseDocumentEntity ??
           (await requireEntity(
             conn,
-            DOCUMENTS.purchases,
+            WRITE_DOCUMENTS.purchases,
             "Документ-основание «Поступление товаров и услуг»",
           ));
         const b = await invoiceBasis(conn, baseSet, baseDocumentRef);

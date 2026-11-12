@@ -57,6 +57,23 @@ export const DOCUMENTS = {
   inventory: ["Document_ИнвентаризацияТоваровНаСкладе"],
 } as const;
 
+/**
+ * Имена документов Управления торговлей в DOCUMENTS: для чтения (поиск, история, свежесть). Запись собирает
+ * документы Бухгалтерии, поэтому берёт только WRITE_DOCUMENTS: иначе в КА/ERP с Хозрасчётным запись подставила бы
+ * документ УТ с полями БП (предпросмотр выглядел рабочим, 1С отвергала запрос).
+ */
+export const TRADE_DOCUMENT_NAMES: ReadonlySet<string> = new Set([
+  "Document_СчетНаОплатуКлиенту",
+  "Document_ПриобретениеТоваровУслуг",
+  "Document_ПоступлениеБезналичныхДенежныхСредств",
+  "Document_СписаниеБезналичныхДенежныхСредств",
+  "Document_ВозвратТоваровОтКлиента",
+]);
+
+export const WRITE_DOCUMENTS = Object.fromEntries(
+  Object.entries(DOCUMENTS).map(([kind, names]) => [kind, names.filter((n) => !TRADE_DOCUMENT_NAMES.has(n))]),
+) as unknown as { readonly [K in keyof typeof DOCUMENTS]: readonly string[] };
+
 export const REGISTERS = {
   /** Регистр бухгалтерии (главная книга) — сальдо/обороты по счетам. */
   accounting: ["AccountingRegister_Хозрасчетный"],

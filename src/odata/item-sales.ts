@@ -6,7 +6,7 @@ import { AggregateOverflowError, fetchAllForAggregation } from "./aggregate.js";
 import { nextDay, num } from "./accounting.js";
 import { requireEntity } from "./publication.js";
 import { and, buildQuery, cmp, odataGuid, or } from "./query.js";
-import { entitySetOfType, refOf } from "./settlements-aging.js";
+import { entitySetOfType, localToday, refOf } from "./settlements-aging.js";
 import { WAREHOUSE_BATCH, qty } from "./stock.js";
 
 /**
@@ -219,7 +219,10 @@ export async function lastRetailReports(
     const date = typeof r["Date"] === "string" ? r["Date"].slice(0, 10) : undefined;
     if (wh && date && scope.has(wh) && (last.get(wh) ?? "") < date) last.set(wh, date);
   };
-  const windowStart = [from, minusDays(to, REPORTS_WINDOW_DAYS - 1)].sort()[1]!;
+  // Окно кончается не позже сегодня: у периода в будущем последняя неделя пуста, и все склады уходили в поиск по одному.
+  const end = [to, localToday()].sort()[0]!;
+  if (end < from) return { last, unknown: [] };
+  const windowStart = [from, minusDays(end, REPORTS_WINDOW_DAYS - 1)].sort()[1]!;
   // Сводка не должна ронять сами продажи: переполнение — даты неизвестны, а не отказ всего вызова.
   const window = await fetchAllForAggregation(
     conn,
@@ -228,11 +231,11 @@ export async function lastRetailReports(
       filter: and(
         cmp("Posted", "eq", "true"),
         cmp("Date", "ge", `datetime'${windowStart}T00:00:00'`),
-        cmp("Date", "le", `datetime'${to}T23:59:59'`),
+        cmp("Date", "le", `datetime'${end}T23:59:59'`),
       ),
       select: ["Ref_Key", "Склад_Key", "Date"],
     },
-    `${windowStart}…${to}`,
+    `${windowStart}…${end}`,
     REPORTS_PAGE,
   ).catch((e: unknown) => {
     if (e instanceof AggregateOverflowError) return undefined;

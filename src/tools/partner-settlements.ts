@@ -1,8 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { ServerContext } from "../context.js";
-import { resolveEntity } from "../config/mapping.js";
-import { resolveNames } from "../odata/accounting.js";
+import { CATALOGS, resolveEntity } from "../config/mapping.js";
+import type { Connection } from "../context.js";
+import { InputError } from "../errors.js";
+import { readByRefs, resolveNames } from "../odata/accounting.js";
+import { localToday, refOf } from "../odata/settlements-aging.js";
 import { callPageStart } from "../odata/call-context.js";
 import { resolveOrganization } from "../odata/orgs.js";
 import {
@@ -18,8 +21,6 @@ import { databaseField, dateField, guard, ok } from "./_shared.js";
 
 const GUID = /^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$/;
 const rub = (cents: number) => cents / 100;
-/** Сегодня по UTC: на стыке суток расхождение в день допустимо, дата расчёта названа в ответе (on). */
-const today = () => new Date().toISOString().slice(0, 10);
 
 interface Totals {
   debt: number;
@@ -35,6 +36,34 @@ const emptyTotals = (): Totals => ({
   maxOverdueDays: 0,
   ages: Object.fromEntries(AGE_BUCKETS.map((b) => [b, 0])) as Record<AgeBucket, number>,
 });
+
+/**
+ * Партнёр по Ref_Key. Ref_Key контрагента (его даёт find_counterparty) переводится в партнёра контрагента: иначе отбор
+ * давал тихий ноль. Неизвестный Ref_Key — отказ, как у складов в остатках.
+ */
+async function resolvePartner(
+  conn: Connection,
+  ref: string,
+): Promise<{ ref: string; fromCounterparty: boolean }> {
+  const available = await conn.available();
+  const partners = resolveEntity([PARTNERS_CATALOG], available);
+  if (partners && (await readByRefs(conn, partners, [ref], ["Ref_Key"])).size)
+    return { ref, fromCounterparty: false };
+  const counterparties = resolveEntity(CATALOGS.counterparties, available);
+  if (counterparties) {
+    const props = new Set(
+      (await conn.getMetadata()).entities.get(counterparties)?.properties.map((p) => p.name),
+    );
+    if (props.has("Партнер_Key")) {
+      const row = (await readByRefs(conn, counterparties, [ref], ["Ref_Key", "Партнер_Key"]))
+        .values()
+        .next().value;
+      const partner = row ? refOf(row["Партнер_Key"]) : undefined;
+      if (partner) return { ref: partner, fromCounterparty: true };
+    }
+  }
+  throw new InputError(`Партнёр ${ref} не найден (ни среди партнёров, ни среди контрагентов с партнёром).`);
+}
 
 export function registerPartnerSettlementTools(server: McpServer, ctx: ServerContext): void {
   server.registerTool(
@@ -78,8 +107,12 @@ export function registerPartnerSettlementTools(server: McpServer, ctx: ServerCon
         const t0 = Date.now();
         const conn = ctx.db(database);
         const org = organization ? await resolveOrganization(conn, organization) : undefined;
-        const partnerRef = partner?.replace(/[{}]/g, "").toLowerCase();
-        const on = asOf ?? today();
+        const resolved = partner
+          ? await resolvePartner(conn, partner.replace(/[{}]/g, "").toLowerCase())
+          : undefined;
+        const partnerRef = resolved?.ref.toLowerCase();
+        // Местная дата, как у дебиторки Бухгалтерии: по UTC на востоке России утром «сегодня» было бы вчера.
+        const on = asOf ?? localToday();
         const { rows, scanned } = await readSettlements(conn, side, asOf);
         const selected = rows.filter(
           (r) =>
@@ -94,13 +127,14 @@ export function registerPartnerSettlementTools(server: McpServer, ctx: ServerCon
           for (const acc of [t, total]) {
             acc.debt += r.debtCents;
             acc.prepayment += r.prepaymentCents;
-            if (r.debtCents > 0) {
-              const bucket = ageBucket(r.dueDate, on);
-              acc.ages[bucket] += r.debtCents;
-              if (r.dueDate && bucket !== "notDue" && bucket !== "noDueDate") {
-                acc.overdue += r.debtCents;
+            // Отрицательная строка долга (сторно) тоже идёт в сроки и просрочку: сумма aging всегда равна debt, а
+            // просрочка не больше долга (ревью: +100 и −30 давали debt 70 при overdue 100).
+            const bucket = ageBucket(r.dueDate, on);
+            acc.ages[bucket] += r.debtCents;
+            if (r.dueDate && bucket !== "notDue" && bucket !== "noDueDate") {
+              acc.overdue += r.debtCents;
+              if (r.debtCents > 0)
                 acc.maxOverdueDays = Math.max(acc.maxOverdueDays, daysBetween(r.dueDate, on));
-              }
             }
           }
           byPartner.set(r.partnerRef ?? "", t);
@@ -133,6 +167,11 @@ export function registerPartnerSettlementTools(server: McpServer, ctx: ServerCon
           notes.push("Часть долга без плановой даты погашения — в aging.noDueDate.");
         if (byPartner.has(""))
           notes.push("Часть расчётов без партнёра в ключе аналитики — строка partner: null.");
+        if (resolved?.fromCounterparty) {
+          notes.push(
+            "partner — Ref_Key контрагента: расчёты взяты по его партнёру (в УТ долги ведутся по партнёрам).",
+          );
+        }
         // Долг и предоплата у одного партнёра сразу — обычно незачтённые авансы (на УТ 11.5 так у большинства крупных).
         const both = list.filter(([, t]) => t.debt > 0 && t.prepayment > 0);
         if (both.length) {

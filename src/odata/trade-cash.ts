@@ -2,7 +2,7 @@ import type { Connection } from "../context.js";
 import { resolveEntity } from "../config/mapping.js";
 import type { ODataEntity } from "../types/odata.js";
 import { fetchAllForAggregation } from "./aggregate.js";
-import { nextDay, num, resolveNames } from "./accounting.js";
+import { GUID_RE, nextDay, num, resolveNames } from "./accounting.js";
 import { cmp, odataGuid } from "./query.js";
 import { refOf } from "./settlements-aging.js";
 
@@ -21,6 +21,8 @@ interface CashRegister {
   /** Измерение-держатель и справочник для названий. */
   holder: string;
   holderCatalog?: string;
+  /** Измерение валюты, если строки одного держателя бывают в разных валютах (переводы в пути). */
+  currency?: string;
 }
 
 const REGISTERS: readonly CashRegister[] = [
@@ -50,6 +52,7 @@ const REGISTERS: readonly CashRegister[] = [
     label: "В пути",
     kind: "transit",
     holder: "ВидПереводаДенежныхСредств",
+    currency: "Валюта_Key",
   },
 ];
 
@@ -86,17 +89,19 @@ export async function tradeCashBalance(
     const { rows } = await fetchAllForAggregation(
       conn,
       path,
-      { select: [reg.holder, "СуммаBalance", "СуммаРеглBalance"] },
+      { select: [reg.holder, ...(reg.currency ? [reg.currency] : []), "СуммаBalance", "СуммаРеглBalance"] },
       `деньги на ${o.asOf ?? "сейчас"}`,
     );
     scanned += rows.length;
     const byHolder = new Map<string, Line>();
     for (const r of rows as ODataEntity[]) {
       const holder = String(r[reg.holder] ?? "");
-      const l = byHolder.get(holder) ?? { reg, holder, cents: 0, ownCents: 0 };
+      // Сумма в валюте складывается только в одной валюте: иначе 100 USD и 500 ₽ дали бы «600».
+      const key = `${holder}|${reg.currency ? String(r[reg.currency] ?? "") : ""}`;
+      const l = byHolder.get(key) ?? { reg, holder, cents: 0, ownCents: 0 };
       l.cents += toCents(r["СуммаРеглBalance"]);
       l.ownCents += toCents(r["СуммаBalance"]);
-      byHolder.set(holder, l);
+      byHolder.set(key, l);
     }
     lines.push(...[...byHolder.values()].filter((l) => l.cents !== 0 || l.ownCents !== 0));
   }
@@ -140,7 +145,8 @@ export async function tradeCashBalance(
     special: 0,
     inTransit: sum(["transit"]),
     balances: lines.map((l) => {
-      const ref = refOf(l.holder);
+      // Вид перевода — значение перечисления, а не ссылка: Ref_Key только у GUID.
+      const ref = GUID_RE.test(l.holder) ? refOf(l.holder) : undefined;
       return {
         account: l.reg.label,
         kind: l.reg.kind,

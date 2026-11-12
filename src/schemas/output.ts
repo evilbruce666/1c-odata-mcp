@@ -567,9 +567,11 @@ export const getItemSalesResultSchema = z
     retailReports: z
       .object({
         warehouses: z.number(),
+        latest: z.string().nullable(),
         completeThrough: z.string().nullable(),
         unknown: z.number().optional(),
-        lagging: z.array(
+        behind: z.number(),
+        oldest: z.array(
           z
             .object({ warehouse: z.string(), warehouseRef: z.string(), lastReport: z.string().nullable() })
             .passthrough(),

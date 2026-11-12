@@ -214,5 +214,25 @@ describe("инструменты бухучёта в УТ — отказ без 
     expect(r.text).toContain("Управление торговлей");
     expect(r.text).toContain("read.analytics.get_warehouse_stock");
     expect(r.text).not.toContain("Добавьте их в 1С");
+    // Признак — по опубликованным объектам: в КА/ERP с неполной публикацией совет опубликовать Хозрасчётный верен.
+    expect(r.text).toContain("КА или ERP");
+  });
+});
+
+describe("запись берёт только документы Бухгалтерии (ревью: в КА/ERP подставлялся документ УТ)", () => {
+  it("WRITE_DOCUMENTS без имён УТ, имена БП на месте; запись не читает DOCUMENTS", async () => {
+    const { DOCUMENTS, TRADE_DOCUMENT_NAMES, WRITE_DOCUMENTS } = await import("../src/config/mapping.js");
+    for (const [kind, names] of Object.entries(DOCUMENTS)) {
+      const write = WRITE_DOCUMENTS[kind as keyof typeof DOCUMENTS];
+      expect(
+        write.some((n) => TRADE_DOCUMENT_NAMES.has(n)),
+        kind,
+      ).toBe(false);
+      expect(write, kind).toEqual(names.filter((n) => !TRADE_DOCUMENT_NAMES.has(n)));
+    }
+    const { readFileSync } = await import("node:fs");
+    for (const file of ["src/tools/write.ts", "src/odata/existing-bank-settlement.ts"]) {
+      expect(readFileSync(file, "utf8"), file).not.toMatch(/(?<![A-Z_])DOCUMENTS\./);
+    }
   });
 });

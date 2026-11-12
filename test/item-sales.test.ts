@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createServer } from "../src/mcp/server.js";
 import { aggregateSales, turnoversPath } from "../src/odata/item-sales.js";
@@ -10,7 +10,14 @@ import { fake1C, type FakeQuery, type FakeSchema } from "./helpers/fake-1c.js";
  * снимок УТ 11.5.
  */
 
+beforeEach(() => {
+  // Окно отчётов о рознице кончается не позже «сегодня»: тесты не зависят от дня запуска.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-15T12:00:00"));
+});
+
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -133,9 +140,11 @@ interface Sales {
   byWarehouse?: { warehouse: string | null; warehouseRef?: string; quantity: number; positions: number }[];
   retailReports?: {
     warehouses: number;
+    latest: string | null;
     completeThrough: string | null;
     unknown?: number;
-    lagging: { warehouseRef: string; lastReport: string | null }[];
+    behind: number;
+    oldest: { warehouseRef: string; lastReport: string | null }[];
   };
   warehouseFilter?: { ref: string; type?: string }[];
   note?: string;
@@ -278,18 +287,40 @@ describe("get_sales_register: итоги совпадают с ручным ра
     expect(r.text).toContain("Аксессуары/01. Apple");
   });
 
-  it("отчёты о рознице: по складам с розничными продажами, в ответе — только отстающие", async () => {
+  it("отчёты о рознице: отставание — от самого свежего отчёта, а не от конца периода", async () => {
     const { call } = await setup();
     const s = (await call()).structuredContent;
-    // Розница — на W(1) и W(2); отчёт есть только у W(1), последний 30.10 при конце периода 31.10.
+    // Розница — на W(1) и W(2); отчёт есть только у W(1), последний 30.10. Отстаёт только W(2): у него отчётов нет.
     expect(s.retailReports).toEqual({
       warehouses: 2,
+      latest: "2026-10-30",
       completeThrough: null,
-      lagging: [
-        expect.objectContaining({ warehouseRef: W(1), lastReport: "2026-10-30" }),
-        expect.objectContaining({ warehouseRef: W(2), lastReport: null }),
-      ],
+      behind: 1,
+      oldest: [expect.objectContaining({ warehouseRef: W(2), lastReport: null })],
     });
+  });
+
+  it("период по сегодня и в будущем: склады, отчитавшиеся вчера, не отстают; лишних запросов нет (ревью)", async () => {
+    // «Сегодня» — 15.11; оба склада отчитались по 14.11, сегодняшняя смена ещё не закрыта.
+    const reports = [W(1), W(2)].map((w, i) => ({
+      Ref_Key: uuid("f", 60 + i),
+      Склад_Key: w,
+      Date: "2026-11-14T22:00:00",
+    }));
+    const { call, seen } = await setup("ut11", { reports });
+    for (const to of ["2026-11-15", "2026-11-30"]) {
+      const before = seen.filter((q) => q.base === "Document_ОтчетОРозничныхПродажах").length;
+      const s = (await call({ from: "2026-11-01", to })).structuredContent;
+      expect(s.retailReports, to).toEqual({
+        warehouses: 2,
+        latest: "2026-11-14",
+        completeThrough: "2026-11-14",
+        behind: 0,
+        oldest: [],
+      });
+      // Одно окно на неделю, без поиска по одному складу.
+      expect(seen.filter((q) => q.base === "Document_ОтчетОРозничныхПродажах").length - before).toBe(1);
+    }
   });
 
   it("все склады отчитались по конец периода — completeThrough = to, список отстающих пуст", async () => {
@@ -301,28 +332,29 @@ describe("get_sales_register: итоги совпадают с ручным ра
     const { call } = await setup("ut11", { reports });
     expect((await call()).structuredContent.retailReports).toEqual({
       warehouses: 2,
+      latest: "2026-10-31",
       completeThrough: "2026-10-31",
-      lagging: [],
+      behind: 0,
+      oldest: [],
     });
   });
 
   it("отчётов за год больше лимита строк — продажи всё равно считаются (ревью: вызов падал целиком)", async () => {
     // 400 отчётов за год по W(1), лимит строк 100: читается только последняя неделя и один запрос на отставший склад.
+    // Отчёты за 2025 год, период в прошлом: окно — последняя неделя декабря, где отчётов нет.
     const reports = Array.from({ length: 400 }, (_, i) => {
-      const d = new Date(Date.UTC(2026, 0, 1) + i * 19 * 3600_000).toISOString().slice(0, 19);
+      const d = new Date(Date.UTC(2025, 0, 1) + i * 19 * 3600_000).toISOString().slice(0, 19);
       return { Ref_Key: uuid("f", 1000 + i), Склад_Key: W(1), Date: d };
     });
     const { call } = await setup("ut11", { reports, env: { ODATA_ANALYTICS_MAX_ROWS: "100" } });
-    const r = await call({ from: "2026-01-01", to: "2026-12-31" });
+    const r = await call({ from: "2025-01-01", to: "2025-12-31" });
     expect(r.isError, r.text).toBeFalsy();
     expect(r.structuredContent.totalQuantity).toBe(16);
     const last = reports
       .map((x) => x.Date.slice(0, 10))
       .sort()
       .at(-1);
-    expect(r.structuredContent.retailReports?.lagging.find((l) => l.warehouseRef === W(1))?.lastReport).toBe(
-      last,
-    );
+    expect(r.structuredContent.retailReports?.latest).toBe(last);
   });
 
   it("отчётов даже за неделю больше лимита — продажи с примечанием, а не отказ", async () => {

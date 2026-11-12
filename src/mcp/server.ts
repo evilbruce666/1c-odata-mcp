@@ -419,19 +419,30 @@ function refuseWriteToTrade(
   return async (args, extra) => {
     const several = ctx.databases().length > 1;
     if (typeof args.database === "string" || !several) {
-      let trade = false;
+      let conn;
       try {
-        trade = await tradeWithoutAccounting(
-          ctx.db(typeof args.database === "string" ? args.database : undefined),
-        );
+        conn = ctx.db(typeof args.database === "string" ? args.database : undefined);
       } catch {
-        // Неизвестная база или недоступная схема — сообщит сам инструмент, как раньше.
+        // Неизвестная база — сообщит сам инструмент, как раньше.
+        return cb(args, extra);
+      }
+      let trade: boolean;
+      try {
+        trade = await tradeWithoutAccounting(conn);
+      } catch (e) {
+        // Защита закрывается, а не открывается: при сбое схемы инструмент сам перечитал бы её и записал (ревью:
+        // первый $metadata 503 — и PATCH уходил в базу УТ).
+        return fail(
+          `Не удалось проверить конфигурацию базы перед записью (${e instanceof Error ? e.message : String(e)}). ` +
+            "Ничего не записано; повторите позже.",
+          "refused",
+        );
       }
       if (trade) {
         return fail(
           "Запись поддерживается только для Бухгалтерии: в этой базе нет регистра «Хозрасчётный» (похоже, это " +
             "Управление торговлей). Документы и справочники в ней устроены иначе, запись на такой базе не проверена. " +
-            "Ничего не записано.",
+            "Ничего не записано. Если это КА или ERP, опубликуйте «Хозрасчётный» в составе OData.",
           "refused",
         );
       }
