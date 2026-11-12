@@ -14,6 +14,7 @@ import {
   ageBucket,
   daysBetween,
   readSettlements,
+  requireSettlements,
   type AgeBucket,
 } from "../odata/partner-settlements.js";
 import { partnerSettlementsResultSchema } from "../schemas/output.js";
@@ -76,7 +77,7 @@ export function registerPartnerSettlementTools(server: McpServer, ctx: ServerCon
         "get_creditors; в КА и ERP суммы могут расходиться). side=clients — долг клиентов нам, side=suppliers — наш долг " +
         "поставщикам. debt — долг, prepayment — предоплата (аванс), net = debt − prepayment, всё в регламентированной " +
         "валюте. overdue — долг с плановой датой погашения раньше даты расчёта (on: asOf или сегодня), aging — долг по " +
-        "срокам просрочки, maxOverdueDays — самая старая просрочка партнёра. Отбор: organization, partner (Ref_Key " +
+        "срокам просрочки (сторно с минусом может сделать отдельную корзину отрицательной, сумма корзин всегда равна debt), maxOverdueDays — самая старая просрочка партнёра. Отбор: organization, partner (Ref_Key " +
         "партнёра), overdueOnly — только партнёры с просрочкой. partners — по убыванию net; count — всего партнёров, " +
         "длинный список читайте с offset=nextOffset.",
       inputSchema: z.object({
@@ -107,6 +108,8 @@ export function registerPartnerSettlementTools(server: McpServer, ctx: ServerCon
         const t0 = Date.now();
         const conn = ctx.db(database);
         const org = organization ? await resolveOrganization(conn, organization) : undefined;
+        // Сначала регистр: в базе без него отказ должен называть регистр, а не «партнёр не найден».
+        await requireSettlements(conn, side);
         const resolved = partner
           ? await resolvePartner(conn, partner.replace(/[{}]/g, "").toLowerCase())
           : undefined;

@@ -41,6 +41,10 @@ export interface SettlementRow {
 }
 
 /** Строки остатков «по срокам» с партнёром и организацией из ключа аналитики (тем же запросом, через $expand). */
+/** Регистр стороны расчётов; не опубликован — отказ с его названием. */
+export const requireSettlements = (conn: Connection, side: Side): Promise<string> =>
+  requireEntity(conn, [REGISTERS[side].set], REGISTERS[side].label);
+
 export async function readSettlements(
   conn: Connection,
   side: Side,

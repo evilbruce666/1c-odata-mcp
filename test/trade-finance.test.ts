@@ -274,6 +274,13 @@ describe("get_partner_settlements — расчёты по срокам", () => {
     };
     expect(r.isError).toBe(true);
     expect(r.content[0]!.text).toContain("Расчёты с поставщиками по срокам");
+    // С partner — тот же отказ, а не «партнёр не найден» (ревью: поиск партнёра шёл раньше проверки регистра).
+    const withPartner = (await client.callTool({
+      name: "read.analytics.get_partner_settlements",
+      arguments: { side: "suppliers", partner: PARTNER(1) },
+    })) as { isError?: boolean; content: { text: string }[] };
+    expect(withPartner.isError).toBe(true);
+    expect(withPartner.content[0]!.text).toContain("Расчёты с поставщиками по срокам");
   });
 
   it("Ref_Key контрагента — расчёты его партнёра с примечанием; неизвестный Ref_Key — отказ (ревью: тихий ноль)", async () => {
