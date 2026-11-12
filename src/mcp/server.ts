@@ -15,6 +15,7 @@ import { registerCounterpartyTools } from "../tools/counterparties.js";
 import { registerDocumentTools } from "../tools/documents.js";
 import { registerRegisterTools } from "../tools/registers.js";
 import { registerStockTools } from "../tools/stock.js";
+import { registerItemSalesTools } from "../tools/item-sales.js";
 import { registerDebtTools } from "../tools/debts.js";
 import { registerMonthCloseTools } from "../tools/month-close.js";
 import { registerCardTools } from "../tools/card.js";
@@ -149,6 +150,7 @@ type PageList = { list: string; countIsTotal?: boolean };
 const PAGE_LISTS: Record<string, PageList> = {
   "read.analytics.get_inventory": { list: "items", countIsTotal: true },
   "read.analytics.get_stock": { list: "items", countIsTotal: true },
+  "read.analytics.get_item_sales": { list: "items", countIsTotal: true },
   "read.analytics.get_debtors": { list: "debtors", countIsTotal: true },
   "read.analytics.get_creditors": { list: "creditors", countIsTotal: true },
   "read.analytics.get_unpaid_invoices": { list: "invoices", countIsTotal: true },
@@ -574,6 +576,7 @@ export function createServer(ctx: ServerContext): McpServer {
   registerDocumentTools(server, ctx);
   registerRegisterTools(server, ctx);
   registerStockTools(server, ctx);
+  registerItemSalesTools(server, ctx);
   registerDebtTools(server, ctx);
   registerMonthCloseTools(server, ctx);
   registerCardTools(server, ctx);

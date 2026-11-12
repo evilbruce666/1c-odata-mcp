@@ -160,7 +160,7 @@ export function registerStockTools(server: McpServer, ctx: ServerContext): void 
           };
         });
 
-        const notes = await selectionNotes(conn, nomSet, sel, { group, query }, "на складах");
+        const notes = await selectionNotes(conn, nomSet, sel, { group, query }, "остатка на складах");
         if (!charSet && page.some((l) => l.characteristicRef)) {
           notes.push(
             "Справочник характеристик не опубликован в OData: у строк с характеристикой только characteristicRef.",

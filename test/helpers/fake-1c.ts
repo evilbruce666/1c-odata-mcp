@@ -89,6 +89,20 @@ function complexTypes(schema: FakeSchema): Map<string, Map<string, string>> {
   return complexCache;
 }
 
+const associationCaches = new Map<FakeSchema, Map<string, string>>();
+/** Куда ведёт ссылочное поле: «Регистр_RecordType_Поле» → набор («Catalog_…»), по Association схемы. */
+function associations(schema: FakeSchema): Map<string, string> {
+  const known = associationCaches.get(schema);
+  if (known) return known;
+  const map = new Map<string, string>();
+  associationCaches.set(schema, map);
+  for (const m of SCHEMAS[schema].xml.matchAll(/<Association Name="([^"]+)"[\s\S]*?<\/Association>/g)) {
+    const end = /<End Role="End"\s+Type="StandardODATA\.([^"]+)"/.exec(m[0])?.[1];
+    if (end) map.set(m[1]!, end);
+  }
+  return map;
+}
+
 function entityFields(set: string, schema: FakeSchema = "bp30"): Map<string, string> | undefined {
   const meta = SCHEMAS[schema].metadata().entities.get(set);
   if (!meta) return undefined;
@@ -281,7 +295,23 @@ export function fake1C(env: Record<string, string> = {}, options: FakeOptions = 
       ? (complexTypes(schema).get(declared.returns) ?? entityFields(declared.returns, schema))
       : undefined;
     const scope = virtual ?? fields;
-    const known = (name: string) => scope.has(name.split("/")[0]!);
+    // $expand ссылки: у результата есть поле «Имя_Key», а объект — по связи из записи регистра или объекта.
+    const expanded = new Map<string, Map<string, string>>();
+    for (const nav of (params.get("$expand") ?? "")
+      .split(",")
+      .map((n) => n.trim())
+      .filter(Boolean)) {
+      const target =
+        associations(schema).get(`${base}_RecordType_${nav}`) ?? associations(schema).get(`${base}_${nav}`);
+      const targetFields = target ? entityFields(target, schema) : undefined;
+      if (!scope.has(`${nav}_Key`) || !targetFields) return bad("$expand", nav);
+      expanded.set(nav, targetFields);
+    }
+    const known = (name: string) => {
+      const [head, field] = name.split("/");
+      const nested = expanded.get(head!);
+      return nested && field ? nested.has(field) : scope.has(head!);
+    };
     const args = functionArgs(call?.[2] ?? "");
     // Condition проверяется по полям записи регистра: в 1С он ссылается на измерения, а не на поля результата.
     if (args["Condition"] !== undefined) {
@@ -334,7 +364,11 @@ export function fake1C(env: Record<string, string> = {}, options: FakeOptions = 
       const top = params.has("$top") ? Number(params.get("$top")) : own.length;
       return json(200, { value: own.slice(skip, skip + top) });
     }
-    if (virtual) return json(200, { value: [syntheticRow(virtual, base, schema)] });
+    if (virtual) {
+      const row = syntheticRow(virtual, base, schema);
+      for (const [nav, targetFields] of expanded) row[nav] = syntheticRow(targetFields, nav, schema);
+      return json(200, { value: [row] });
+    }
     const keyed = tail === "" && /^[^(]+\(/.test(path);
     if (Number(params.get("$skip") ?? 0) > 0 && !keyed) return json(200, { value: [] });
     if (base.startsWith("ChartOfAccounts_") && !keyed)

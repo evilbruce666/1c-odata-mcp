@@ -12,6 +12,7 @@
   "read.analytics.get_deal_history": 5,
   "read.analytics.get_debtors": 2,
   "read.analytics.get_inventory": 2,
+  "read.analytics.get_item_sales": 3,
   "read.analytics.get_payments_breakdown": 4,
   "read.analytics.get_purchases_breakdown": 2,
   "read.analytics.get_sales": 1,

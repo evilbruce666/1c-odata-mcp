@@ -475,14 +475,83 @@ export const reconciliationResultSchema = z
   })
   .passthrough();
 
+const warehouseFilterSchema = z
+  .array(z.object({ ref: z.string(), name: z.string(), type: z.string().optional() }).passthrough())
+  .optional();
+
+export const getItemSalesResultSchema = z
+  .object({
+    database: z.string(),
+    from: z.string(),
+    to: z.string(),
+    groupBy: z.string().optional(),
+    warehouseFilter: warehouseFilterSchema,
+    itemGroup: z.object({ name: z.string(), ref: z.string() }).passthrough().optional(),
+    query: z.string().optional(),
+    otherSimilar: z
+      .object({ count: z.number(), quantity: z.number(), examples: z.array(z.string()) })
+      .passthrough()
+      .optional(),
+    totalQuantity: z.number(),
+    sold: z.number(),
+    returns: z.number(),
+    count: z.number(),
+    byOperation: z
+      .array(
+        z
+          .object({ operation: z.string(), quantity: z.number(), sold: z.number(), returns: z.number() })
+          .passthrough(),
+      )
+      .optional(),
+    byWarehouse: z
+      .array(
+        z
+          .object({
+            warehouse: z.string().nullable(),
+            warehouseRef: z.string().optional(),
+            type: z.string().optional(),
+            positions: z.number(),
+            quantity: z.number(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+    retailReports: z
+      .array(
+        z
+          .object({ warehouse: z.string(), warehouseRef: z.string(), lastReport: z.string().nullable() })
+          .passthrough(),
+      )
+      .optional(),
+    note: z.string().optional(),
+    items: z.array(
+      z
+        .object({
+          item: z.string(),
+          ref: z.string(),
+          article: z.string().optional(),
+          group: z.string().optional(),
+          groupRef: z.string().optional(),
+          characteristic: z.string().optional(),
+          characteristicRef: z.string().optional(),
+          warehouse: z.string().optional(),
+          warehouseRef: z.string().optional(),
+          quantity: z.number(),
+          sold: z.number(),
+          returns: z.number(),
+        })
+        .passthrough(),
+    ),
+    scan: scanSchema,
+  })
+  .passthrough();
+
 export const getStockResultSchema = z
   .object({
     database: z.string(),
     asOf: z.string().optional(),
     groupBy: z.string().optional(),
-    warehouseFilter: z
-      .array(z.object({ ref: z.string(), name: z.string(), type: z.string().optional() }).passthrough())
-      .optional(),
+    warehouseFilter: warehouseFilterSchema,
     itemGroup: z.object({ name: z.string(), ref: z.string() }).passthrough().optional(),
     query: z.string().optional(),
     otherSimilar: z

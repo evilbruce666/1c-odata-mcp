@@ -828,7 +828,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         const noItem = lines.filter((l) => !l.itemRef);
         const noItemCents = noItem.reduce((s, l) => s + l.cents, 0);
         const totalCents = lines.reduce((s, l) => s + l.cents, 0);
-        const notes = await selectionNotes(conn, nomSet, sel, { group, query }, "на счетах");
+        const notes = await selectionNotes(conn, nomSet, sel, { group, query }, "остатка на счетах");
         if (noItem.length) {
           notes.push(
             "В totalAmount входит withoutNomenclature: сумма строк без номенклатуры в субконто (она не ведётся на счёте, как на 41.12, или не заполнена).",

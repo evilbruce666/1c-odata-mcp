@@ -185,7 +185,7 @@ describe("настоящий клиент по настоящему сокету
   it("список инструментов, вызов и параллельные вызовы", async () => {
     const { server, client } = await serve();
     const { tools } = await client.listTools();
-    expect(tools).toHaveLength(35);
+    expect(tools).toHaveLength(36);
     expect(tools.every((t) => t.name.startsWith("read."))).toBe(true);
     const calls = await Promise.all(
       Array.from({ length: 5 }, () => client.callTool({ name: "read.system.list_databases", arguments: {} })),

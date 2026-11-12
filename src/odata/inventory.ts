@@ -444,13 +444,13 @@ export async function selectByItem<L extends { itemRef?: string | undefined }>(
   };
 }
 
-/** Примечания к отбору по товару. where — где нет остатка: «на счетах», «на складах». */
+/** Примечания к отбору по товару. absent — чего нет у найденного товара: «остатка на складах», «продаж за период». */
 export async function selectionNotes(
   conn: Connection,
   nomSet: string | undefined,
   sel: ItemSelection<unknown>,
   { group, query }: { group?: string | undefined; query?: string | undefined },
-  where: string,
+  absent: string,
 ): Promise<string[]> {
   const notes: string[] = [];
   if (query && nomSet && !(await articlePublished(conn, nomSet))) {
@@ -473,9 +473,9 @@ export async function selectionNotes(
     const similar = !known && items.some((a) => matchesItemQuery(a, query));
     notes.push(
       known
-        ? `Товар есть ${scope}, но остатка ${where} нет (с учётом других отборов).`
+        ? `Товар есть ${scope}, но ${absent} нет (с учётом других отборов).`
         : similar
-          ? `Товар с похожими буквами другой раскладки (А и A) есть ${scope}, но остатка ${where} нет (с учётом других отборов).`
+          ? `Товар с похожими буквами другой раскладки (А и A) есть ${scope}, но ${absent} нет (с учётом других отборов).`
           : group
             ? "В выбранной группе такого товара нет; вне группы поиск не проверял."
             : "В справочнике такого товара не найдено. Попробуйте основу слова (бумаг, а не бумаги) или другую часть названия.",

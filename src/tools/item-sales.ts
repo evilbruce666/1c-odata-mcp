@@ -1,0 +1,303 @@
+import type { McpServer } from "@modelcontextprotocol/server";
+import { z } from "zod";
+import type { ServerContext } from "../context.js";
+import { CATALOGS, resolveEntity } from "../config/mapping.js";
+import { resolveNames } from "../odata/accounting.js";
+import { callPageStart } from "../odata/call-context.js";
+import { nomenclatureSet, readItemAttributes, selectByItem, selectionNotes } from "../odata/inventory.js";
+import {
+  aggregateSales,
+  checkPeriod,
+  lastRetailReports,
+  readItemSales,
+  toSalesRows,
+  type SalesLine,
+  type SalesRow,
+} from "../odata/item-sales.js";
+import {
+  CHARACTERISTICS,
+  MAX_WAREHOUSES,
+  describeWarehouses,
+  qty,
+  readWarehouses,
+  type Warehouse,
+} from "../odata/stock.js";
+import { getItemSalesResultSchema } from "../schemas/output.js";
+import { databaseField, dateField, guard, ok } from "./_shared.js";
+
+const GUID = /^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$/;
+
+/** Операция продажи в розницу: она попадает в регистр только отчётом о розничных продажах после закрытия смены. */
+const RETAIL_OPERATION = "РеализацияВРозницу";
+
+type Line = SalesLine & { itemRef: string };
+
+const total = (rows: readonly SalesRow[], pick: (q: number) => number) =>
+  qty(rows.reduce((t, r) => t + pick(r.quantity), 0));
+
+export function registerItemSalesTools(server: McpServer, ctx: ServerContext): void {
+  server.registerTool(
+    "read.analytics.get_item_sales",
+    {
+      title: "Продажи по номенклатуре (УТ, КА, ERP)",
+      description:
+        "Продажи товаров в штуках за период по регистру «Выручка и себестоимость продаж» — для УТ 11, КА 2 и ERP 2 " +
+        "(в Бухгалтерии продажи — get_sales_breakdown). quantity — нетто: sold (продано) минус returns (возвраты и сторно " +
+        "продаж, в регистре они с минусом); byOperation — то же по хозяйственным операциям (РеализацияВРозницу, " +
+        "РеализацияКлиенту, ВозвратТоваровОтКлиентаПрошлыхПериодов, СторноРеализации…). Розница попадает в регистр только " +
+        "отчётом о розничных продажах после закрытия смены: retailReports — дата последнего такого отчёта по складу в " +
+        "периоде, продажи позже неё ещё не видны. Отбор: warehouses — Ref_Key складов (как в get_stock), group — группа " +
+        "номенклатуры с подгруппами (Ref_Key, название или путь «Телефоны/Смартфоны/Apple»), query — часть названия или " +
+        "артикул. groupBy=warehouse — по складам. Сумм выручки ответ не даёт. count — всего позиций; длинный список " +
+        "читайте с offset=nextOffset, пока он есть.",
+      inputSchema: z.object({
+        database: databaseField,
+        from: dateField("Начало периода (включительно)"),
+        to: dateField("Конец периода (включительно)"),
+        warehouses: z
+          .array(z.string().trim().regex(GUID, "Ref_Key склада (GUID)"))
+          .min(1)
+          .max(MAX_WAREHOUSES)
+          .optional()
+          .describe(
+            `Ref_Key складов (до ${MAX_WAREHOUSES}); без параметра — все, включая продажи без склада. Группа складов не принимается`,
+          ),
+        groupBy: z
+          .enum(["item", "warehouse"])
+          .default("item")
+          .describe("item — по номенклатуре (по умолчанию); warehouse — номенклатура в разрезе складов"),
+        group: z
+          .string()
+          .trim()
+          .min(1)
+          .max(500)
+          .optional()
+          .describe(
+            "Группа номенклатуры: Ref_Key, название или путь через «/» («Смартфоны/Apple»). Подгруппы входят",
+          ),
+        query: z
+          .string()
+          .trim()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe("Поиск товара: части слов из названия или артикул. Можно вместе с group"),
+        limit: z.number().int().positive().max(1000).default(200).describe("Сколько позиций вернуть"),
+      }),
+      outputSchema: getItemSalesResultSchema,
+    },
+    ({ database, from, to, warehouses, groupBy, group, query, limit }) =>
+      guard("read.analytics.get_item_sales", async () => {
+        const t0 = Date.now();
+        checkPeriod(from, to);
+        const conn = ctx.db(database);
+        const byWarehouse = groupBy === "warehouse";
+        // Склады проверяются до оборотов: неизвестный или группа дали бы тихий ноль.
+        const filter: Warehouse[] | undefined = warehouses
+          ? await readWarehouses(conn, warehouses)
+          : undefined;
+        const warehouseSet = resolveEntity(CATALOGS.warehouses, await conn.available());
+        const raw = await readItemSales(conn, {
+          from,
+          to,
+          warehouses: filter?.map((w) => w.ref),
+          warehouseSet,
+        });
+        const nomSet = await nomenclatureSet(conn);
+        // Отбор по товару — по строкам до свёртки: из них же считаются итоги по операциям.
+        const sel = await selectByItem(conn, nomSet, toSalesRows(raw, CATALOGS.warehouses), { group, query });
+        const { attributes, selectedGroup, groups, otherSimilar } = sel;
+        const lines = aggregateSales(sel.lines, byWarehouse);
+        const pageStart = callPageStart();
+
+        const withItem = lines
+          .filter((l): l is Line => !!l.itemRef)
+          // Вторичные ключи обязательны: каждая страница считается заново, а порядок равных продаж не гарантирован.
+          .sort(
+            (a, b) =>
+              b.quantity - a.quantity ||
+              b.sold - a.sold ||
+              a.itemRef.localeCompare(b.itemRef) ||
+              (a.characteristicRef ?? "").localeCompare(b.characteristicRef ?? "") ||
+              (a.warehouseRef ?? "").localeCompare(b.warehouseRef ?? ""),
+          );
+        const shown = withItem.slice(0, limit);
+        const page = shown.slice(pageStart);
+        if (nomSet) {
+          const unread = page.map((l) => l.itemRef).filter((ref) => !attributes.has(ref));
+          for (const [ref, a] of await readItemAttributes(conn, nomSet, unread)) attributes.set(ref, a);
+        }
+        const parentRefs = [...new Set(page.flatMap((l) => attributes.get(l.itemRef)?.groupRef ?? []))];
+        const groupNames = groups
+          ? new Map(groups.map((g) => [g.ref, g.name]))
+          : nomSet
+            ? await resolveNames(conn, nomSet, parentRefs)
+            : new Map<string, string>();
+        const charSet = resolveEntity(CHARACTERISTICS, await conn.available());
+        const charRefs = page.flatMap((l) => l.characteristicRef ?? []);
+        const charNames =
+          charSet && charRefs.length
+            ? await resolveNames(conn, charSet, charRefs)
+            : new Map<string, string>();
+
+        // Сводки — на первой странице, по всем строкам отбора; на остальных они вытесняли бы сами строки.
+        const first = pageStart === 0;
+        const retailWarehouses = new Set(
+          sel.lines
+            .filter((r) => r.operation === RETAIL_OPERATION && r.warehouseRef)
+            .map((r) => r.warehouseRef!),
+        );
+        const scope = new Set([
+          ...(first && byWarehouse ? sel.lines.flatMap((r) => (r.warehouseRef ? [r.warehouseRef] : [])) : []),
+          ...(first ? retailWarehouses : []),
+          ...page.flatMap((l) => (l.warehouseRef ? [l.warehouseRef] : [])),
+        ]);
+        const known = new Map((filter ?? []).map((w) => [w.ref, w] as const));
+        const described = await describeWarehouses(
+          conn,
+          [...scope].filter((r) => !known.has(r)),
+        );
+        const warehouseOf = (ref: string) => known.get(ref) ?? described.get(ref);
+        // Отчёты о рознице — по складам с розничными продажами и по выбранным складам.
+        const reportScope = new Set([...retailWarehouses, ...(filter ?? []).map((w) => w.ref)]);
+        const reports = first && reportScope.size ? await lastRetailReports(conn, from, to) : undefined;
+
+        const items = shown.map((l) => {
+          const a = attributes.get(l.itemRef);
+          const groupName = a?.groupRef ? groupNames.get(a.groupRef) : undefined;
+          const characteristic = l.characteristicRef ? charNames.get(l.characteristicRef) : undefined;
+          return {
+            item: a?.name ?? l.itemRef,
+            ref: l.itemRef,
+            ...(a?.article ? { article: a.article } : {}),
+            ...(groupName ? { group: groupName } : {}),
+            ...(a?.groupRef ? { groupRef: a.groupRef } : {}),
+            ...(characteristic ? { characteristic } : {}),
+            ...(l.characteristicRef ? { characteristicRef: l.characteristicRef } : {}),
+            ...(l.warehouseRef
+              ? {
+                  warehouse: warehouseOf(l.warehouseRef)?.name ?? l.warehouseRef,
+                  warehouseRef: l.warehouseRef,
+                }
+              : {}),
+            quantity: l.quantity,
+            sold: l.sold,
+            returns: l.returns,
+          };
+        });
+
+        const notes = await selectionNotes(conn, nomSet, sel, { group, query }, "продаж за период");
+        if (!charSet && page.some((l) => l.characteristicRef)) {
+          notes.push(
+            "Справочник характеристик не опубликован в OData: у строк с характеристикой только characteristicRef.",
+          );
+        }
+        const noItem = lines.filter((l) => !l.itemRef);
+        if (noItem.length) notes.push("Строки без номенклатуры не показаны, но входят в итоги.");
+        if (byWarehouse && first && sel.lines.some((r) => !r.warehouseRef)) {
+          notes.push("Часть продаж без склада: они в byWarehouse со значением warehouse: null.");
+        }
+        if (first && reportScope.size && !reports) {
+          notes.push(
+            "Отчёты о розничных продажах не опубликованы: по какую дату видна розница, ответ сказать не может.",
+          );
+        }
+
+        const byOperation = new Map<string, { quantity: number; sold: number; returns: number }>();
+        for (const r of sel.lines) {
+          const t = byOperation.get(r.operation) ?? { quantity: 0, sold: 0, returns: 0 };
+          t.quantity += r.quantity;
+          if (r.quantity >= 0) t.sold += r.quantity;
+          else t.returns -= r.quantity;
+          byOperation.set(r.operation, t);
+        }
+        const byWarehouseTotals = new Map<string, { positions: Set<string>; quantity: number }>();
+        for (const r of sel.lines) {
+          const t = byWarehouseTotals.get(r.warehouseRef ?? "") ?? {
+            positions: new Set<string>(),
+            quantity: 0,
+          };
+          if (r.itemRef) t.positions.add(`${r.itemRef}|${r.characteristicRef ?? ""}`);
+          t.quantity += r.quantity;
+          byWarehouseTotals.set(r.warehouseRef ?? "", t);
+        }
+
+        return ok({
+          database: conn.cfg.name,
+          from,
+          to,
+          ...(byWarehouse ? { groupBy } : {}),
+          ...(filter ? { warehouseFilter: filter } : {}),
+          ...(selectedGroup
+            ? { itemGroup: { name: selectedGroup.name, ref: selectedGroup.ref, includesSubgroups: true } }
+            : {}),
+          ...(query ? { query } : {}),
+          ...(otherSimilar.length
+            ? {
+                otherSimilar: {
+                  count: new Set(otherSimilar.map((r) => r.itemRef)).size,
+                  quantity: total(otherSimilar, (q) => q),
+                  examples: [...new Set(otherSimilar.map((r) => attributes.get(r.itemRef ?? "")?.name ?? ""))]
+                    .filter(Boolean)
+                    .slice(0, 5),
+                },
+              }
+            : {}),
+          totalQuantity: total(sel.lines, (q) => q),
+          sold: total(sel.lines, (q) => Math.max(q, 0)),
+          returns: total(sel.lines, (q) => Math.max(-q, 0)),
+          // Всего, а не на странице: сколько в этом ответе — длина списка и returned (его добавляет обёртка страниц).
+          count: withItem.length,
+          ...(first
+            ? {
+                byOperation: [...byOperation]
+                  .map(([operation, t]) => ({
+                    operation,
+                    quantity: qty(t.quantity),
+                    sold: qty(t.sold),
+                    returns: qty(t.returns),
+                  }))
+                  .sort((a, b) => b.quantity - a.quantity || a.operation.localeCompare(b.operation)),
+              }
+            : {}),
+          ...(first && byWarehouse
+            ? {
+                byWarehouse: [...byWarehouseTotals]
+                  .map(([ref, t]) => {
+                    const w = ref ? warehouseOf(ref) : undefined;
+                    return {
+                      warehouse: ref ? (w?.name ?? ref) : null,
+                      ...(ref ? { warehouseRef: ref } : {}),
+                      ...(w?.type ? { type: w.type } : {}),
+                      positions: t.positions.size,
+                      quantity: qty(t.quantity),
+                    };
+                  })
+                  .sort(
+                    (a, b) =>
+                      b.quantity - a.quantity || String(a.warehouseRef).localeCompare(String(b.warehouseRef)),
+                  ),
+              }
+            : {}),
+          ...(reports
+            ? {
+                retailReports: [...reportScope]
+                  .map((ref) => ({
+                    warehouse: warehouseOf(ref)?.name ?? ref,
+                    warehouseRef: ref,
+                    lastReport: reports.get(ref) ?? null,
+                  }))
+                  .sort(
+                    (a, b) =>
+                      String(a.lastReport).localeCompare(String(b.lastReport)) ||
+                      a.warehouseRef.localeCompare(b.warehouseRef),
+                  ),
+              }
+            : {}),
+          ...(notes.length ? { note: notes.join(" ") } : {}),
+          items,
+          scan: { rowsScanned: raw.length, elapsedMs: Date.now() - t0 },
+        });
+      }),
+  );
+}

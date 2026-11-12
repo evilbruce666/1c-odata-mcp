@@ -55,7 +55,7 @@ export const addMeta = (a: ScanMeta, b: ScanMeta): ScanMeta => ({
 export async function fetchAllForAggregation(
   conn: Connection,
   entitySet: string,
-  opts: { filter?: string | undefined; select?: string[]; orderby?: string },
+  opts: { filter?: string | undefined; select?: string[]; orderby?: string; expand?: string[] },
   period?: string,
   pageSize = ANALYTICS_PAGE,
 ): Promise<{ rows: ODataEntity[]; meta: ScanMeta }> {

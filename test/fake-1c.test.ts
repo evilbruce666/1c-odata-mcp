@@ -46,6 +46,7 @@ const SETTINGS_UPDATE = { mode: "update", singleWriter: true, accounts: { custom
 /** Аргументы, которые не подобрать по имени поля. Новый инструмент обычно сюда не нужен. */
 const OVERRIDES: Record<string, Record<string, unknown>> = {
   "read.analytics.get_stock": { warehouses: [id] },
+  "read.analytics.get_item_sales": { warehouses: [id] },
   "read.document.get_document": { entitySet: "Document_РеализацияТоваровУслуг", ref: id },
   "read.document.search_documents": { entitySet: "Document_РеализацияТоваровУслуг" },
   "read.accounting.get_document_postings": {
@@ -194,6 +195,7 @@ type Tools = Record<
  */
 const TOOL_SCHEMA: Record<string, FakeSchema> = {
   "read.analytics.get_stock": "ut11",
+  "read.analytics.get_item_sales": "ut11",
 };
 
 /** Вызов инструмента так же, как SDK: аргументы проходят схему (значения по умолчанию, проверка типов). */
@@ -335,6 +337,7 @@ const OPTIONAL_OMIT: Record<string, string[]> = {
 const FLAGS_OMIT: Record<string, string[]> = {
   "read.analytics.get_inventory": ["group"],
   "read.analytics.get_stock": ["group"],
+  "read.analytics.get_item_sales": ["group"],
   "read.document.search_documents": ["kind"],
 };
 
