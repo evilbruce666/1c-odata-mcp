@@ -332,6 +332,41 @@ describe("запись на снимке схемы УТ 11 отказывает
   });
 });
 
+describe("запрет записи по регистру из настройки учёта (ревью: жёсткое имя тихо отключило бы запись в Беларуси)", () => {
+  const CUSTOM = "AccountingRegister_ХозрасчетныйСвой";
+  const run = async (published: boolean) => {
+    const fake = fake1C({
+      READ_ONLY: "false",
+      ODATA_WRITABLE: "true",
+      ODATA_ACCOUNTING_CONFIG: JSON.stringify({ register: CUSTOM }),
+    });
+    const available = await fake.conn.available();
+    // Стандартного регистра нет: опубликован только свой — или ни одного.
+    vi.spyOn(fake.conn, "available").mockResolvedValue(
+      new Set([
+        ...[...available].filter((s) => !s.startsWith("AccountingRegister_Хозрасчетный")),
+        ...(published ? [CUSTOM] : []),
+      ]),
+    );
+    const tool = manifest.tools.find((t) => t.name === "write.entity.mark_for_deletion")!;
+    const registered = (createServer(fake.ctx) as unknown as { _registeredTools: Tools })._registeredTools[
+      tool.name
+    ]!;
+    const r = await registered.handler(registered.inputSchema!.parse(argsFor(tool)), {});
+    return (r.content ?? []).map((c) => c.text ?? "").join("");
+  };
+
+  it("свой регистр опубликован — запись не запрещена", async () => {
+    expect(await run(true)).not.toContain("только для Бухгалтерии");
+  });
+
+  it("свой регистр не опубликован — отказ называет его, а не «Хозрасчётный»", async () => {
+    const text = await run(false);
+    expect(text).toContain("только для Бухгалтерии");
+    expect(text).toContain(CUSTOM);
+  });
+});
+
 describe("самопроверка: поддельная 1С отвечает на ошибки так же, как настоящая", () => {
   const expectRejected = async (fake: ReturnType<typeof fake1C>, run: () => Promise<unknown>) => {
     await expect(run()).rejects.toThrow();
