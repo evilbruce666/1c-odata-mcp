@@ -1,7 +1,7 @@
 {
   "name": "1c-odata-mcp",
   "version": "0.14.0",
-  "description": "MCP server for 1C:Enterprise (1С) over OData. Ask your accounting database in natural language — debtors and creditors by due date, unpaid invoices, cash on hand, month-close checks, account cards, reconciliation statements, sales, taxes, cash flow, account turnover, postings — from any MCP client (Claude, Cursor, VS Code, local models…). 80 tools, run with npx, nothing installed inside 1C; read-only by default with opt-in (gated) write.",
+  "description": "MCP server for 1C:Enterprise (1С) over OData — 1C:Accounting 3.0 and 1C:Trade Management 11 (read-only). Ask in natural language: debtors and creditors by due date, unpaid invoices, cash, month-close checks, account cards, reconciliation statements, sales, taxes, postings; stock by warehouse, unit sales with retail, customer and supplier balances. Any MCP client (Claude, Cursor, VS Code, local models…). 80 tools, run with npx, nothing installed inside 1C; read-only by default with opt-in (gated) write.",
   "type": "module",
   "bin": {
     "1c-odata-mcp": "dist/index.js"
@@ -62,6 +62,14 @@
     "accounting",
     "бухгалтерия",
     "erp",
+    "trade",
+    "retail",
+    "inventory",
+    "warehouse",
+    "sales",
+    "управление-торговлей",
+    "торговля",
+    "ут",
     "scloud",
     "1cfresh"
   ],

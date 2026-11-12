@@ -2,7 +2,8 @@ import { bundleManifest } from "../src/mcp/bundle-manifest.js";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { parseConfig } from "../src/config/env.js";
 import { ServerContext } from "../src/context.js";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join, normalize } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createServer } from "../src/mcp/server.js";
 import { PROMPTS, renderPrompt } from "../src/mcp/prompts.js";
@@ -175,5 +176,46 @@ describe("манифест расширения .mcpb", () => {
     for (const tool of bundled.tools ?? []) expect(Object.keys(tool).sort()).toEqual(["description", "name"]);
     // Исходный манифест со схемами нужен тестам этого файла.
     expect(manifest.tools[0]).toHaveProperty("inputSchema");
+  });
+});
+
+/** Якорь заголовка, как его строит GitHub: строчные, без знаков препинания, пробел — дефис. */
+const slug = (heading: string) =>
+  heading
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s_-]/gu, "")
+    .replace(/\s/g, "-");
+const anchorsOf = (md: string) =>
+  new Set(
+    md
+      .replace(/```[\s\S]*?```/g, "")
+      .split("\n")
+      .filter((l) => /^#{1,6} /.test(l))
+      .map((l) => slug(l.replace(/^#+ /, ""))),
+  );
+
+describe("ссылки между документами", () => {
+  const files = [
+    "README.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    ...readdirSync("docs")
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => `docs/${f}`),
+  ];
+  it("каждая ссылка с якорем ведёт на существующий заголовок", () => {
+    const broken: string[] = [];
+    for (const file of files) {
+      const text = read(file);
+      for (const [, target, anchor] of text.matchAll(/\]\(([^)#\s]*)#([^)\s]+)\)/g)) {
+        if (/^https?:/.test(target!)) continue;
+        const path = target ? normalize(join(dirname(file), target)) : file;
+        if (!path.endsWith(".md")) continue;
+        if (!anchorsOf(read(path)).has(decodeURIComponent(anchor!)))
+          broken.push(`${file} → ${path}#${anchor}`);
+      }
+    }
+    expect(broken).toEqual([]);
   });
 });
