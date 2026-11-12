@@ -78,17 +78,24 @@ const REPORTS = [
 const guidsIn = (text: string) =>
   [...text.matchAll(/guid'([0-9a-f-]{36})'/gi)].map((m) => m[1]!.toLowerCase());
 
-function data(seen: FakeQuery[]) {
+function data(seen: FakeQuery[], reports = REPORTS, sales = SALES) {
   return (q: FakeQuery) => {
     seen.push(q);
     const filter = q.params.get("$filter") ?? "";
     if (q.fn === "Turnovers") {
       const condition = q.args["Condition"];
-      if (!condition) return SALES;
+      if (!condition) return sales;
       const allowed = new Set(guidsIn(condition));
-      return SALES.filter((r) => allowed.has(String(r.Склад).toLowerCase()));
+      return sales.filter((r) => allowed.has(String(r.Склад).toLowerCase()));
     }
-    if (q.base === "Document_ОтчетОРозничныхПродажах") return REPORTS;
+    if (q.base === "Document_ОтчетОРозничныхПродажах") {
+      const wh = guidsIn(filter);
+      const ge = /Date ge datetime'([^']+)'/.exec(filter)?.[1] ?? "";
+      const le = /Date le datetime'([^']+)'/.exec(filter)?.[1] ?? "9999";
+      return reports
+        .filter((r) => (!wh.length || wh.includes(r.Склад_Key)) && r.Date >= ge && r.Date <= le)
+        .sort((a, b) => b.Date.localeCompare(a.Date));
+    }
     if (q.base === "Catalog_Склады") {
       const refs = new Set(guidsIn(filter));
       return WAREHOUSES.filter((w) => refs.has(w.Ref_Key.toLowerCase()));
@@ -121,15 +128,27 @@ interface Sales {
   items: SalesItem[];
   byOperation?: { operation: string; quantity: number; sold: number; returns: number }[];
   byWarehouse?: { warehouse: string | null; warehouseRef?: string; quantity: number; positions: number }[];
-  retailReports?: { warehouseRef: string; lastReport: string | null }[];
+  retailReports?: {
+    warehouses: number;
+    completeThrough: string | null;
+    unknown?: number;
+    lagging: { warehouseRef: string; lastReport: string | null }[];
+  };
   warehouseFilter?: { ref: string; type?: string }[];
   note?: string;
   nextOffset?: number;
 }
 
-async function setup(schema: FakeSchema = "ut11") {
+async function setup(
+  schema: FakeSchema = "ut11",
+  {
+    reports = REPORTS,
+    sales = SALES,
+    env = {},
+  }: { reports?: typeof REPORTS; sales?: typeof SALES; env?: Record<string, string> } = {},
+) {
   const seen: FakeQuery[] = [];
-  const fake = fake1C({ READ_ONLY: "true" }, { schema, data: data(seen) });
+  const fake = fake1C({ READ_ONLY: "true", ...env }, { schema, data: data(seen, reports, sales) });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await createServer(fake.ctx).connect(a);
   const client = new Client({ name: "t", version: "1" });
@@ -220,13 +239,65 @@ describe("get_item_sales: итоги совпадают с ручным расч
     expect(r.text).toContain("Аксессуары/01. Apple");
   });
 
-  it("дата последнего отчёта о розничных продажах по складам с розницей; нет отчёта — null", async () => {
+  it("отчёты о рознице: по складам с розничными продажами, в ответе — только отстающие", async () => {
     const { call } = await setup();
     const s = (await call()).structuredContent;
-    expect(s.retailReports).toEqual([
-      expect.objectContaining({ warehouseRef: W(1), lastReport: "2026-10-30" }),
-      expect.objectContaining({ warehouseRef: W(2), lastReport: null }),
-    ]);
+    // Розница — на W(1) и W(2); отчёт есть только у W(1), последний 30.10 при конце периода 31.10.
+    expect(s.retailReports).toEqual({
+      warehouses: 2,
+      completeThrough: null,
+      lagging: [
+        expect.objectContaining({ warehouseRef: W(1), lastReport: "2026-10-30" }),
+        expect.objectContaining({ warehouseRef: W(2), lastReport: null }),
+      ],
+    });
+  });
+
+  it("все склады отчитались по конец периода — completeThrough = to, список отстающих пуст", async () => {
+    const reports = [W(1), W(2)].map((w, i) => ({
+      Ref_Key: uuid("f", 50 + i),
+      Склад_Key: w,
+      Date: "2026-10-31T22:00:00",
+    }));
+    const { call } = await setup("ut11", { reports });
+    expect((await call()).structuredContent.retailReports).toEqual({
+      warehouses: 2,
+      completeThrough: "2026-10-31",
+      lagging: [],
+    });
+  });
+
+  it("отчётов за год больше лимита строк — продажи всё равно считаются (ревью: вызов падал целиком)", async () => {
+    // 400 отчётов за год по W(1), лимит строк 100: читается только последняя неделя и один запрос на отставший склад.
+    const reports = Array.from({ length: 400 }, (_, i) => {
+      const d = new Date(Date.UTC(2026, 0, 1) + i * 19 * 3600_000).toISOString().slice(0, 19);
+      return { Ref_Key: uuid("f", 1000 + i), Склад_Key: W(1), Date: d };
+    });
+    const { call } = await setup("ut11", { reports, env: { ODATA_ANALYTICS_MAX_ROWS: "100" } });
+    const r = await call({ from: "2026-01-01", to: "2026-12-31" });
+    expect(r.isError, r.text).toBeFalsy();
+    expect(r.structuredContent.totalQuantity).toBe(16);
+    const last = reports
+      .map((x) => x.Date.slice(0, 10))
+      .sort()
+      .at(-1);
+    expect(r.structuredContent.retailReports?.lagging.find((l) => l.warehouseRef === W(1))?.lastReport).toBe(
+      last,
+    );
+  });
+
+  it("отчётов даже за неделю больше лимита — продажи с примечанием, а не отказ", async () => {
+    const reports = Array.from({ length: 150 }, (_, i) => ({
+      Ref_Key: uuid("f", 3000 + i),
+      Склад_Key: W(1),
+      Date: "2026-10-30T10:00:00",
+    }));
+    const { call } = await setup("ut11", { reports, env: { ODATA_ANALYTICS_MAX_ROWS: "100" } });
+    const r = await call();
+    expect(r.isError, r.text).toBeFalsy();
+    expect(r.structuredContent.totalQuantity).toBe(16);
+    expect(r.structuredContent.retailReports).toMatchObject({ completeThrough: null, unknown: 2 });
+    expect(r.structuredContent.note).toContain("узнать не удалось");
   });
 
   it("неизвестный склад, перевёрнутый период — отказ", async () => {

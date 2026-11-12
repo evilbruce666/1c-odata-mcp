@@ -130,19 +130,27 @@ const pathIn = (group: ItemGroup, byRef: ReadonlyMap<string, ItemGroup>): string
     .map((g) => g.name.trim())
     .join(PATH_SEPARATOR);
 
+/** Путь для сравнения: пробелы вокруг «/» не важны («Телефоны / Смартфоны» = «Телефоны/Смартфоны»). */
+const pathKey = (text: string, fold: (text: string) => string) =>
+  fold(text)
+    .split(PATH_SEPARATOR)
+    .map((p) => p.trim())
+    .join(PATH_SEPARATOR);
+
 /**
- * Группы, путь которых заканчивается указанными частями: «Смартфоны/Apple» находит Apple внутри любых «Смартфонов».
- * Части сравниваются целиком, сначала буквально, похожие буквы — только если буквально ничего нет.
+ * Группы, полный путь которых равен запросу или заканчивается им: «Смартфоны/Apple» находит Apple внутри любых
+ * «Смартфонов». Сравнивается строка пути, а не части по «/»: в названии группы бывает «/» («Кабели/переходники»), и
+ * путь из текста отказа обязан находить ту же группу. Сначала буквально, похожие буквы — только если буквально нет.
  */
-function byPath(parts: readonly string[], groups: readonly ItemGroup[]): ItemGroup[] {
-  const byRef = new Map(groups.map((g) => [g.ref, g]));
-  const matching = (fold: (text: string) => string) =>
-    groups.filter((g) => {
-      const chain = ancestry(g, byRef);
-      if (chain.length < parts.length) return false;
-      const tail = chain.slice(chain.length - parts.length);
-      return tail.every((link, i) => fold(link.name.trim()) === fold(parts[i]!));
+function byPath(query: string, groups: readonly ItemGroup[]): ItemGroup[] {
+  const index = new Map(groups.map((g) => [g.ref, g]));
+  const matching = (fold: (text: string) => string) => {
+    const q = pathKey(query, fold);
+    return groups.filter((g) => {
+      const full = pathKey(pathIn(g, index), fold);
+      return full === q || full.endsWith(`${PATH_SEPARATOR}${q}`);
     });
+  };
   const literal = matching(strictText);
   return literal.length ? literal : matching(foldText);
 }
@@ -159,11 +167,7 @@ export function resolveItemGroup(query: string, groups: readonly ItemGroup[]): I
   const exact = groups.filter((g) => named(g) === strict);
   // Похожие буквы только для названия целиком: по части «TP» выбрал бы «Стройматериалы», итог был бы чужой группы.
   const lookalike = groups.filter((g) => foldText(g.name.trim()) === foldText(q));
-  const parts = q
-    .split(PATH_SEPARATOR)
-    .map((p) => p.trim())
-    .filter(Boolean);
-  const path = parts.length > 1 ? byPath(parts, groups) : [];
+  const path = q.includes(PATH_SEPARATOR) ? byPath(q, groups) : [];
   const part = groups.filter((g) => named(g).includes(strict));
   const found = byRef
     ? [byRef]

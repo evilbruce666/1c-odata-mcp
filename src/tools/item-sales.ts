@@ -39,14 +39,14 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
   server.registerTool(
     "read.analytics.get_item_sales",
     {
-      title: "Продажи по номенклатуре (УТ, КА, ERP)",
+      title: "Продажи по номенклатуре (УТ 11, КА 2, ERP 2)",
       description:
-        "Продажи товаров в штуках за период по регистру «Выручка и себестоимость продаж» — для УТ 11, КА 2 и ERP 2 " +
-        "(в Бухгалтерии продажи — get_sales_breakdown). quantity — нетто: sold (продано) минус returns (возвраты и сторно " +
+        "Продажи товаров в штуках за период по регистру «Выручка и себестоимость продаж» (УТ 11, КА 2, ERP 2; проверено " +
+        "на УТ 11.5), включая розницу (в Бухгалтерии продажи по документам — get_sales_breakdown). quantity — нетто: sold (продано) минус returns (возвраты и сторно " +
         "продаж, в регистре они с минусом); byOperation — то же по хозяйственным операциям (РеализацияВРозницу, " +
         "РеализацияКлиенту, ВозвратТоваровОтКлиентаПрошлыхПериодов, СторноРеализации…). Розница попадает в регистр только " +
-        "отчётом о розничных продажах после закрытия смены: retailReports — дата последнего такого отчёта по складу в " +
-        "периоде, продажи позже неё ещё не видны. Отбор: warehouses — Ref_Key складов (как в get_stock), group — группа " +
+        "отчётом о розничных продажах после закрытия смены: retailReports.completeThrough — дата, по которую розница " +
+        "видна по всем складам выборки, lagging — склады, чей последний отчёт раньше конца периода (с датой). Отбор: warehouses — Ref_Key складов (как в get_stock), group — группа " +
         "номенклатуры с подгруппами (Ref_Key, название или путь «Телефоны/Смартфоны/Apple»), query — часть названия или " +
         "артикул. groupBy=warehouse — по складам. Сумм выручки ответ не даёт. count — всего позиций; длинный список " +
         "читайте с offset=nextOffset, пока он есть.",
@@ -147,9 +147,20 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
             .filter((r) => r.operation === RETAIL_OPERATION && r.warehouseRef)
             .map((r) => r.warehouseRef!),
         );
+        // Отчёты о рознице — только по складам с розничными продажами: розница в регистре и есть их отчёты.
+        const reports =
+          first && retailWarehouses.size
+            ? await lastRetailReports(conn, from, to, retailWarehouses)
+            : undefined;
+        // В ответ — только отстающие склады: у сети в сотни магазинов полный список вытеснял итоги по складам.
+        const lagging = reports
+          ? [...retailWarehouses].filter(
+              (w) => (reports.last.get(w) ?? "") < to && !reports.unknown.includes(w),
+            )
+          : [];
         const scope = new Set([
           ...(first && byWarehouse ? sel.lines.flatMap((r) => (r.warehouseRef ? [r.warehouseRef] : [])) : []),
-          ...(first ? retailWarehouses : []),
+          ...lagging,
           ...page.flatMap((l) => (l.warehouseRef ? [l.warehouseRef] : [])),
         ]);
         const known = new Map((filter ?? []).map((w) => [w.ref, w] as const));
@@ -158,9 +169,6 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
           [...scope].filter((r) => !known.has(r)),
         );
         const warehouseOf = (ref: string) => known.get(ref) ?? described.get(ref);
-        // Отчёты о рознице — по складам с розничными продажами и по выбранным складам.
-        const reportScope = new Set([...retailWarehouses, ...(filter ?? []).map((w) => w.ref)]);
-        const reports = first && reportScope.size ? await lastRetailReports(conn, from, to) : undefined;
 
         const items = shown.map((l) => {
           const a = attributes.get(l.itemRef);
@@ -197,7 +205,12 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
         if (byWarehouse && first && sel.lines.some((r) => !r.warehouseRef)) {
           notes.push("Часть продаж без склада: они в byWarehouse со значением warehouse: null.");
         }
-        if (first && reportScope.size && !reports) {
+        if (reports?.unknown.length) {
+          notes.push(
+            `По ${reports.unknown.length} складам дату последнего отчёта о рознице узнать не удалось (слишком много складов или отчётов): retailReports.completeThrough не указан.`,
+          );
+        }
+        if (first && retailWarehouses.size && !reports) {
           notes.push(
             "Отчёты о розничных продажах не опубликованы: по какую дату видна розница, ответ сказать не может.",
           );
@@ -281,17 +294,25 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
             : {}),
           ...(reports
             ? {
-                retailReports: [...reportScope]
-                  .map((ref) => ({
-                    warehouse: warehouseOf(ref)?.name ?? ref,
-                    warehouseRef: ref,
-                    lastReport: reports.get(ref) ?? null,
-                  }))
-                  .sort(
-                    (a, b) =>
-                      String(a.lastReport).localeCompare(String(b.lastReport)) ||
-                      a.warehouseRef.localeCompare(b.warehouseRef),
-                  ),
+                retailReports: {
+                  warehouses: retailWarehouses.size,
+                  // Розница полная по всем складам выборки до этой даты включительно; null — у кого-то дата неизвестна.
+                  completeThrough: reports.unknown.length
+                    ? null
+                    : [...retailWarehouses].map((w) => reports.last.get(w) ?? "").sort()[0] || null,
+                  ...(reports.unknown.length ? { unknown: reports.unknown.length } : {}),
+                  lagging: lagging
+                    .map((ref) => ({
+                      warehouse: warehouseOf(ref)?.name ?? ref,
+                      warehouseRef: ref,
+                      lastReport: reports.last.get(ref) ?? null,
+                    }))
+                    .sort(
+                      (a, b) =>
+                        String(a.lastReport).localeCompare(String(b.lastReport)) ||
+                        a.warehouseRef.localeCompare(b.warehouseRef),
+                    ),
+                },
               }
             : {}),
           ...(notes.length ? { note: notes.join(" ") } : {}),

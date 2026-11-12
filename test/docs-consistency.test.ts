@@ -1,4 +1,7 @@
 import { bundleManifest } from "../src/mcp/bundle-manifest.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { parseConfig } from "../src/config/env.js";
+import { ServerContext } from "../src/context.js";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createServer } from "../src/mcp/server.js";
@@ -45,6 +48,34 @@ describe("документация совпадает с кодом", () => {
 
   it("manifest.json: тот же состав инструментов, что регистрирует сервер", () => {
     expect(manifest.tools.map((t) => t.name).sort()).toEqual(names);
+  });
+
+  it("manifest.json: инструменты целиком как в tools/list — описания и схемы, а не только имена", async () => {
+    // Сверка только имён пропустила переименование поля ответа: в бандле осталась схема со старым именем.
+    const ctx = new ServerContext(
+      parseConfig({
+        ODATA_BASE_URL: "https://example.com/odata/standard.odata/",
+        ODATA_USERNAME: "u",
+        ODATA_PASSWORD: "p",
+        READ_ONLY: "true",
+      }),
+    );
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await createServer(ctx).connect(a);
+    const client = new Client({ name: "t", version: "1" });
+    await client.connect(b);
+    const { tools } = await client.listTools();
+    const live = tools.map((t) => ({
+      name: t.name,
+      ...(t.title ? { title: t.title } : {}),
+      description: t.description,
+      inputSchema: t.inputSchema,
+      ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
+      ...(t.annotations ? { annotations: t.annotations } : {}),
+    }));
+    expect(JSON.parse(JSON.stringify(live)), "manifest.json устарел: npm run manifest").toEqual(
+      manifest.tools,
+    );
   });
 
   it("manifest.json: operationId в схемах там же, где в коде (иначе манифест не пересобран)", () => {

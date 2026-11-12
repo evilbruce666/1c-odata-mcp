@@ -10,8 +10,8 @@ import { cmp, odataGuid, or } from "./query.js";
 import { refOf } from "./settlements-aging.js";
 
 /**
- * Остатки по складам в конфигурациях с регистром накопления «Товары на складах» (УТ 11, КА 2, ERP 2). Там нет
- * Хозрасчётного, а в регистре только количество: сумм нет, и инструмент их не выводит.
+ * Остатки по складам по регистру накопления «Товары на складах» (УТ 11, КА 2, ERP 2; проверено на УТ 11.5). В регистре
+ * только количество: сумм нет, и инструмент их не выводит. В УТ нет Хозрасчётного, в КА и ERP он есть.
  */
 
 export const STOCK_REGISTER = "AccumulationRegister_ТоварыНаСкладах";
@@ -32,7 +32,7 @@ export async function stockInsteadOfAccounts(conn: Connection): Promise<void> {
   throw new NotPublishedError(
     [{ label: "Регистр бухгалтерии «Хозрасчётный»", candidates: registers }],
     "В этой базе нет регистра бухгалтерии «Хозрасчётный», но есть регистр «Товары на складах»: похоже, это " +
-      "УТ, КА или ERP, а не Бухгалтерия. Остатки по складам (количество, без сумм) — read.analytics.get_stock.",
+      "Управление торговлей, а не Бухгалтерия. Остатки по складам (количество, без сумм) — read.analytics.get_stock.",
   );
 }
 
@@ -132,7 +132,10 @@ export const MAX_WAREHOUSES = 100;
  * Склады отбора: каждый должен существовать и не быть группой. Иначе отбор дал бы тихий ноль, а ответ не отличался
  * бы от «товара нет».
  */
-export async function readWarehouses(conn: Connection, refs: readonly string[]): Promise<Warehouse[]> {
+export async function readWarehouses(conn: Connection, given: readonly string[]): Promise<Warehouse[]> {
+  // Ref_Key в фигурных скобках и разным регистром — тот же склад: без нормализации «{…}» не находился, а повтор
+  // попадал в ответ дважды.
+  const refs = [...new Set(given.map((r) => r.trim().replace(/[{}]/g, "").toLowerCase()))];
   const set = await requireEntity(conn, CATALOGS.warehouses, "Справочник «Склады»");
   const props = new Set((await conn.getMetadata()).entities.get(set)?.properties.map((p) => p.name));
   const select = ["Ref_Key", "Description", ...["ТипСклада", "IsFolder"].filter((f) => props.has(f))];

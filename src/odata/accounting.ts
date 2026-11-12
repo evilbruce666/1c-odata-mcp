@@ -221,8 +221,9 @@ export async function balanceByAccounts(
     ) || undefined;
   // Параметр Period — НЕ через $filter, а path-параметром у виртуальной таблицы:
   // .../AccountingRegister_Хозрасчетный/Balance(Period=datetime'<следующий день>T00:00:00').
-  // Сальдо берётся на НАЧАЛО момента Period: при 23:59:59 терялись бы движения последней
-  // секунды дня, а закрытие месяца 1С проводит ровно в 23:59:59 (как в balanceAndTurnoversPath).
+  // Сальдо берётся на НАЧАЛО момента Period, движения в сам момент не входят (проверено на базе:
+  // остаток на D 00:00:00 ещё без документа, датированного D 00:00:00). При 23:59:59 терялись бы
+  // движения последней секунды дня, а закрытие месяца 1С проводит ровно в 23:59:59.
   // Без параметра виртуальная таблица возвращает текущее сальдо.
   const balancePath = asOf ? `${reg}/Balance(Period=datetime'${nextDay(asOf)}T00:00:00')` : `${reg}/Balance`;
   // Через безопасную выборку: сальдо берём ПОЛНОСТЬЮ (иначе дебиторка/остатки
@@ -317,16 +318,21 @@ export function nextDay(ymd: string): string {
 /**
  * Путь к виртуальной таблице «Остатки и обороты» за [from,to] (YYYY-MM-DD, оба включительно).
  * Параметры — path-параметрами (как Period у Balance), а не через $filter.
- * EndPeriod — начало СЛЕДУЮЩЕГО дня после `to` (а не to 23:59:59), чтобы не терять
- * движения последней секунды дня:
- *   AccountingRegister_Хозрасчетный/BalanceAndTurnovers(StartPeriod=datetime'2026-08-01T00:00:00',EndPeriod=datetime'2026-09-01T00:00:00')
+ * EndPeriod — to 23:59:59. В отличие от Period у Balance, EndPeriod в 1С ВКЛЮЧАЕТ свой момент
+ * (проверено на базах УТ и БП): при начале следующего дня документ, датированный ровно 00:00:00,
+ * входил в этот период и ещё раз в следующий — помесячная ОСВ ooo за март–апрель 2024 давала
+ * 48,8 млн Дт-оборотов вместо 41,5. Секунда — шаг времени 1С, движения в 23:59:59 не теряются:
+ *   AccountingRegister_Хозрасчетный/BalanceAndTurnovers(StartPeriod=datetime'2026-08-01T00:00:00',EndPeriod=datetime'2026-08-31T23:59:59')
  */
+/** Дата как есть, если она существует: «2025-02-30» — отказ, как у nextDay. */
+const checkedDay = (ymd: string): string => (nextDay(ymd), ymd);
+
 export function balanceAndTurnoversPath(reg: string, from: string, to: string): string {
   const vt = BALANCE_AND_TURNOVERS;
   return (
     `${reg}/${vt.name}(` +
     `${vt.startParam}=datetime'${from}T00:00:00',` +
-    `${vt.endParam}=datetime'${nextDay(to)}T00:00:00')`
+    `${vt.endParam}=datetime'${checkedDay(to)}T23:59:59')`
   );
 }
 

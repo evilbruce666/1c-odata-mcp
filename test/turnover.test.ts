@@ -53,16 +53,52 @@ const row = (acc: string, v: Partial<Record<keyof typeof f, number | string>>): 
 });
 
 describe("balanceAndTurnoversPath", () => {
-  it("period — path-параметрами; EndPeriod = начало дня, следующего за to", () => {
+  it("period — path-параметрами; EndPeriod = сам день to в 23:59:59 (1С включает границу)", () => {
     expect(balanceAndTurnoversPath(REG, "2026-08-01", "2026-08-31")).toBe(
-      `${REG}/BalanceAndTurnovers(StartPeriod=datetime'2026-08-01T00:00:00',EndPeriod=datetime'2026-09-01T00:00:00')`,
+      `${REG}/BalanceAndTurnovers(StartPeriod=datetime'2026-08-01T00:00:00',EndPeriod=datetime'2026-08-31T23:59:59')`,
     );
   });
 
-  it("конец года переходит в 1 января следующего", () => {
-    expect(balanceAndTurnoversPath(REG, "2025-01-01", "2025-12-31")).toContain(
-      "EndPeriod=datetime'2026-01-01T00:00:00'",
-    );
+  it("несуществующая дата конца — отказ", () => {
+    expect(() => balanceAndTurnoversPath(REG, "2025-02-01", "2025-02-30")).toThrow(/Несуществующая дата/);
+  });
+
+  /**
+   * Прежний тест закреплял ту же ошибку, что и код: проверял строку запроса по допущению «EndPeriod не включает
+   * границу». Здесь подделка считает обороты, как 1С: движение входит, если StartPeriod ≤ Period ≤ EndPeriod.
+   */
+  it("соседние месяцы складываются в общий период: документ ровно в 00:00:00 не задваивается", async () => {
+    const acc = guid(62);
+    const records = [
+      { Period: "2026-03-15T10:00:00", dr: 100 },
+      { Period: "2026-04-01T00:00:00", dr: 50 }, // ровно на границе месяцев
+      { Period: "2026-04-10T12:00:00", dr: 30 },
+    ];
+    const conn = {
+      client: {
+        async getCollection(path: string) {
+          const dec = decodeURIComponent(path);
+          const start = /StartPeriod=datetime'([^']+)'/.exec(dec)![1]!;
+          const end = /EndPeriod=datetime'([^']+)'/.exec(dec)![1]!;
+          const dr = records
+            .filter((r) => r.Period >= start && r.Period <= end)
+            .reduce((t, r) => t + r.dr, 0);
+          return { value: [row(acc, { turnoverDr: dr })] };
+        },
+      },
+      behavior: { analyticsMaxRows: 1000, pageSize: 100, maxRows: 1000 },
+      available: async () => new Set([REG]),
+    } as unknown as Connection;
+    const dr = async (from: string, to: string) =>
+      (await turnoversByAccounts(conn, [acc], from, to)).rows.reduce(
+        (t, r) => t + Number(r[f.turnoverDr]),
+        0,
+      );
+    const march = await dr("2026-03-01", "2026-03-31");
+    const april = await dr("2026-04-01", "2026-04-30");
+    expect(march).toBe(100);
+    expect(april).toBe(80);
+    expect(march + april).toBe(await dr("2026-03-01", "2026-04-30"));
   });
 });
 
@@ -347,7 +383,7 @@ describe("read.accounting.get_account_turnover", () => {
     expect((s["scan"] as { rowsScanned: number }).rowsScanned).toBe(2);
     const regCall = decodeURIComponent(paths.find((p) => p.startsWith(REG))!);
     expect(regCall).toContain(
-      "/BalanceAndTurnovers(StartPeriod=datetime'2025-01-01T00:00:00',EndPeriod=datetime'2025-04-01T00:00:00')",
+      "/BalanceAndTurnovers(StartPeriod=datetime'2025-01-01T00:00:00',EndPeriod=datetime'2025-03-31T23:59:59')",
     );
     expect(regCall).toContain(`Организация_Key eq guid'${ORG}'`);
   });

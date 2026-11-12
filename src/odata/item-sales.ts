@@ -2,15 +2,15 @@ import type { Connection } from "../context.js";
 import { resolveEntity } from "../config/mapping.js";
 import { InputError } from "../errors.js";
 import type { ODataEntity } from "../types/odata.js";
-import { fetchAllForAggregation } from "./aggregate.js";
+import { AggregateOverflowError, fetchAllForAggregation } from "./aggregate.js";
 import { nextDay, num } from "./accounting.js";
 import { requireEntity } from "./publication.js";
-import { and, cmp, odataGuid, or } from "./query.js";
+import { and, buildQuery, cmp, odataGuid, or } from "./query.js";
 import { entitySetOfType, refOf } from "./settlements-aging.js";
 import { WAREHOUSE_BATCH, qty } from "./stock.js";
 
 /**
- * Продажи по номенклатуре в УТ 11, КА 2 и ERP 2: регистр «Выручка и себестоимость продаж». Номенклатура в нём — через
+ * Продажи по номенклатуре по регистру «Выручка и себестоимость продаж» (УТ 11, КА 2, ERP 2; проверено на УТ 11.5). Номенклатура в нём — через
  * ключ аналитики, и $expand даёт её тем же запросом: выгружать справочник ключей (сотни тысяч строк) не нужно.
  * Возвраты и сторно приходят отрицательным количеством, поэтому нетто — простая сумма.
  */
@@ -150,42 +150,90 @@ export function aggregateSales(rows: readonly SalesRow[], byWarehouse: boolean):
     .filter((l) => l.sold !== 0 || l.returns !== 0);
 }
 
-/** Страница чтения отчётов о розничных продажах: две колонки, за год их десятки тысяч. */
+/** Окно поиска последних отчётов назад от конца периода: за неделю отчётов немного даже у большой сети. */
+const REPORTS_WINDOW_DAYS = 7;
+/** Страница чтения окна: две колонки, 5000 строк — около 0,5 МБ. */
 const REPORTS_PAGE = 5000;
+/** Не больше стольких отдельных запросов для складов, у которых в последней неделе отчёта нет. */
+export const LAGGING_LOOKUPS = 20;
+
+/** YYYY-MM-DD минус n дней, без часовых поясов. */
+function minusDays(ymd: string, n: number): string {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - n);
+  return d.toISOString().slice(0, 10);
+}
+
+export interface RetailReports {
+  /** Последний проведённый отчёт в периоде по складу. */
+  last: Map<string, string>;
+  /** Склады, по которым дату узнать не успели (превышен LAGGING_LOOKUPS или лимит строк). */
+  unknown: string[];
+}
 
 /**
- * Дата последнего проведённого отчёта о розничных продажах по каждому складу в периоде. Розница попадает в регистр
- * продаж только отчётом о продажах после закрытия смены: продажи позже этой даты по складу ещё не видны. undefined —
- * отчёты не опубликованы или в них нет склада и даты.
+ * Дата последнего проведённого отчёта о розничных продажах в периоде по складам из scope. Розница попадает в регистр
+ * продаж только отчётом после закрытия смены: продажи позже этой даты по складу ещё не видны. Сначала читается
+ * последняя неделя периода всеми складами сразу, затем по одному запросу на отставший склад (не больше
+ * LAGGING_LOOKUPS): весь период за год у большой сети — сотни тысяч отчётов, и чтение целиком упиралось в лимит
+ * строк, роняя весь вызов. undefined — отчёты не опубликованы или в них нет склада и даты.
  */
 export async function lastRetailReports(
   conn: Connection,
   from: string,
   to: string,
-): Promise<Map<string, string> | undefined> {
+  scope: ReadonlySet<string>,
+): Promise<RetailReports | undefined> {
   const set = resolveEntity(RETAIL_REPORTS, await conn.available());
   if (!set) return undefined;
   const props = new Set((await conn.getMetadata()).entities.get(set)?.properties.map((p) => p.name));
   if (!props.has("Склад_Key") || !props.has("Date") || !props.has("Posted")) return undefined;
-  const { rows } = await fetchAllForAggregation(
+  const last = new Map<string, string>();
+  const note = (r: ODataEntity) => {
+    const wh = refOf(r["Склад_Key"]);
+    const date = typeof r["Date"] === "string" ? r["Date"].slice(0, 10) : undefined;
+    if (wh && date && scope.has(wh) && (last.get(wh) ?? "") < date) last.set(wh, date);
+  };
+  const windowStart = [from, minusDays(to, REPORTS_WINDOW_DAYS - 1)].sort()[1]!;
+  // Сводка не должна ронять сами продажи: переполнение — даты неизвестны, а не отказ всего вызова.
+  const window = await fetchAllForAggregation(
     conn,
     set,
     {
       filter: and(
         cmp("Posted", "eq", "true"),
-        cmp("Date", "ge", `datetime'${from}T00:00:00'`),
+        cmp("Date", "ge", `datetime'${windowStart}T00:00:00'`),
         cmp("Date", "le", `datetime'${to}T23:59:59'`),
       ),
       select: ["Ref_Key", "Склад_Key", "Date"],
     },
-    `${from}…${to}`,
+    `${windowStart}…${to}`,
     REPORTS_PAGE,
-  );
-  const last = new Map<string, string>();
-  for (const r of rows) {
-    const wh = refOf(r["Склад_Key"]);
-    const date = typeof r["Date"] === "string" ? r["Date"].slice(0, 10) : undefined;
-    if (wh && date && (last.get(wh) ?? "") < date) last.set(wh, date);
+  ).catch((e: unknown) => {
+    if (e instanceof AggregateOverflowError) return undefined;
+    throw e;
+  });
+  if (!window) return { last, unknown: [...scope].sort() };
+  window.rows.forEach(note);
+  const lagging = [...scope].filter((w) => !last.has(w)).sort();
+  if (windowStart > from) {
+    for (const wh of lagging.slice(0, LAGGING_LOOKUPS)) {
+      const page = await conn.client.getCollection(
+        `${set}${buildQuery({
+          filter: and(
+            cmp("Posted", "eq", "true"),
+            cmp("Склад_Key", "eq", odataGuid(wh)),
+            cmp("Date", "ge", `datetime'${from}T00:00:00'`),
+            cmp("Date", "le", `datetime'${to}T23:59:59'`),
+          ),
+          select: ["Ref_Key", "Склад_Key", "Date"],
+          orderby: "Date desc",
+          top: 1,
+        })}`,
+      );
+      (page.value ?? []).forEach(note);
+    }
   }
-  return last;
+  const unknown = windowStart > from ? lagging.slice(LAGGING_LOOKUPS) : [];
+  return { last, unknown };
 }

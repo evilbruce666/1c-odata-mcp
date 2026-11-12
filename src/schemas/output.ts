@@ -517,11 +517,17 @@ export const getItemSalesResultSchema = z
       )
       .optional(),
     retailReports: z
-      .array(
-        z
-          .object({ warehouse: z.string(), warehouseRef: z.string(), lastReport: z.string().nullable() })
-          .passthrough(),
-      )
+      .object({
+        warehouses: z.number(),
+        completeThrough: z.string().nullable(),
+        unknown: z.number().optional(),
+        lagging: z.array(
+          z
+            .object({ warehouse: z.string(), warehouseRef: z.string(), lastReport: z.string().nullable() })
+            .passthrough(),
+        ),
+      })
+      .passthrough()
       .optional(),
     note: z.string().optional(),
     items: z.array(

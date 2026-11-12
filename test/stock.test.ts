@@ -254,10 +254,11 @@ describe("get_stock: итоги совпадают с ручным расчёт�
     }
   });
 
-  it("повтор склада в списке не удваивает остаток", async () => {
+  it("повтор склада и Ref_Key в фигурных скобках — тот же склад, в warehouseFilter один раз", async () => {
     const { call } = await setup();
-    const s = (await call({ warehouses: [W(4), W(4).toUpperCase()] })).structuredContent;
+    const s = (await call({ warehouses: [W(4), W(4).toUpperCase(), `{${W(4)}}`] })).structuredContent;
     expect(s.totalInStock).toBe(12);
+    expect(s.warehouseFilter).toHaveLength(1);
   });
 
   it("неизвестный склад и группа складов — отказ, а не тихий ноль", async () => {
@@ -305,6 +306,27 @@ describe("get_stock: группа номенклатуры", () => {
     const s = (await call({ group: G(3), warehouses: [W(1)] })).structuredContent;
     // На основном магазина из G(3) с подгруппами: I(1) 5 + I(2) 8.
     expect(s.totalInStock).toBe(13);
+  });
+
+  it("otherSimilar.count — позиции, а не строки складов", async () => {
+    // «Смартфон» латинской «C» в одной позиции на двух складах; запрос кириллицей находит буквальные совпадения.
+    const lookalike = {
+      Ref_Key: I(60),
+      Description: "Cмартфон двойник",
+      Артикул: "X",
+      Parent_Key: G(3),
+      IsFolder: false,
+    };
+    ITEMS.push(lookalike);
+    try {
+      const { call } = await setup({ balance: [...BALANCE, bal(I(60), W(1), 1), bal(I(60), W(4), 1)] });
+      const s = (await call({ query: "смартфон", groupBy: "warehouse" })).structuredContent as Stock & {
+        otherSimilar?: { count: number; inStock: number };
+      };
+      expect(s.otherSimilar).toMatchObject({ count: 1, inStock: 2 });
+    } finally {
+      ITEMS.pop();
+    }
   });
 
   it("query по артикулу внутри группы", async () => {
@@ -420,6 +442,24 @@ describe("resolveItemGroup: пути", () => {
     expect(resolveItemGroup("телефоны / смартфоны / 01. apple", groups).ref).toBe(G(3));
     expect(resolveItemGroup("Аксессуары/01. Apple", groups).ref).toBe(G(5));
     expect(() => resolveItemGroup("Смарт/01. Apple", groups)).toThrow(/не найдена/);
+  });
+
+  it("путь из текста отказа находит группу, даже если в названии родителя есть «/» (ревью)", () => {
+    const withSlash = [
+      ...groups,
+      { ref: G(70), name: "Кабели/переходники" },
+      { ref: G(71), name: "USB", parent: G(70) },
+      { ref: G(72), name: "USB", parent: G(4) },
+    ];
+    let message = "";
+    try {
+      resolveItemGroup("USB", withSlash);
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toContain("Кабели/переходники/USB");
+    expect(resolveItemGroup("Кабели/переходники/USB", withSlash).ref).toBe(G(71));
+    expect(resolveItemGroup("Кабели / переходники / USB", withSlash).ref).toBe(G(71));
   });
 
   it("название с «/» целиком важнее пути", () => {

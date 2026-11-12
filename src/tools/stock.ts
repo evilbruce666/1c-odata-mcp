@@ -30,14 +30,16 @@ export function registerStockTools(server: McpServer, ctx: ServerContext): void 
   server.registerTool(
     "read.analytics.get_stock",
     {
-      title: "Остатки на складах (УТ, КА, ERP)",
+      title: "Остатки на складах (УТ 11, КА 2, ERP 2)",
       description:
-        "Остатки товаров по регистру «Товары на складах» — для УТ 11, КА 2 и ERP 2, где нет регистра Хозрасчётный " +
-        "(в Бухгалтерии остатки с суммами — get_inventory). Только количество: inStock — в наличии, toShip — к отгрузке " +
+        "Остатки товаров по регистру «Товары на складах» (оперативный учёт по складам: УТ 11, КА 2, ERP 2; проверено на " +
+        "УТ 11.5). В УТ нет Хозрасчётного, и остатки — только здесь; в Бухгалтерии, КА и ERP остатки по счетам с суммами — " +
+        "get_inventory. Только количество: inStock — в наличии, toShip — к отгрузке " +
         "(зарезервировано под отгрузку, ещё на складе); сумм в этом регистре нет. Назначение, помещение, серия и партия " +
         "сворачиваются. По умолчанию — текущие остатки, asOf=YYYY-MM-DD — на конец даты. warehouses — Ref_Key складов " +
-        "(ответ перечисляет их с типом в warehouseFilter); Ref_Key и типы всех складов с остатком — в byWarehouse при " +
-        "groupBy=warehouse. group — группа номенклатуры с подгруппами: Ref_Key, название или путь «Телефоны/Смартфоны/Apple» " +
+        "(ответ перечисляет их с типом в warehouseFilter); Ref_Key и типы складов с остатком — в byWarehouse при " +
+        "groupBy=warehouse на первой странице (у сети в сотни складов он может не поместиться — см. truncatedLists, сузьте " +
+        "warehouses). group — группа номенклатуры с подгруппами: Ref_Key, название или путь «Телефоны/Смартфоны/Apple» " +
         "(несколько совпадений — отказ со списком путей). query — часть названия или артикул, как в get_inventory. " +
         "Характеристика — characteristicRef, название — если справочник характеристик опубликован; пустая характеристика " +
         "обычна (товар без характеристик). Товары в пути между складами в остаток не входят. count — всего позиций; " +
@@ -190,7 +192,8 @@ export function registerStockTools(server: McpServer, ctx: ServerContext): void 
           ...(otherSimilar.length
             ? {
                 otherSimilar: {
-                  count: otherSimilar.length,
+                  // Позиции, а не строки: при groupBy=warehouse одна позиция на трёх складах — одна.
+                  count: new Set(otherSimilar.map((l) => l.itemRef)).size,
                   inStock: sum(otherSimilar, "inStock"),
                   examples: [...new Set(otherSimilar.map((l) => attributes.get(l.itemRef ?? "")?.name ?? ""))]
                     .filter(Boolean)
