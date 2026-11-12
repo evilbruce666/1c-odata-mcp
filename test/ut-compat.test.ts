@@ -193,9 +193,22 @@ describe("деньги в УТ: ХозяйственнаяОперация вм�
 });
 
 describe("инструменты бухучёта в УТ — отказ без совета публиковать Хозрасчётный", () => {
-  it.each(["read.analytics.get_debtors", "read.analytics.get_cash_balance"])("%s", async (name) => {
+  it.each([
+    ["read.analytics.get_debtors", {}],
+    ["read.accounting.get_account_card", { account: "62", from: "2026-10-01", to: "2026-10-31" }],
+    ["read.analytics.get_unpaid_invoices", {}],
+    [
+      "read.accounting.get_contract_settlement_settings",
+      {
+        organizationRef: uuid("e", 1),
+        counterpartyRef: CP(1),
+        contractRef: uuid("d", 1),
+        settlementKind: "РасчетыВВалютеРегламентированногоУчета",
+      },
+    ],
+  ] as const)("%s", async (name, args) => {
     const { call } = await setup(() => undefined);
-    const r = await call(name, {});
+    const r = await call(name, args);
     expect(r.isError).toBe(true);
     expect(r._meta?.["odata-1c/errorKind"]).toBe("not_published");
     expect(r.text).toContain("Управление торговлей");

@@ -1,4 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
+import { tradeWithoutAccounting } from "../odata/configuration.js";
+import { tradeCashBalance, tradeCashPublished } from "../odata/trade-cash.js";
 import { z } from "zod";
 import { callPageStart } from "../odata/call-context.js";
 import type { Connection, ServerContext } from "../context.js";
@@ -15,7 +17,7 @@ import {
   type Account,
 } from "../odata/accounting.js";
 import { collectDocuments, fetchAllForAggregation } from "../odata/aggregate.js";
-import { requireEntity } from "../odata/publication.js";
+import { requireEntity, refuseOnTrade } from "../odata/publication.js";
 import { resolveOrganization } from "../odata/orgs.js";
 import {
   addDays,
@@ -459,6 +461,12 @@ async function unpaidInvoices(
   },
 ) {
   const t0 = Date.now();
+  // В УТ счёт клиенту есть (СчетНаОплатуКлиенту), а регистра оплаты счетов Бухгалтерии нет: оплату не с чем сверить.
+  await refuseOnTrade(
+    conn,
+    "Регистр накопления «Оплата счетов»",
+    "Неоплаченные счета считаются по счетам на оплату и регистру оплаты счетов Бухгалтерии.",
+  );
   const org = await orgKeyOf(conn, o.organization);
   const invSet = await requireEntity(conn, DOCUMENTS.customerInvoice, "Документ «Счёт на оплату покупателю»");
   const paySet = await requireEntity(conn, INVOICE_PAYMENTS, "Регистр накопления «Оплата счетов»");
@@ -806,7 +814,9 @@ export function registerDebtTools(server: McpServer, ctx: ServerContext): void {
         "Сколько денег сейчас: остатки счетов 50 (касса), 51 (расчётные счета), 52 (валютные), 55 " +
         "(спецсчета, депозиты), 57 (переводы в пути, эквайринг) из регистра Хозрасчетный — по каждому " +
         "банковскому счёту и кассе, итоги available (50+51+52), special (55), inTransit (57). Для валютных " +
-        "счетов — сумма в валюте. asOf=YYYY-MM-DD — остатки на конец даты; без него — текущие.",
+        "счетов — сумма в валюте. asOf=YYYY-MM-DD — остатки на конец даты; без него — текущие. В Управлении торговлей " +
+        "(нет Хозрасчётного) — остатки регистров денежных средств: расчётные счета, кассы, кассы ККМ (available) и " +
+        "деньги в пути (inTransit), source=registers.",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
@@ -815,8 +825,16 @@ export function registerDebtTools(server: McpServer, ctx: ServerContext): void {
       outputSchema: cashBalanceResultSchema,
     },
     ({ database, organization, asOf }) =>
-      guard("read.analytics.get_cash_balance", async () =>
-        ok(await cashBalance(ctx.db(database), { organization, asOf })),
-      ),
+      guard("read.analytics.get_cash_balance", async () => {
+        const conn = ctx.db(database);
+        // Тот же факт в Управлении торговлей хранится в регистрах денежных средств, а не на счетах 50–57.
+        if ((await tradeWithoutAccounting(conn)) && (await tradeCashPublished(conn))) {
+          const org = await orgKeyOf(conn, organization);
+          return ok(
+            await tradeCashBalance(conn, { organizationRef: org.key, organizationName: org.name, asOf }),
+          );
+        }
+        return ok(await cashBalance(conn, { organization, asOf }));
+      }),
   );
 }

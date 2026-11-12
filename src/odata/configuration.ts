@@ -24,7 +24,9 @@ export async function tradeWithoutAccounting(conn: Connection): Promise<boolean>
 /** Что в такой базе есть вместо бухучёта: подсказка для отказов, ведёт к инструментам, которые там работают. */
 export const TRADE_TOOLS_HINT =
   "Для Управления торговлей: остатки на складах — read.analytics.get_warehouse_stock, продажи в штуках и выручка " +
-  "по регистру продаж (с розницей) — read.analytics.get_sales_register, документы — read.document.search_documents.";
+  "по регистру продаж (с розницей) — read.analytics.get_sales_register, долги клиентов и поставщикам — " +
+  "read.analytics.get_partner_settlements, деньги на счетах и в кассах — read.analytics.get_cash_balance, документы — " +
+  "read.document.search_documents.";
 
 /** Текст отказа инструмента бухучёта в торговой базе. */
 export const tradeRefusal = (what: string): string =>

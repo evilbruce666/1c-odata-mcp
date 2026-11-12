@@ -16,6 +16,7 @@ import { registerDocumentTools } from "../tools/documents.js";
 import { registerRegisterTools } from "../tools/registers.js";
 import { registerStockTools } from "../tools/stock.js";
 import { registerItemSalesTools } from "../tools/item-sales.js";
+import { registerPartnerSettlementTools } from "../tools/partner-settlements.js";
 import { tradeWithoutAccounting } from "../odata/configuration.js";
 import { registerDebtTools } from "../tools/debts.js";
 import { registerMonthCloseTools } from "../tools/month-close.js";
@@ -152,6 +153,7 @@ const PAGE_LISTS: Record<string, PageList> = {
   "read.analytics.get_inventory": { list: "items", countIsTotal: true },
   "read.analytics.get_warehouse_stock": { list: "items", countIsTotal: true },
   "read.analytics.get_sales_register": { list: "items", countIsTotal: true },
+  "read.analytics.get_partner_settlements": { list: "partners", countIsTotal: true },
   "read.analytics.get_debtors": { list: "debtors", countIsTotal: true },
   "read.analytics.get_creditors": { list: "creditors", countIsTotal: true },
   "read.analytics.get_unpaid_invoices": { list: "invoices", countIsTotal: true },
@@ -618,6 +620,7 @@ export function createServer(ctx: ServerContext): McpServer {
   registerRegisterTools(server, ctx);
   registerStockTools(server, ctx);
   registerItemSalesTools(server, ctx);
+  registerPartnerSettlementTools(server, ctx);
   registerDebtTools(server, ctx);
   registerMonthCloseTools(server, ctx);
   registerCardTools(server, ctx);

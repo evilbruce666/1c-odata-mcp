@@ -479,6 +479,44 @@ const warehouseFilterSchema = z
   .array(z.object({ ref: z.string(), name: z.string(), type: z.string().optional() }).passthrough())
   .optional();
 
+export const partnerSettlementsResultSchema = z
+  .object({
+    database: z.string(),
+    side: z.enum(["clients", "suppliers"]),
+    on: z.string(),
+    asOf: z.string().optional(),
+    organization: z.string().optional(),
+    debt: z.number(),
+    prepayment: z.number(),
+    net: z.number(),
+    overdue: z.number(),
+    aging: z.object({
+      notDue: z.number(),
+      days1to30: z.number(),
+      days31to90: z.number(),
+      days91to180: z.number(),
+      over180: z.number(),
+      noDueDate: z.number(),
+    }),
+    count: z.number(),
+    note: z.string().optional(),
+    partners: z.array(
+      z
+        .object({
+          partner: z.string().nullable(),
+          partnerRef: z.string().optional(),
+          debt: z.number(),
+          prepayment: z.number(),
+          net: z.number(),
+          overdue: z.number(),
+          maxOverdueDays: z.number().optional(),
+        })
+        .passthrough(),
+    ),
+    scan: scanSchema,
+  })
+  .passthrough();
+
 export const getItemSalesResultSchema = z
   .object({
     database: z.string(),

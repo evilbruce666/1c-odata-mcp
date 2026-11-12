@@ -86,15 +86,22 @@ async function main(): Promise<number> {
           isError?: boolean;
           structuredContent?: Json;
           content?: Array<{ text?: string }>;
+          _meta?: Record<string, unknown>;
         };
-        return { err: !!r.isError, sc: r.structuredContent ?? {}, text: r.content?.[0]?.text ?? "" };
+        return {
+          err: !!r.isError,
+          sc: r.structuredContent ?? {},
+          text: r.content?.[0]?.text ?? "",
+          kind: String(r._meta?.["odata-1c/errorKind"] ?? ""),
+        };
       } catch (e) {
-        return { err: true, sc: {} as Json, text: e instanceof Error ? e.message : String(e) };
+        return { err: true, sc: {} as Json, text: e instanceof Error ? e.message : String(e), kind: "" };
       }
     }
     const tool = tools[name]!;
     const parsed = tool.inputSchema ? tool.inputSchema.safeParse(a) : { success: true, data: a };
-    if (!parsed.success) return { err: true, sc: {} as Json, text: "входные данные не прошли схему" };
+    if (!parsed.success)
+      return { err: true, sc: {} as Json, text: "входные данные не прошли схему", kind: "" };
     const r = await tool.handler(parsed.data!, {});
     // Настоящий MCP-клиент отвергает ответ, не прошедший outputSchema; прямой вызов обработчика — нет.
     if (!r.isError && tool.outputSchema) {
@@ -104,10 +111,23 @@ async function main(): Promise<number> {
           err: true,
           sc: {},
           text: `ответ не проходит outputSchema: ${JSON.stringify(out.error?.issues).slice(0, 300)}`,
+          kind: "",
         };
     }
-    return { err: !!r.isError, sc: r.structuredContent ?? {}, text: r.content?.[0]?.text ?? "" };
+    const meta = (r as { _meta?: Record<string, unknown> })._meta;
+    return {
+      err: !!r.isError,
+      sc: r.structuredContent ?? {},
+      text: r.content?.[0]?.text ?? "",
+      kind: String(meta?.["odata-1c/errorKind"] ?? ""),
+    };
   };
+  /**
+   * Отказ «нет в этой конфигурации» (регистр склада в Бухгалтерии, Хозрасчётный в УТ) и «нужны аргументы» — не
+   * провал прогона: инструмент ответил как задумано. Печатается пропуском, чтобы его было видно.
+   */
+  const skipped = (r: { err: boolean; kind: string }) =>
+    r.err && (r.kind === "not_published" || r.kind === "input");
   const noArgReads = Object.entries(tools)
     .filter(([name, t]) => {
       if (!name.startsWith("read.")) return false;
@@ -125,6 +145,12 @@ async function main(): Promise<number> {
 
     for (const name of noArgReads) {
       const r = await run(name, { database: db });
+      if (!NEEDS_ARGS.has(name) && skipped(r)) {
+        line(
+          `  ${db}: ${name} — ${r.kind === "input" ? "нужны аргументы" : "нет в этой конфигурации"}, пропуск`,
+        );
+        continue;
+      }
       const ok = NEEDS_ARGS.has(name) ? r.err : !r.err;
       if (!ok) check(`${db}: ${name}`, false, r.text.slice(0, 120));
     }
@@ -147,6 +173,10 @@ async function main(): Promise<number> {
         documentEntity: entitySet,
         documentRef: doc["ref"],
       });
+      if (skipped(p)) {
+        line(`  ${db}: проводки ${entitySet} — нет в этой конфигурации, пропуск`);
+        continue;
+      }
       const statuses = new Map<string, number>();
       for (const posting of (p.sc["postings"] as Json[] | undefined) ?? [])
         for (const side of [posting["debit"], posting["credit"]] as Array<Json | null>)

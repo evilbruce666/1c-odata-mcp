@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { ServerContext } from "../context.js";
 import { patchResultSchema } from "../schemas/output.js";
 import { databaseField, guard, ok } from "./_shared.js";
+import { refuseOnTrade } from "../odata/publication.js";
 import {
   readSavedSettlementSettings,
   saveSettlementSettings,
@@ -41,15 +42,21 @@ export function registerSettlementSettingsTools(server: McpServer, ctx: ServerCo
           .passthrough(),
       },
       (args: { database?: string; confirm?: boolean } & Record<string, unknown>) =>
-        guard(readName, async () =>
-          ok({
+        guard(readName, async () => {
+          // Регистр счетов расчётов — объект Бухгалтерии: в УТ совет проверить публикацию был бы неверным.
+          await refuseOnTrade(
+            ctx.db(args.database),
+            "Регистр сведений «Счета учёта расчётов с контрагентами»",
+            "Настройки счетов расчётов — регистр Бухгалтерии.",
+          );
+          return ok({
             database: ctx.db(args.database).cfg.name,
             ...(await readSavedSettlementSettings(
               ctx.db(args.database),
               legacy ? { ...args, scope: "contract" } : args,
             )),
-          }),
-        ),
+          });
+        }),
     );
     server.registerTool(
       writeName,

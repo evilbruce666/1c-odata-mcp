@@ -47,6 +47,7 @@ const SETTINGS_UPDATE = { mode: "update", singleWriter: true, accounts: { custom
 const OVERRIDES: Record<string, Record<string, unknown>> = {
   "read.analytics.get_warehouse_stock": { warehouses: [id] },
   "read.analytics.get_sales_register": { warehouses: [id] },
+  "read.analytics.get_partner_settlements": { partner: id },
   "read.document.get_document": { entitySet: "Document_РеализацияТоваровУслуг", ref: id },
   "read.document.search_documents": { entitySet: "Document_РеализацияТоваровУслуг" },
   "read.accounting.get_document_postings": {
@@ -196,6 +197,7 @@ type Tools = Record<
 const TOOL_SCHEMA: Record<string, FakeSchema> = {
   "read.analytics.get_warehouse_stock": "ut11",
   "read.analytics.get_sales_register": "ut11",
+  "read.analytics.get_partner_settlements": "ut11",
 };
 
 /** Вызов инструмента так же, как SDK: аргументы проходят схему (значения по умолчанию, проверка типов). */

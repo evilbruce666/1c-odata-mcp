@@ -44,6 +44,16 @@ export async function requireEntity(
   throw new NotPublishedError([{ label, candidates }]);
 }
 
+/**
+ * Отказ инструмента, который построен на объектах Бухгалтерии, в торговой базе: вместо совета опубликовать их — что
+ * в такой базе работает. what — одна фраза: на чём построен инструмент.
+ */
+export async function refuseOnTrade(conn: Connection, label: string, what: string): Promise<void> {
+  if (await tradeWithoutAccounting(conn)) {
+    throw new NotPublishedError([{ label, candidates: [] }], tradeRefusal(what));
+  }
+}
+
 /** Проверяет, что конкретный EntitySet опубликован (для имён, заданных пользователем). */
 export function ensurePublished(available: ReadonlySet<string>, entitySet: string, label?: string): void {
   if (!available.has(entitySet)) {
