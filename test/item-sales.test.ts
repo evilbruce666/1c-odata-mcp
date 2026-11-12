@@ -441,7 +441,28 @@ describe("get_sales_register: без продаж своим организац�
       organizationsWithoutInn: 1,
     });
     expect(s.revenue + s.excludedOwnOrganizations.revenue).toBeCloseTo(base.revenue, 2);
+    const ex = s.excludedOwnOrganizations as { revenueExVat: number };
+    expect((s as unknown as { revenueExVat: number }).revenueExVat + ex.revenueExVat).toBeCloseTo(
+      (base as unknown as { revenueExVat: number }).revenueExVat,
+      2,
+    );
   });
+});
+
+describe("get_sales_register: без справочников своих не узнать", () => {
+  it.each(["Catalog_Контрагенты", "Catalog_Организации"])(
+    "%s не опубликован — отказ, а не тихий прежний итог (ревью)",
+    async (missing) => {
+      const { call, fake } = await setup("ut11", { sales: INTERCOMPANY as never });
+      const available = await fake.conn.available();
+      vi.spyOn(fake.conn, "available").mockResolvedValue(
+        new Set([...available].filter((s) => s !== missing)),
+      );
+      const r = await call({ excludeOwnOrganizations: true });
+      expect(r.isError, r.text).toBe(true);
+      expect(r.text).toContain(missing === "Catalog_Контрагенты" ? "Контрагенты" : "Организации");
+    },
+  );
 });
 
 describe("get_sales_register: каждый параметр меняет результат", () => {

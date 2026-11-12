@@ -484,6 +484,19 @@ describe("resolveItemGroup: пути", () => {
     expect(withoutNumber("2024")).toBe("2024");
   });
 
+  it("номер в запросе не снимается: значимое число не находит соседнюю группу (ревью: 16 → 17 дюймов)", () => {
+    const sized: ItemGroup[] = [
+      { ref: G(90), name: "Шины" },
+      { ref: G(91), name: "17 дюймов", parent: G(90) },
+      { ref: G(92), name: "3. Аксессуары" },
+      { ref: G(93), name: "01. Apple", parent: G(92) },
+    ];
+    expect(() => resolveItemGroup("Шины/16 дюймов", sized)).toThrow(/не найдена/);
+    expect(() => resolveItemGroup("Аксессуары/02. Apple", sized)).toThrow(/не найдена/);
+    expect(resolveItemGroup("Аксессуары/Apple", sized).ref).toBe(G(93));
+    expect(resolveItemGroup("Шины/17 дюймов", sized).ref).toBe(G(91));
+  });
+
   it("название с «/» целиком важнее пути", () => {
     const withSlash = [
       ...groups,

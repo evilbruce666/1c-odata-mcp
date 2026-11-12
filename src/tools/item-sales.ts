@@ -51,8 +51,8 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
         "видна по всем складам выборки, latest — самый свежий отчёт; какой склад отстаёт — отбор warehouses. Отбор: warehouses — Ref_Key складов (как в get_warehouse_stock), group — группа " +
         "номенклатуры с подгруппами (Ref_Key, название или путь «Телефоны/Смартфоны/Apple»), query — часть названия или " +
         "артикул. groupBy=warehouse — по складам. excludeOwnOrganizations=true — без продаж своим организациям: в УТ это " +
-        "обычная продажа клиенту, и покупатель узнаётся по ИНН, совпавшему с ИНН организации базы; исключённые штуки, " +
-        "выручка и контрагенты — в excludedOwnOrganizations (организация без ИНН так не узнаётся, их число там же). revenue и revenueExVat — выручка с НДС и без НДС, нетто (возвраты и сторно " +
+        "обычная продажа клиенту, и покупатель узнаётся по ИНН, совпавшему с ИНН организации базы; исключённые штуки и " +
+        "выручка и все контрагенты, признанные своими по ИНН, — в excludedOwnOrganizations (организация без ИНН так не узнаётся, их число там же). revenue и revenueExVat — выручка с НДС и без НДС, нетто (возвраты и сторно " +
         "вычитаются), в валюте управленческого учёта базы (обычно рубли): розница с комиссионным товаром сверена с отчётами " +
         "о розничных продажах до рубля. count — всего позиций; длинный список " +
         "читайте с offset=nextOffset, пока он есть.",
@@ -292,6 +292,7 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
                 excludedOwnOrganizations: {
                   quantity: total(excluded, (q) => q),
                   revenue: excluded.reduce((t, r) => t + r.revenueCents, 0) / 100,
+                  revenueExVat: excluded.reduce((t, r) => t + r.revenueExVatCents, 0) / 100,
                   counterparties: own.counterparties,
                   ...(own.organizationsWithoutInn
                     ? { organizationsWithoutInn: own.organizationsWithoutInn }

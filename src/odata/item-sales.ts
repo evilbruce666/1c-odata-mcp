@@ -296,11 +296,9 @@ export interface OwnBuyers {
  * Узнаются по ИНН контрагента, совпавшему с ИНН организации. Организация без ИНН так не узнаётся — её число в ответе.
  */
 export async function ownBuyers(conn: Connection): Promise<OwnBuyers> {
-  const available = await conn.available();
-  const orgSet = resolveEntity(CATALOGS.organizations, available);
-  const cpSet = resolveEntity(CATALOGS.counterparties, available);
-  if (!orgSet || !cpSet)
-    return { refs: new Set(), counterparties: [], organizations: 0, organizationsWithoutInn: 0 };
+  // Без справочников своих не узнать: отказ, а не «флаг включён, итог прежний» (ревью).
+  const orgSet = await requireEntity(conn, CATALOGS.organizations, "Справочник «Организации»");
+  const cpSet = await requireEntity(conn, CATALOGS.counterparties, "Справочник «Контрагенты»");
   const { rows: orgs } = await fetchAllForAggregation(
     conn,
     orgSet,

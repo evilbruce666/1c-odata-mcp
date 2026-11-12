@@ -150,9 +150,11 @@ function byPath(query: string, groups: readonly ItemGroup[]): ItemGroup[] {
   const index = new Map(groups.map((g) => [g.ref, g]));
   const matching = (fold: (text: string) => string, unnumbered: boolean) => {
     const name = (text: string) => (unnumbered ? withoutNumber(text) : text);
+    // Номер снимается только с названий групп, запрос сравнивается как есть: иначе «Шины/16 дюймов» находил бы
+    // «17 дюймов», а несуществующая «Аксессуары/02. Apple» — «01. Apple» (ревью).
     const q = query
       .split(PATH_SEPARATOR)
-      .map((p) => fold(name(p.trim())).trim())
+      .map((p) => fold(p.trim()).trim())
       .join(PATH_SEPARATOR);
     return groups.filter((g) => {
       // Пробелы вокруг «/» не важны и внутри названия («Кабели / переходники»).

@@ -555,6 +555,7 @@ export const getItemSalesResultSchema = z
       .object({
         quantity: z.number(),
         revenue: z.number(),
+        revenueExVat: z.number(),
         counterparties: z.array(
           z.object({ ref: z.string(), name: z.string(), inn: z.string() }).passthrough(),
         ),
