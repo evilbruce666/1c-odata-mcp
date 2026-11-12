@@ -5,6 +5,8 @@
 
 ## [Не выпущено]
 
+## [0.15.0] — 2026-11-13
+
 Главное — поддержка Управления торговлей 11 на чтение: остатки на складах, продажи с розницей и выручкой, поиск контрагентов и документов, деньги и налоги по документам УТ. Проверено на рабочей базе УТ 11.5 только чтением; тестовой базы УТ у проекта нет.
 
 ### Что изменится при обновлении
@@ -837,7 +839,8 @@ POST-тестом (create → read → mark) на реальной базе — 
   коды плана счетов); вежливый фоллбэк при отсутствии объекта в «Составе OData».
 - npm-пакет с запуском через `npx 1c-odata-mcp`.
 
-[Не выпущено]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.14.0...HEAD
+[Не выпущено]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.11.0...v0.12.0
