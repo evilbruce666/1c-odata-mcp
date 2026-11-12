@@ -7,10 +7,16 @@ import { resolveEntity } from "../config/mapping.js";
  */
 export class NotPublishedError extends Error {
   readonly missing: Array<{ label: string; candidates: readonly string[] }>;
-  constructor(missing: Array<{ label: string; candidates: readonly string[] }>) {
+  /**
+   * Текст вместо совета опубликовать объект: когда объекта нет в самой конфигурации, а данные есть в другом
+   * инструменте (в УТ нет Хозрасчётного — остатки в регистре склада).
+   */
+  readonly instead: string | undefined;
+  constructor(missing: Array<{ label: string; candidates: readonly string[] }>, instead?: string) {
     super("Требуемые объекты отсутствуют в доступной OData-схеме");
     this.name = "NotPublishedError";
     this.missing = missing;
+    this.instead = instead;
   }
 }
 

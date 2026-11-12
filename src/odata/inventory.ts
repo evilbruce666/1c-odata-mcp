@@ -87,6 +87,7 @@ export function loadItemGroups(conn: Connection, set: string): Promise<ItemGroup
           set,
           { filter: cmp("IsFolder", "eq", "true"), select: ["Ref_Key", "Description", "Parent_Key"] },
           "группы номенклатуры",
+          CATALOG_PAGE,
         );
         return rows.map((r) => {
           const parent = refOf(r["Parent_Key"]);
@@ -102,7 +103,54 @@ export function loadItemGroups(conn: Connection, set: string): Promise<ItemGroup
   );
 }
 
-/** Группа по Ref_Key или названию: точное совпадение важнее части, неоднозначность — отказ, а не выбор наугад. */
+/** Разделитель пути группы: «Телефоны/Смартфоны/Apple». */
+const PATH_SEPARATOR = "/";
+
+/** Цепочка групп от корня до указанной. Цикл в данных обрывает цепочку, а не зацикливает её. */
+function ancestry(group: ItemGroup, byRef: ReadonlyMap<string, ItemGroup>): ItemGroup[] {
+  const chain = [group];
+  const seen = new Set([group.ref]);
+  for (let p = group.parent; p && !seen.has(p);) {
+    const parent = byRef.get(p);
+    if (!parent) break;
+    chain.unshift(parent);
+    seen.add(p);
+    p = parent.parent;
+  }
+  return chain;
+}
+
+/** Путь группы от корня: по нему различаются одноимённые группы в разных ветках. */
+export function groupPath(group: ItemGroup, groups: readonly ItemGroup[]): string {
+  return pathIn(group, new Map(groups.map((g) => [g.ref, g])));
+}
+
+const pathIn = (group: ItemGroup, byRef: ReadonlyMap<string, ItemGroup>): string =>
+  ancestry(group, byRef)
+    .map((g) => g.name.trim())
+    .join(PATH_SEPARATOR);
+
+/**
+ * Группы, путь которых заканчивается указанными частями: «Смартфоны/Apple» находит Apple внутри любых «Смартфонов».
+ * Части сравниваются целиком, сначала буквально, похожие буквы — только если буквально ничего нет.
+ */
+function byPath(parts: readonly string[], groups: readonly ItemGroup[]): ItemGroup[] {
+  const byRef = new Map(groups.map((g) => [g.ref, g]));
+  const matching = (fold: (text: string) => string) =>
+    groups.filter((g) => {
+      const chain = ancestry(g, byRef);
+      if (chain.length < parts.length) return false;
+      const tail = chain.slice(chain.length - parts.length);
+      return tail.every((link, i) => fold(link.name.trim()) === fold(parts[i]!));
+    });
+  const literal = matching(strictText);
+  return literal.length ? literal : matching(foldText);
+}
+
+/**
+ * Группа по Ref_Key, названию или пути: точное совпадение важнее части, неоднозначность — отказ со списком путей, а не
+ * выбор наугад. Название целиком проверяется раньше пути: в названии бывает «/» («Кабели/переходники»).
+ */
 export function resolveItemGroup(query: string, groups: readonly ItemGroup[]): ItemGroup {
   const q = query.trim();
   const strict = strictText(q);
@@ -111,15 +159,34 @@ export function resolveItemGroup(query: string, groups: readonly ItemGroup[]): I
   const exact = groups.filter((g) => named(g) === strict);
   // Похожие буквы только для названия целиком: по части «TP» выбрал бы «Стройматериалы», итог был бы чужой группы.
   const lookalike = groups.filter((g) => foldText(g.name.trim()) === foldText(q));
+  const parts = q
+    .split(PATH_SEPARATOR)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const path = parts.length > 1 ? byPath(parts, groups) : [];
   const part = groups.filter((g) => named(g).includes(strict));
-  const found = byRef ? [byRef] : exact.length ? exact : lookalike.length ? lookalike : part;
+  const found = byRef
+    ? [byRef]
+    : exact.length
+      ? exact
+      : lookalike.length
+        ? lookalike
+        : path.length
+          ? path
+          : part;
   if (found.length === 1) return found[0]!;
   if (!found.length) throw new InputError(`Группа номенклатуры "${query}" не найдена.`);
+  const index = new Map(groups.map((g) => [g.ref, g]));
   const shown = found
+    .map((g) => `${pathIn(g, index)} (${g.ref})`)
+    .sort()
     .slice(0, 10)
-    .map((g) => `${g.name} (${g.ref})`)
-    .join(", ");
-  throw new InputError(`Под "${query}" подходит несколько групп: ${shown}. Укажите Ref_Key нужной.`);
+    .join("; ");
+  const more = found.length > 10 ? ` и ещё ${found.length - 10}` : "";
+  throw new InputError(
+    `Под "${query}" подходит несколько групп (${found.length}): ${shown}${more}. ` +
+      `Укажите путь, например «Родитель${PATH_SEPARATOR}Группа», или Ref_Key нужной.`,
+  );
 }
 
 /** Группа и все её подгруппы на любой глубине. Цикл в данных не зациклит обход. */
@@ -170,6 +237,12 @@ export async function readItemAttributes(
   return new Map([...rows].map(([ref, r]) => [ref, toAttributes(r)]));
 }
 
+/**
+ * Страница чтения справочника номенклатуры целиком: строки короткие (4 поля), 5000 — около 1 МБ. По 1000 справочник
+ * на 15 тыс. позиций читался 15 запросами, около 15 с.
+ */
+const CATALOG_PAGE = 5000;
+
 /** Сколько держать справочник для соседних страниц одного чтения: на каждую страницу он иначе читался бы заново. */
 const ITEMS_TTL_MS = 60_000;
 
@@ -207,6 +280,7 @@ export function readAllItems(conn: Connection, set: string): Promise<Map<string,
           set,
           { filter: cmp("IsFolder", "eq", "false"), select: await itemFields(conn, set) },
           "номенклатура",
+          CATALOG_PAGE,
         );
         return new Map(rows.map((r) => [String(r["Ref_Key"]), toAttributes(r)]));
       },
@@ -256,6 +330,12 @@ export function matchesItemQuery(item: ItemAttributes, query: string, fold = fol
 const GROUP_FILTER_BATCH = 10;
 
 /**
+ * Больше стольких групп — справочник читается целиком и отбирается в памяти: на УТ с 1236 папками в ветке пачки по
+ * 10 давали 124 запроса и 53 с, а весь справочник на 15 тыс. позиций — 3 страницы.
+ */
+const WHOLE_CATALOG_FROM = GROUP_FILTER_BATCH * 3;
+
+/**
  * Позиции указанных групп. Запрос идёт по группам, а не по остаткам: иначе отбор на 10 000 позициях стоил бы
  * 500 запросов на каждую страницу.
  */
@@ -265,6 +345,11 @@ export async function readItemsInGroups(
   groupRefs: Iterable<string>,
 ): Promise<Map<string, ItemAttributes>> {
   const refs = [...groupRefs].sort();
+  if (refs.length > WHOLE_CATALOG_FROM) {
+    const wanted = new Set(refs);
+    const all = await readAllItems(conn, set);
+    return new Map([...all].filter(([, a]) => !!a.groupRef && wanted.has(a.groupRef)));
+  }
   return readCatalog(() =>
     cached(
       conn,
@@ -296,6 +381,107 @@ export async function readItemsInGroups(
       itemsTtl(),
     ),
   );
+}
+
+/** Результат отбора строк остатков по товару: общий для остатков по счетам (БП) и по складам (УТ). */
+export interface ItemSelection<L> {
+  lines: L[];
+  /** Название, артикул и родитель прочитанных позиций; без отбора пусто, его заполняют для страницы. */
+  attributes: Map<string, ItemAttributes>;
+  groups?: ItemGroup[];
+  selectedGroup?: ItemGroup;
+  /** Найдено только с учётом похожих букв кириллицы и латиницы. */
+  lookalikeMatch: boolean;
+  /** Позиции, похожие на запрос другой раскладкой букв, при буквальных совпадениях: в итог не входят. */
+  otherSimilar: L[];
+}
+
+/** Отбор строк по группе номенклатуры (с подгруппами) и поиску по названию или артикулу. */
+export async function selectByItem<L extends { itemRef?: string | undefined }>(
+  conn: Connection,
+  nomSet: string | undefined,
+  rows: L[],
+  { group, query }: { group?: string | undefined; query?: string | undefined },
+): Promise<ItemSelection<L>> {
+  const attributes = new Map<string, ItemAttributes>();
+  let lines = rows;
+  let groups: ItemGroup[] | undefined;
+  let selectedGroup: ItemGroup | undefined;
+  let lookalikeMatch = false;
+  let otherSimilar: L[] = [];
+  if (group) {
+    if (!nomSet) throw new InputError("Справочник номенклатуры не опубликован: отбор по группе невозможен.");
+    groups = await loadItemGroups(conn, nomSet);
+    selectedGroup = resolveItemGroup(group, groups);
+    const allowed = subtreeOf(selectedGroup.ref, groups);
+    for (const [ref, a] of await readItemsInGroups(conn, nomSet, allowed)) attributes.set(ref, a);
+    lines = lines.filter((l) => !!l.itemRef && attributes.has(l.itemRef));
+  }
+  if (query) {
+    if (!nomSet) throw new InputError("Справочник номенклатуры не опубликован: поиск по товару невозможен.");
+    if (!group) for (const [ref, a] of await readAllItems(conn, nomSet)) attributes.set(ref, a);
+    const stock = lines;
+    const matching = (fold: (text: string) => string) =>
+      stock.filter((l) => {
+        const item = l.itemRef ? attributes.get(l.itemRef) : undefined;
+        return !!item && matchesItemQuery(item, query, fold);
+      });
+    // Сначала буквально; похожие буквы только если ничего нет: «3M» иначе находил бы и «Кабель 3м».
+    const literal = matching(strictText);
+    const similar = matching(foldText);
+    lines = literal.length ? literal : similar;
+    lookalikeMatch = !literal.length && lines.length > 0;
+    // «А4» и «A4» в одной базе: итог только по буквальным занизил бы остаток, поэтому остальные названы.
+    otherSimilar = literal.length ? similar.filter((l) => !literal.includes(l)) : [];
+  }
+  return {
+    lines,
+    attributes,
+    ...(groups ? { groups } : {}),
+    ...(selectedGroup ? { selectedGroup } : {}),
+    lookalikeMatch,
+    otherSimilar,
+  };
+}
+
+/** Примечания к отбору по товару. where — где нет остатка: «на счетах», «на складах». */
+export async function selectionNotes(
+  conn: Connection,
+  nomSet: string | undefined,
+  sel: ItemSelection<unknown>,
+  { group, query }: { group?: string | undefined; query?: string | undefined },
+  where: string,
+): Promise<string[]> {
+  const notes: string[] = [];
+  if (query && nomSet && !(await articlePublished(conn, nomSet))) {
+    notes.push("Артикул не опубликован в OData: поиск шёл только по названию.");
+  }
+  if (sel.otherSimilar.length) {
+    notes.push(
+      "Ещё есть позиции, похожие на запрос другой раскладкой букв (А и A): в итог они не вошли, см. otherSimilar. Чтобы показать их, повторите поиск теми же буквами, что в их названии.",
+    );
+  }
+  if (sel.lookalikeMatch) {
+    notes.push(
+      "Точных совпадений нет: найдено с учётом похожих букв кириллицы и латиницы, проверьте позиции.",
+    );
+  }
+  if (query && !sel.lines.length) {
+    const scope = group ? "в выбранной группе" : "в справочнике";
+    const items = [...sel.attributes.values()];
+    const known = items.some((a) => matchesItemQuery(a, query, strictText));
+    const similar = !known && items.some((a) => matchesItemQuery(a, query));
+    notes.push(
+      known
+        ? `Товар есть ${scope}, но остатка ${where} нет (с учётом других отборов).`
+        : similar
+          ? `Товар с похожими буквами другой раскладки (А и A) есть ${scope}, но остатка ${where} нет (с учётом других отборов).`
+          : group
+            ? "В выбранной группе такого товара нет; вне группы поиск не проверял."
+            : "В справочнике такого товара не найдено. Попробуйте основу слова (бумаг, а не бумаги) или другую часть названия.",
+    );
+  }
+  return notes;
 }
 
 /** Названия складов: справочник берётся из типа значения, в разных конфигурациях он называется по-разному. */

@@ -14,6 +14,7 @@ import { registerMetaTools } from "../tools/meta.js";
 import { registerCounterpartyTools } from "../tools/counterparties.js";
 import { registerDocumentTools } from "../tools/documents.js";
 import { registerRegisterTools } from "../tools/registers.js";
+import { registerStockTools } from "../tools/stock.js";
 import { registerDebtTools } from "../tools/debts.js";
 import { registerMonthCloseTools } from "../tools/month-close.js";
 import { registerCardTools } from "../tools/card.js";
@@ -147,6 +148,7 @@ type PageList = { list: string; countIsTotal?: boolean };
 /** Угадывать по длине нельзя: список счетов в ответе остатков бывает длиннее самих остатков. */
 const PAGE_LISTS: Record<string, PageList> = {
   "read.analytics.get_inventory": { list: "items", countIsTotal: true },
+  "read.analytics.get_stock": { list: "items", countIsTotal: true },
   "read.analytics.get_debtors": { list: "debtors", countIsTotal: true },
   "read.analytics.get_creditors": { list: "creditors", countIsTotal: true },
   "read.analytics.get_unpaid_invoices": { list: "invoices", countIsTotal: true },
@@ -571,6 +573,7 @@ export function createServer(ctx: ServerContext): McpServer {
   registerCounterpartyTools(server, ctx);
   registerDocumentTools(server, ctx);
   registerRegisterTools(server, ctx);
+  registerStockTools(server, ctx);
   registerDebtTools(server, ctx);
   registerMonthCloseTools(server, ctx);
   registerCardTools(server, ctx);

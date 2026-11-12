@@ -1,7 +1,15 @@
 import { vi } from "vitest";
 import { parseConfig } from "../../src/config/env.js";
 import { ServerContext, type Connection } from "../../src/context.js";
-import { BP30_METADATA_XML, bp30Enums, bp30Metadata, SNAPSHOT_REF } from "./metadata-snapshot.js";
+import {
+  BP30_METADATA_XML,
+  bp30Enums,
+  bp30Metadata,
+  SNAPSHOT_REF,
+  UT11_METADATA_XML,
+  ut11Metadata,
+} from "./metadata-snapshot.js";
+import type { MetadataMap } from "../../src/types/odata.js";
 
 /**
  * «Поддельная 1С» на снимке схемы БП 3.0: подменяет fetch и отвечает как OData 1С. Коннектор
@@ -31,11 +39,20 @@ interface FakeFunction {
   params: Set<string>;
   returns: string;
 }
-let functionCache: Map<string, FakeFunction> | undefined;
-function functions(): Map<string, FakeFunction> {
-  if (functionCache) return functionCache;
-  functionCache = new Map();
-  for (const m of BP30_METADATA_XML.matchAll(/<FunctionImport Name="([^"]+)"[\s\S]*?<\/FunctionImport>/g)) {
+/** Схема, по которой отвечает подделка: БП 3.0 (по умолчанию) или УТ 11. */
+export type FakeSchema = "bp30" | "ut11";
+const SCHEMAS: Record<FakeSchema, { xml: string; metadata: () => MetadataMap }> = {
+  bp30: { xml: BP30_METADATA_XML, metadata: bp30Metadata },
+  ut11: { xml: UT11_METADATA_XML, metadata: ut11Metadata },
+};
+
+const functionCaches = new Map<FakeSchema, Map<string, FakeFunction>>();
+function functions(schema: FakeSchema): Map<string, FakeFunction> {
+  const known = functionCaches.get(schema);
+  if (known) return known;
+  const functionCache = new Map<string, FakeFunction>();
+  functionCaches.set(schema, functionCache);
+  for (const m of SCHEMAS[schema].xml.matchAll(/<FunctionImport Name="([^"]+)"[\s\S]*?<\/FunctionImport>/g)) {
     const params = [...m[0].matchAll(/<Parameter Name="([^"]+)"\s+Type="([^"]+)"/g)];
     const binding = params.find((p) => p[1] === "bindingParameter")?.[2]?.replace(/^StandardODATA\./, "");
     const returns = /ReturnType="(?:Collection\()?StandardODATA\.([^")]+)/.exec(m[0])?.[1];
@@ -58,11 +75,13 @@ const KEYWORDS = new Set(
   ).split(" "),
 );
 
-let complexCache: Map<string, Map<string, string>> | undefined;
-function complexTypes(): Map<string, Map<string, string>> {
-  if (complexCache) return complexCache;
-  complexCache = new Map();
-  for (const m of BP30_METADATA_XML.matchAll(/<ComplexType Name="([^"]+)"[\s\S]*?<\/ComplexType>/g))
+const complexCaches = new Map<FakeSchema, Map<string, Map<string, string>>>();
+function complexTypes(schema: FakeSchema): Map<string, Map<string, string>> {
+  const known = complexCaches.get(schema);
+  if (known) return known;
+  const complexCache = new Map<string, Map<string, string>>();
+  complexCaches.set(schema, complexCache);
+  for (const m of SCHEMAS[schema].xml.matchAll(/<ComplexType Name="([^"]+)"[\s\S]*?<\/ComplexType>/g))
     complexCache.set(
       m[1]!,
       new Map([...m[0].matchAll(/<Property Name="([^"]+)"\s+Type="([^"]+)"/g)].map((p) => [p[1]!, p[2]!])),
@@ -70,8 +89,8 @@ function complexTypes(): Map<string, Map<string, string>> {
   return complexCache;
 }
 
-function entityFields(set: string): Map<string, string> | undefined {
-  const meta = bp30Metadata().entities.get(set);
+function entityFields(set: string, schema: FakeSchema = "bp30"): Map<string, string> | undefined {
+  const meta = SCHEMAS[schema].metadata().entities.get(set);
   if (!meta) return undefined;
   return new Map([
     ...meta.properties.map((p) => [p.name, p.type] as const),
@@ -148,13 +167,17 @@ const ACCOUNT_CODES = [
 
 const GOODS_SECTIONS = new Set(["Товары", "Услуги"]);
 
-function syntheticRow(fields: Map<string, string>, set: string): Record<string, unknown> {
+function syntheticRow(
+  fields: Map<string, string>,
+  set: string,
+  schema: FakeSchema = "bp30",
+): Record<string, unknown> {
   const row: Record<string, unknown> = {};
   for (const [name, type] of fields) {
     if (type === "navigation") continue;
     if (type.startsWith("Collection(")) {
-      const section = entityFields(`${set}_${name}`);
-      const r = section ? syntheticRow(section, `${set}_${name}`) : undefined;
+      const section = entityFields(`${set}_${name}`, schema);
+      const r = section ? syntheticRow(section, `${set}_${name}`, schema) : undefined;
       // Товары и услуги — две строки (есть что удалить), прочие табличные части — одна.
       const lines = GOODS_SECTIONS.has(name) ? ["1", "2"] : ["1"];
       row[name] = r ? lines.map((LineNumber) => ({ ...r, LineNumber })) : [];
@@ -181,7 +204,35 @@ function identifiers(expr: string): string[] {
     .filter((w) => !KEYWORDS.has(w) && !/^\d/.test(w));
 }
 
-export function fake1C(env: Record<string, string> = {}): Fake1C {
+/** Запрос, на который тест может ответить своими строками (после всех проверок схемы). */
+export interface FakeQuery {
+  /** Объект: «AccumulationRegister_ТоварыНаСкладах», «Catalog_Склады». */
+  base: string;
+  /** Функция виртуальной таблицы: «Balance», «Turnovers». */
+  fn?: string;
+  /** Параметры функции, значения без кавычек: { Period: "datetime'…'", Condition: "Склад_Key eq guid'…'" }. */
+  args: Record<string, string>;
+  params: URLSearchParams;
+}
+
+export interface FakeOptions {
+  schema?: FakeSchema;
+  /** Свои строки коллекции; undefined — синтетическая строка, как без опции. */
+  data?: (q: FakeQuery) => Record<string, unknown>[] | undefined;
+}
+
+/** Параметры функции «Имя=значение,…»: запятая и скобка внутри кавычек — часть значения, '' — кавычка. */
+function functionArgs(text: string): Record<string, string> {
+  const args: Record<string, string> = {};
+  for (const m of text.matchAll(/([\wА-Яа-яЁё]+)=('(?:[^']|'')*'|[^,]*)/g)) {
+    const raw = m[2]!;
+    args[m[1]!] = raw.startsWith("'") ? raw.slice(1, -1).replace(/''/g, "'") : raw;
+  }
+  return args;
+}
+
+export function fake1C(env: Record<string, string> = {}, options: FakeOptions = {}): Fake1C {
+  const schema = options.schema ?? "bp30";
   const requests: FakeRequest[] = [];
   const violations: string[] = [];
   const kinds = operationKinds();
@@ -196,20 +247,24 @@ export function fake1C(env: Record<string, string> = {}): Fake1C {
     const path = decodeURIComponent(pathPart);
     const params = new URLSearchParams(query);
     if (path === "$metadata")
-      return new Response(BP30_METADATA_XML, { status: 200, headers: { "Content-Type": "application/xml" } });
+      return new Response(SCHEMAS[schema].xml, {
+        status: 200,
+        headers: { "Content-Type": "application/xml" },
+      });
 
     const base = /^[^(/]+/.exec(path)?.[0] ?? path;
     requests.push({ method, resource: base });
     if (process.env.FAKE_1C_TRACE)
       process.stderr.write(`[fake-1c] ${method} ${path}?${decodeURIComponent(query)}\n`);
-    const fields = entityFields(base);
+    const fields = entityFields(base, schema);
     if (!fields) return odataError(404, `Сущность '${base}' не найдена`);
 
     // Виртуальная таблица регистра: поля — из её типа; действие документа — без полей.
     const tail = path.slice(base.length).replace(/^\([^)]*\)/, "");
-    const call = /^\/([\wА-Яа-яЁё]+)(?:\(([^)]*)\))?/.exec(tail);
+    // Скобка внутри кавычек (Condition='(a or b)') — часть значения, а не конец параметров.
+    const call = /^\/([\wА-Яа-яЁё]+)(?:\(((?:'(?:[^']|'')*'|[^)'])*)\))?/.exec(tail);
     const fn = call?.[1];
-    const declared = fn ? functions().get(`${base}/${fn}`) : undefined;
+    const declared = fn ? functions(schema).get(`${base}/${fn}`) : undefined;
     const bad = (where: string, name: string) => {
       violations.push(`${method} ${base}${fn ? `/${fn}` : ""}: ${where} — нет поля «${name}»`);
       return odataError(400, `Неизвестное поле '${name}' (${where})`);
@@ -223,10 +278,17 @@ export function fake1C(env: Record<string, string> = {}): Fake1C {
       for (const p of (call?.[2] ?? "").replace(/'(?:[^']|'')*'/g, "''").matchAll(/([\wА-Яа-яЁё]+)=/g))
         if (!declared.params.has(p[1]!)) return bad(`параметр ${fn}()`, p[1]!);
     const virtual = declared
-      ? (complexTypes().get(declared.returns) ?? entityFields(declared.returns))
+      ? (complexTypes(schema).get(declared.returns) ?? entityFields(declared.returns, schema))
       : undefined;
     const scope = virtual ?? fields;
     const known = (name: string) => scope.has(name.split("/")[0]!);
+    const args = functionArgs(call?.[2] ?? "");
+    // Condition проверяется по полям записи регистра: в 1С он ссылается на измерения, а не на поля результата.
+    if (args["Condition"] !== undefined) {
+      const record = entityFields(`${base}_RecordType`, schema) ?? fields;
+      for (const name of identifiers(args["Condition"]))
+        if (!record.has(name.split("/")[0]!)) return bad(`Condition ${fn}()`, name);
+    }
 
     for (const name of (params.get("$select") ?? "").split(",").filter(Boolean))
       if (!known(name.trim())) return bad("$select", name.trim());
@@ -246,7 +308,7 @@ export function fake1C(env: Record<string, string> = {}): Fake1C {
         if (key.includes("@")) continue;
         if (!fields.has(key)) return bad("тело записи", key);
         if (Array.isArray(value)) {
-          const section = entityFields(`${base}_${key}`);
+          const section = entityFields(`${base}_${key}`, schema);
           for (const row of value as Record<string, unknown>[])
             for (const k of Object.keys(row ?? {})) if (!section?.has(k)) return bad(`строка ${key}`, k);
         }
@@ -263,19 +325,29 @@ export function fake1C(env: Record<string, string> = {}): Fake1C {
           storedState.set(doc, { ...storedState.get(doc), ...scalars });
         }
       }
-      return json(method === "POST" ? 201 : 200, { ...syntheticRow(fields, base), ...payload });
+      return json(method === "POST" ? 201 : 200, { ...syntheticRow(fields, base, schema), ...payload });
     }
 
-    if (virtual) return json(200, { value: [syntheticRow(virtual, base)] });
+    const own = method === "GET" ? options.data?.({ base, ...(fn ? { fn } : {}), args, params }) : undefined;
+    if (own) {
+      const skip = Number(params.get("$skip") ?? 0);
+      const top = params.has("$top") ? Number(params.get("$top")) : own.length;
+      return json(200, { value: own.slice(skip, skip + top) });
+    }
+    if (virtual) return json(200, { value: [syntheticRow(virtual, base, schema)] });
     const keyed = tail === "" && /^[^(]+\(/.test(path);
     if (Number(params.get("$skip") ?? 0) > 0 && !keyed) return json(200, { value: [] });
     if (base.startsWith("ChartOfAccounts_") && !keyed)
       return json(200, {
-        value: ACCOUNT_CODES.map((Code) => ({ ...syntheticRow(fields, base), Code, Description: Code })),
+        value: ACCOUNT_CODES.map((Code) => ({
+          ...syntheticRow(fields, base, schema),
+          Code,
+          Description: Code,
+        })),
       });
     // Постраничное чтение: синтетика — одна страница, дальше пусто (иначе $skip крутился бы вечно).
     if (Number(params.get("$skip") ?? 0) > 0) return json(200, { value: [] });
-    const row = syntheticRow(fields, base);
+    const row = syntheticRow(fields, base, schema);
     const guid = /guid'([0-9a-f-]{36})'/i.exec(path)?.[1];
     if (keyed && guid && "Ref_Key" in row) row.Ref_Key = guid;
     if (keyed) Object.assign(row, storedState.get(path), postedState.get(path));

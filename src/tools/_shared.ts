@@ -94,7 +94,7 @@ export async function guard(toolName: string, fn: () => Promise<CallToolResult>)
   } catch (e) {
     if (e instanceof NotPublishedError) {
       logger.warn({ tool: toolName, missing: e.missing.map((m) => m.label) }, "not published");
-      return fail(publicationHelp(e.missing), "not_published");
+      return fail(e.instead ?? publicationHelp(e.missing), "not_published");
     }
     if (e instanceof InputError) {
       // Неверные аргументы вызова — отдаём текст как есть: это чинится уточнением

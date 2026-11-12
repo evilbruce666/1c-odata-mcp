@@ -26,24 +26,16 @@ import {
 import { resolveOrganization } from "../odata/orgs.js";
 import {
   aggregateStock,
-  articlePublished,
-  foldText,
-  strictText,
   hasSubcontoTypes,
-  loadItemGroups,
   nomenclatureSet,
-  matchesItemQuery,
-  readAllItems,
   readItemAttributes,
-  readItemsInGroups,
-  resolveItemGroup,
-  subtreeOf,
+  selectByItem,
+  selectionNotes,
   warehouseNames,
-  type ItemAttributes,
-  type ItemGroup,
   type StockLine,
 } from "../odata/inventory.js";
 import { InputError } from "../errors.js";
+import { stockInsteadOfAccounts } from "../odata/stock.js";
 import { callPageStart } from "../odata/call-context.js";
 import { collectDocuments, emptyMeta, addMeta, type ScanMeta } from "../odata/aggregate.js";
 import {
@@ -729,7 +721,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         "groupBy=warehouse разбивает по складам и на первой странице добавляет итоги byWarehouse; если склад в субконто этих счетов не ведётся, " +
         "ответ скажет об этом (warehouseTracked=false), сумму и количество по складам из документов он не выводит. " +
         "Сумма на счетах без номенклатуры в субконто (например, 41.12) — в withoutNomenclature, она входит в totalAmount. " +
-        "query находит товар по части названия или артикулу: все части запроса, без учёта регистра; похожие буквы кириллицы и латиницы совпадают, только если точных совпадений нет, остальные названы в otherSimilar; словоформы не распознаются (пишите основу: «бумаг»). Итоги — только по найденному; при пустом ответе примечание говорит, есть ли товар в справочнике или группе. count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть. (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков.)",
+        "query находит товар по части названия или артикулу: все части запроса, без учёта регистра; похожие буквы кириллицы и латиницы совпадают, только если точных совпадений нет, остальные названы в otherSimilar; словоформы не распознаются (пишите основу: «бумаг»). Итоги — только по найденному; при пустом ответе примечание говорит, есть ли товар в справочнике или группе. count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть. (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков. В УТ, КА и ERP без Хозрасчётного остатки по складам — get_stock.)",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
@@ -745,7 +737,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           .max(200)
           .optional()
           .describe(
-            "Группа номенклатуры: Ref_Key, название целиком или его часть (несколько совпадений — отказ со списком). Подгруппы входят. Итоги — только по этой группе",
+            "Группа номенклатуры: Ref_Key, название целиком или его часть, путь через «/» («Канцелярия/Бумага»); несколько совпадений — отказ со списком путей. Подгруппы входят. Итоги — только по этой группе",
           ),
         query: z
           .string()
@@ -764,6 +756,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
       guard("read.analytics.get_inventory", async () => {
         const t0 = Date.now();
         const conn = ctx.db(database);
+        await stockInsteadOfAccounts(conn);
         const org = await orgKeyOf(conn, organization);
         const accounts = await resolveAccounts(conn, accountPrefixes(conn.cfg, "inventory"));
         const rows = await balanceByAccounts(
@@ -783,42 +776,13 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         const pageStart = callPageStart();
 
         // Группы нужны для отбора и названий; без отбора читаем только названия групп показанных позиций.
-        const attributes = new Map<string, ItemAttributes>();
+        const sel = await selectByItem(conn, nomSet, lines, { group, query });
+        const { attributes, selectedGroup, otherSimilar, groups } = sel;
+        lines = sel.lines;
         const readAttributes = async (refs: Iterable<string>) => {
           if (!nomSet) return;
           for (const [ref, a] of await readItemAttributes(conn, nomSet, refs)) attributes.set(ref, a);
         };
-        let selectedGroup: ItemGroup | undefined;
-        let lookalikeMatch = false;
-        let otherSimilar: StockLine[] = [];
-        let groups: ItemGroup[] | undefined;
-        if (group) {
-          if (!nomSet)
-            throw new InputError("Справочник номенклатуры не опубликован: отбор по группе невозможен.");
-          groups = await loadItemGroups(conn, nomSet);
-          selectedGroup = resolveItemGroup(group, groups);
-          const allowed = subtreeOf(selectedGroup.ref, groups);
-          for (const [ref, a] of await readItemsInGroups(conn, nomSet, allowed)) attributes.set(ref, a);
-          lines = lines.filter((l) => !!l.itemRef && attributes.has(l.itemRef));
-        }
-        if (query) {
-          if (!nomSet)
-            throw new InputError("Справочник номенклатуры не опубликован: поиск по товару невозможен.");
-          if (!group) for (const [ref, a] of await readAllItems(conn, nomSet)) attributes.set(ref, a);
-          const stock = lines;
-          const matching = (fold: (text: string) => string) =>
-            stock.filter((l) => {
-              const item = l.itemRef ? attributes.get(l.itemRef) : undefined;
-              return !!item && matchesItemQuery(item, query, fold);
-            });
-          // Сначала буквально; похожие буквы только если ничего нет: «3M» иначе находил бы и «Кабель 3м».
-          const literal = matching(strictText);
-          const similar = matching(foldText);
-          lines = literal.length ? literal : similar;
-          lookalikeMatch = !literal.length && lines.length > 0;
-          // «А4» и «A4» в одной базе: итог только по буквальным занизил бы остаток, поэтому остальные названы.
-          otherSimilar = literal.length ? similar.filter((l) => !literal.includes(l)) : [];
-        }
 
         const withItem = lines
           .filter((l): l is StockLine & { itemRef: string } => !!l.itemRef)
@@ -864,35 +828,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         const noItem = lines.filter((l) => !l.itemRef);
         const noItemCents = noItem.reduce((s, l) => s + l.cents, 0);
         const totalCents = lines.reduce((s, l) => s + l.cents, 0);
-        const notes: string[] = [];
-        if (query && nomSet && !(await articlePublished(conn, nomSet))) {
-          notes.push("Артикул не опубликован в OData: поиск шёл только по названию.");
-        }
-        if (otherSimilar.length) {
-          notes.push(
-            "Ещё есть позиции, похожие на запрос другой раскладкой букв (А и A): в итог они не вошли, см. otherSimilar. Чтобы показать их, повторите поиск теми же буквами, что в их названии.",
-          );
-        }
-        if (lookalikeMatch) {
-          notes.push(
-            "Точных совпадений нет: найдено с учётом похожих букв кириллицы и латиницы, проверьте позиции.",
-          );
-        }
-        if (query && !lines.length) {
-          const where = group ? "в выбранной группе" : "в справочнике";
-          const items = [...attributes.values()];
-          const known = items.some((a) => matchesItemQuery(a, query, strictText));
-          const similar = !known && items.some((a) => matchesItemQuery(a, query));
-          notes.push(
-            known
-              ? `Товар есть ${where}, но остатка на счетах нет (с учётом других отборов).`
-              : similar
-                ? `Товар с похожими буквами другой раскладки (А и A) есть ${where}, но остатка на счетах нет (с учётом других отборов).`
-                : group
-                  ? "В выбранной группе такого товара нет; вне группы поиск не проверял."
-                  : "В справочнике такого товара не найдено. Попробуйте основу слова (бумаг, а не бумаги) или другую часть названия.",
-          );
-        }
+        const notes = await selectionNotes(conn, nomSet, sel, { group, query }, "на счетах");
         if (noItem.length) {
           notes.push(
             "В totalAmount входит withoutNomenclature: сумма строк без номенклатуры в субконто (она не ведётся на счёте, как на 41.12, или не заполнена).",

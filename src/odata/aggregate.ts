@@ -57,9 +57,10 @@ export async function fetchAllForAggregation(
   entitySet: string,
   opts: { filter?: string | undefined; select?: string[]; orderby?: string },
   period?: string,
+  pageSize = ANALYTICS_PAGE,
 ): Promise<{ rows: ODataEntity[]; meta: ScanMeta }> {
   const cap = conn.behavior.analyticsMaxRows;
-  const { rows } = await fetchAll(conn.client, entitySet, opts, ANALYTICS_PAGE, cap + 1);
+  const { rows } = await fetchAll(conn.client, entitySet, opts, pageSize, cap + 1);
   if (rows.length > cap) throw new AggregateOverflowError(entitySet, cap, period);
   return { rows, meta: { rowsScanned: rows.length, chunks: 1 } };
 }

@@ -16,6 +16,20 @@ export const BP30_METADATA_XML = readFileSync(
   "utf8",
 );
 
+/**
+ * Снимок $metadata УТ 11.5 (ноябрь 2026): регистр «Товары на складах», номенклатура и склады. Поля доработок базы
+ * (Б_*, Операции0, …ДляЗП) убраны: в снимке только типовая схема, данных базы нет.
+ */
+export const UT11_METADATA_XML = readFileSync(
+  new URL("../fixtures/metadata/ut11.xml", import.meta.url),
+  "utf8",
+);
+
+let parsedUt: MetadataMap | undefined;
+export function ut11Metadata(): MetadataMap {
+  return (parsedUt ??= parseMetadata(UT11_METADATA_XML));
+}
+
 let parsed: MetadataMap | undefined;
 export function bp30Metadata(): MetadataMap {
   return (parsed ??= parseMetadata(BP30_METADATA_XML));

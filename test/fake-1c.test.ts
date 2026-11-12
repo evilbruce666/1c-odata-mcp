@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "../src/mcp/server.js";
-import { fake1C } from "./helpers/fake-1c.js";
+import { fake1C, type FakeSchema } from "./helpers/fake-1c.js";
 import { SNAPSHOT_REF as id, bp30Metadata } from "./helpers/metadata-snapshot.js";
 import { DOCUMENTS } from "../src/config/mapping.js";
 
@@ -45,6 +45,7 @@ const SETTINGS_UPDATE = { mode: "update", singleWriter: true, accounts: { custom
 
 /** Аргументы, которые не подобрать по имени поля. Новый инструмент обычно сюда не нужен. */
 const OVERRIDES: Record<string, Record<string, unknown>> = {
+  "read.analytics.get_stock": { warehouses: [id] },
   "read.document.get_document": { entitySet: "Document_РеализацияТоваровУслуг", ref: id },
   "read.document.search_documents": { entitySet: "Document_РеализацияТоваровУслуг" },
   "read.accounting.get_document_postings": {
@@ -187,9 +188,17 @@ type Tools = Record<
   }
 >;
 
+/**
+ * Инструменты другой конфигурации гоняются на её снимке: в БП 3.0 регистра «Товары на складах» нет, там проверяется
+ * только отказ (тест ниже).
+ */
+const TOOL_SCHEMA: Record<string, FakeSchema> = {
+  "read.analytics.get_stock": "ut11",
+};
+
 /** Вызов инструмента так же, как SDK: аргументы проходят схему (значения по умолчанию, проверка типов). */
-async function call(name: string, raw: Record<string, unknown>) {
-  const fake = fake1C({ READ_ONLY: "true" });
+async function call(name: string, raw: Record<string, unknown>, schema = TOOL_SCHEMA[name]) {
+  const fake = fake1C({ READ_ONLY: "true" }, schema ? { schema } : {});
   const registered = (createServer(fake.ctx) as unknown as { _registeredTools: Tools })._registeredTools[
     name
   ]!;
@@ -325,6 +334,7 @@ const OPTIONAL_OMIT: Record<string, string[]> = {
 /** Аргументы, с которыми инструмент законно отказывает: отбор без данных или взаимоисключающие параметры. */
 const FLAGS_OMIT: Record<string, string[]> = {
   "read.analytics.get_inventory": ["group"],
+  "read.analytics.get_stock": ["group"],
   "read.document.search_documents": ["kind"],
 };
 
