@@ -95,8 +95,18 @@ function data(q: FakeQuery) {
   return undefined;
 }
 
-async function setup() {
+async function setup(withoutTradeRegisters = false) {
   const fake = fake1C({ READ_ONLY: "true" }, { schema: "ut11", data });
+  if (withoutTradeRegisters) {
+    const available = await fake.conn.available();
+    const trade = [
+      "AccumulationRegister_ТоварыНаСкладах",
+      "AccumulationRegister_ВыручкаИСебестоимостьПродаж",
+    ];
+    vi.spyOn(fake.conn, "available").mockResolvedValue(
+      new Set([...available].filter((s) => !trade.some((r) => s.startsWith(r)))),
+    );
+  }
   const [a, b] = InMemoryTransport.createLinkedPair();
   await createServer(fake.ctx).connect(a);
   const client = new Client({ name: "t", version: "1" });
@@ -129,6 +139,12 @@ describe("get_cash_balance в УТ — регистры денежных сре�
     expect(balances.find((x) => x.amount === 9000)).toMatchObject({ kind: "bank", currencyAmount: 100 });
     expect(balances.filter((x) => x.currencyAmount !== undefined)).toHaveLength(1);
     expect(fake.violations).toEqual([]);
+  });
+
+  it("опубликованы только денежные регистры — те же итоги, без совета публиковать Хозрасчётный (ревью)", async () => {
+    const r = await (await setup(true)).call("read.analytics.get_cash_balance");
+    expect(r.isError, r.text).toBeFalsy();
+    expect([r.structuredContent["available"], r.structuredContent["source"]]).toEqual([10570.5, "registers"]);
   });
 
   it("организация — отбор в 1С; дата — Period следующего дня", async () => {

@@ -4,6 +4,13 @@ import { createServer } from "../src/mcp/server.js";
 import { ODataError } from "../src/odata/errors.js";
 import { withDefaultContract, withEnumValues } from "../src/tools/write.js";
 
+// Заглушки схемы в этом файле без регистра бухгалтерии, а запись в такую базу запрещена. Здесь проверяется сама
+// запись в Бухгалтерию; запрет — в ut-compat.test.ts и fake-1c.test.ts на настоящих схемах.
+vi.mock("../src/odata/configuration.js", async (original) => ({
+  ...(await original<typeof import("../src/odata/configuration.js")>()),
+  withoutAccounting: async () => false,
+}));
+
 const ACT = "Document_РеализацияТоваровУслуг";
 const cp = "11111111-1111-1111-1111-111111111111";
 const org = "22222222-2222-2222-2222-222222222222";

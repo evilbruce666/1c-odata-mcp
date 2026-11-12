@@ -16,9 +16,16 @@ const TRADE_REGISTERS = [
 
 export async function tradeWithoutAccounting(conn: Connection): Promise<boolean> {
   const available = await conn.available();
-  return (
-    !resolveEntity(accountingRegister(conn.cfg), available) && TRADE_REGISTERS.some((r) => available.has(r))
-  );
+  return (await withoutAccounting(conn)) && TRADE_REGISTERS.some((r) => available.has(r));
+}
+
+/**
+ * В базе не опубликован регистр бухгалтерии (из настройки плана счетов, по умолчанию «Хозрасчётный»). Шире
+ * tradeWithoutAccounting: не требует регистров склада и продаж. Запрет записи и денежная ветка УТ опираются на него —
+ * по нему одному, без регистров склада, ревью находило базу УТ, куда уходил PATCH.
+ */
+export async function withoutAccounting(conn: Connection): Promise<boolean> {
+  return !resolveEntity(accountingRegister(conn.cfg), await conn.available());
 }
 
 /** Что в такой базе есть вместо бухучёта: подсказка для отказов, ведёт к инструментам, которые там работают. */

@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/server";
-import { tradeWithoutAccounting } from "../odata/configuration.js";
+import { withoutAccounting } from "../odata/configuration.js";
 import { tradeCashBalance, tradeCashPublished } from "../odata/trade-cash.js";
 import { z } from "zod";
 import { callPageStart } from "../odata/call-context.js";
@@ -827,8 +827,10 @@ export function registerDebtTools(server: McpServer, ctx: ServerContext): void {
     ({ database, organization, asOf }) =>
       guard("read.analytics.get_cash_balance", async () => {
         const conn = ctx.db(database);
-        // Тот же факт в Управлении торговлей хранится в регистрах денежных средств, а не на счетах 50–57.
-        if ((await tradeWithoutAccounting(conn)) && (await tradeCashPublished(conn))) {
+        // Тот же факт в Управлении торговлей хранится в регистрах денежных средств, а не на счетах 50–57. Регистров
+        // склада и продаж для этого не нужно: без них база с одними денежными регистрами получала совет опубликовать
+        // Хозрасчётный (ревью).
+        if ((await withoutAccounting(conn)) && (await tradeCashPublished(conn))) {
           const org = await orgKeyOf(conn, organization);
           return ok(
             await tradeCashBalance(conn, { organizationRef: org.key, organizationName: org.name, asOf }),

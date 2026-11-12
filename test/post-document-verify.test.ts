@@ -2,6 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { createServer } from "../src/mcp/server.js";
 
+// Заглушки схемы в этом файле без регистра бухгалтерии, а запись в такую базу запрещена. Здесь проверяется сама
+// запись в Бухгалтерию; запрет — в ut-compat.test.ts и fake-1c.test.ts на настоящих схемах.
+vi.mock("../src/odata/configuration.js", async (original) => ({
+  ...(await original<typeof import("../src/odata/configuration.js")>()),
+  withoutAccounting: async () => false,
+}));
+
 // Простое проведение (без expectedDataVersion): успех — только по состоянию документа после действия.
 const SET = "Document_РеализацияТоваровУслуг";
 const ref = "33333333-3333-4333-8333-333333333333";

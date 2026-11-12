@@ -13,6 +13,13 @@ import { settlementAccountsFor } from "../src/odata/settlement-accounts.js";
 import type { EntityMeta, ODataEntity } from "../src/types/odata.js";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 
+// Заглушки схемы в этом файле без регистра бухгалтерии, а запись в такую базу запрещена. Здесь проверяется сама
+// запись в Бухгалтерию; запрет — в ut-compat.test.ts и fake-1c.test.ts на настоящих схемах.
+vi.mock("../src/odata/configuration.js", async (original) => ({
+  ...(await original<typeof import("../src/odata/configuration.js")>()),
+  withoutAccounting: async () => false,
+}));
+
 const id = (n: number) => `${n}`.repeat(8) + "-1111-4111-8111-111111111111";
 const ORG = id(1),
   CP = id(2),

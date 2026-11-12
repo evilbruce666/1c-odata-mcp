@@ -7,6 +7,13 @@ import {
 } from "../src/odata/settlement-accounts.js";
 import { emptySettlementWarning, withSettlementAccounts } from "../src/tools/write.js";
 
+// Заглушки схемы в этом файле без регистра бухгалтерии, а запись в такую базу запрещена. Здесь проверяется сама
+// запись в Бухгалтерию; запрет — в ut-compat.test.ts и fake-1c.test.ts на настоящих схемах.
+vi.mock("../src/odata/configuration.js", async (original) => ({
+  ...(await original<typeof import("../src/odata/configuration.js")>()),
+  withoutAccounting: async () => false,
+}));
+
 // Форма записей и значения — как в регистре «Счета учёта расчётов с контрагентами» живой базы БП 3.0.
 const E = "00000000-0000-0000-0000-000000000000";
 const ORG = "5bc0b4f6-7054-11e6-a2f5-000c29b3b732";

@@ -296,13 +296,30 @@ describe("запрет записи закрывается при сбое пр�
   });
 });
 
+/** Регистры склада и продаж, по которым узнаётся УТ: без них (неполный состав OData) запрет держался только на них. */
+const TRADE_REGISTERS = [
+  "AccumulationRegister_ТоварыНаСкладах",
+  "AccumulationRegister_ВыручкаИСебестоимостьПродаж",
+];
+
 describe("запись на снимке схемы УТ 11 отказывает до предпросмотра", () => {
   const writes = manifest.tools.filter(
     (t) => t.name.startsWith("write.") && t.name !== "write.operation.status",
   );
-  it.each(writes.map((t) => [t.name, t] as const))("%s", async (name, tool) => {
+  const cases = writes.flatMap((t) => [
+    [t.name, "полный состав", t] as const,
+    // Ревью: опубликованы только справочники и документы — запрет не узнавал УТ, и PATCH уходил в базу.
+    [t.name, "без регистров склада и продаж", t] as const,
+  ]);
+  it.each(cases)("%s — %s", async (name, variant, tool) => {
     // Без READ_ONLY: запись включена, и остановить её должна именно проверка конфигурации.
     const fake = fake1C({ READ_ONLY: "false", ODATA_WRITABLE: "true" }, { schema: "ut11" });
+    if (variant !== "полный состав") {
+      const available = await fake.conn.available();
+      vi.spyOn(fake.conn, "available").mockResolvedValue(
+        new Set([...available].filter((s) => !TRADE_REGISTERS.some((r) => s.startsWith(r)))),
+      );
+    }
     const registered = (createServer(fake.ctx) as unknown as { _registeredTools: Tools })._registeredTools[
       name
     ]!;

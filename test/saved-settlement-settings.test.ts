@@ -10,6 +10,13 @@ import { ODataError } from "../src/odata/errors.js";
 import type { EntityMeta, ODataEntity } from "../src/types/odata.js";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 
+// Заглушки схемы в этом файле без регистра бухгалтерии, а запись в такую базу запрещена. Здесь проверяется сама
+// запись в Бухгалтерию; запрет — в ut-compat.test.ts и fake-1c.test.ts на настоящих схемах.
+vi.mock("../src/odata/configuration.js", async (original) => ({
+  ...(await original<typeof import("../src/odata/configuration.js")>()),
+  withoutAccounting: async () => false,
+}));
+
 const ORG = "11111111-1111-4111-8111-111111111111";
 const CP = "22222222-2222-4222-8222-222222222222";
 const CTR = "33333333-3333-4333-8333-333333333333";

@@ -2,6 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { parseConfig } from "../src/config/env.js";
 import { createServer } from "../src/mcp/server.js";
 import { Connection } from "../src/context.js";
+
+// Заглушки схемы в этом файле без регистра бухгалтерии, а запись в такую базу запрещена. Здесь проверяется сама
+// запись в Бухгалтерию; запрет — в ut-compat.test.ts и fake-1c.test.ts на настоящих схемах.
+vi.mock("../src/odata/configuration.js", async (original) => ({
+  ...(await original<typeof import("../src/odata/configuration.js")>()),
+  withoutAccounting: async () => false,
+}));
 const id = "11111111-1111-4111-8111-111111111111";
 const special = "22222222-2222-4222-8222-222222222222";
 const line = { nomenclatureRef: id, quantity: 1, price: 1, vatRate: "БезНДС" };

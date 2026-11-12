@@ -18,7 +18,7 @@ import { registerStockTools } from "../tools/stock.js";
 import { registerItemSalesTools } from "../tools/item-sales.js";
 import { registerPartnerSettlementTools } from "../tools/partner-settlements.js";
 import { registerWarehouseTools } from "../tools/warehouses.js";
-import { tradeWithoutAccounting } from "../odata/configuration.js";
+import { tradeWithoutAccounting, withoutAccounting } from "../odata/configuration.js";
 import { registerDebtTools } from "../tools/debts.js";
 import { registerMonthCloseTools } from "../tools/month-close.js";
 import { registerCardTools } from "../tools/card.js";
@@ -410,11 +410,13 @@ export function requireDatabase(
 const WRITE_CHECKED_ELSEWHERE = new Set(["write.operation.status"]);
 
 /**
- * Запись собирает документы и справочники Бухгалтерии. В базе без Хозрасчётного (Управление торговлей) поля и
- * объекты другие, и запись не проверена ни на одной такой базе: отказ до предпросмотра, ничего не отправлено.
+ * Запись собирает документы и справочники Бухгалтерии. В базе без регистра бухгалтерии (Управление торговлей, другие
+ * небухгалтерские конфигурации) поля и объекты другие, и запись не проверена ни на одной такой базе: отказ до
+ * предпросмотра, ничего не отправлено. Признак — только регистр бухгалтерии: по регистрам склада и продаж УТ с
+ * неполным составом OData не узнавалась, и запись в неё проходила (ревью).
  * Если база не определена (несколько баз без database), решает следующая проверка — она откажет сама.
  */
-function refuseWriteToTrade(
+function refuseWriteWithoutAccounting(
   ctx: ServerContext,
   cb: (args: Record<string, unknown>, extra: unknown) => Promise<CallToolResult>,
 ): (args: Record<string, unknown>, extra: unknown) => Promise<CallToolResult> {
@@ -428,9 +430,11 @@ function refuseWriteToTrade(
         // Неизвестная база — сообщит сам инструмент, как раньше.
         return cb(args, extra);
       }
-      let trade: boolean;
+      let noAccounting: boolean;
+      let trade = false;
       try {
-        trade = await tradeWithoutAccounting(conn);
+        noAccounting = await withoutAccounting(conn);
+        if (noAccounting) trade = await tradeWithoutAccounting(conn);
       } catch (e) {
         // Защита закрывается, а не открывается: при сбое схемы инструмент сам перечитал бы её и записал (ревью:
         // первый $metadata 503 — и PATCH уходил в базу УТ).
@@ -440,11 +444,12 @@ function refuseWriteToTrade(
           "refused",
         );
       }
-      if (trade) {
+      if (noAccounting) {
         return fail(
-          "Запись поддерживается только для Бухгалтерии: в этой базе нет регистра «Хозрасчётный» (похоже, это " +
-            "Управление торговлей). Документы и справочники в ней устроены иначе, запись на такой базе не проверена. " +
-            "Ничего не записано. Если это КА или ERP, опубликуйте «Хозрасчётный» в составе OData.",
+          "Запись поддерживается только для Бухгалтерии: в этой базе не опубликован регистр бухгалтерии " +
+            `«Хозрасчётный»${trade ? " (похоже, это Управление торговлей)" : ""}. Документы и справочники в ней ` +
+            "устроены иначе, запись на такой базе не проверена. Ничего не записано. Если это Бухгалтерия, КА или ERP, " +
+            "опубликуйте «Хозрасчётный» в составе OData.",
           "refused",
         );
       }
@@ -488,7 +493,7 @@ export function createServer(ctx: ServerContext): McpServer {
     const cb =
       WRITE_CHECKED_ELSEWHERE.has(name) || !name.startsWith("write.")
         ? handler
-        : refuseWriteToTrade(ctx, handler);
+        : refuseWriteWithoutAccounting(ctx, handler);
     const appMeta = appMetaFor(name);
     const annotatedConfig = {
       ...config,
