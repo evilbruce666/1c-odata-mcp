@@ -575,3 +575,47 @@ describe("живая проверка live-read на корпусе (src/scripts
     expect(checks.filter(([, ok]) => !ok).length).toBeGreaterThan(0);
   });
 });
+
+describe("крупные страницы при серверном отборе (живой замер: 139 запросов вместо 45)", () => {
+  it("контрагент с 300 документами в одном виде, limit 500 — один запрос к 1С, как при отборе у себя", async () => {
+    const { call, counters } = await setup();
+    // Документы корпуса — по 40 на вид; добавляем крупного контрагента через тот же отбор.
+    const set = "Document_ПоступлениеНаРасчетныйСчет";
+    const extra = Array.from({ length: 300 }, (_, i) => ({
+      Ref_Key: uuid("9", i + 1),
+      Number: `БОЛ-${i}`,
+      Date: "2026-02-10T10:00:00",
+      Posted: true,
+      DeletionMark: false,
+      СуммаДокумента: 10,
+      Организация_Key: ORG(1),
+      Контрагент: CP(4),
+      Контрагент_Type: "StandardODATA.Catalog_Контрагенты",
+    }));
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const decoded = decodeURIComponent(url);
+      if (!decoded.includes(`${set}?`) || !decoded.includes("cast(")) return inner(input, init);
+      const res = await inner(input, init);
+      const body = (await res.json()) as { value: Record<string, unknown>[] };
+      const skip = Number(/\$skip=(\d+)/.exec(decoded)?.[1] ?? 0);
+      const top = Number(/\$top=(\d+)/.exec(decoded)?.[1] ?? 10_000);
+      const rows = [...body.value.filter((r) => !String(r["Number"]).startsWith("БОЛ-")), ...extra]
+        .filter((r) => r["Контрагент"] === CP(4))
+        .slice(skip, skip + top);
+      return new Response(JSON.stringify({ value: rows }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    const before = counters.requests;
+    const s = await call("read.document.search_documents", {
+      entitySet: set,
+      counterpartyRef: CP(4),
+      limit: 500,
+    });
+    // Страница короче limit — предел размера ответа; читается одна выборка из 1С.
+    expect((s["rows"] as unknown[]).length).toBeGreaterThan(100);
+    expect(counters.requests - before).toBe(1);
+  });
+});

@@ -169,7 +169,9 @@ async function searchSet(conn: Connection, set: string, p: SearchParams): Promis
       set,
       { select, filter: filter || undefined, orderby: `${DOC_FIELDS.date} desc` },
       // Отбор у себя: читаем весь период крупными страницами, иначе нужный документ может оказаться за лимитом.
-      clientSide ? ANALYTICS_PAGE : conn.behavior.pageSize,
+      // Серверный cast — тоже крупными: каждая страница поиска перечитывает документы с начала, и по 100 строк у
+      // контрагента с 1393 платежами выходило 139 запросов вместо прежних 45 (живой замер на БП 3.0, Scloud).
+      clientSide || polyServer ? ANALYTICS_PAGE : conn.behavior.pageSize,
       clientSide ? conn.behavior.analyticsMaxRows : p.limit,
     );
   } catch (e) {
