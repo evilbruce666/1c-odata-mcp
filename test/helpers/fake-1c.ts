@@ -324,6 +324,25 @@ export function fake1C(env: Record<string, string> = {}, options: FakeOptions = 
       if (!known(name.trim())) return bad("$select", name.trim());
     for (const key of ["$filter", "$orderby"] as const)
       for (const name of identifiers(params.get(key) ?? "")) if (!known(name)) return bad(key, name);
+    // Как настоящая 1С: составное поле (рядом есть «Поле_Type») с голым guid'…' не сравнивается — 500 «Нельзя
+    // сравнивать поля неограниченной длины и поля несовместимых типов»; нужно cast(guid'…', '<тип>'). Наблюдение
+    // из форка 1c-odata-mcp-kz (прод 09.11.2026), проверка написана заново.
+    const record = entityFields(`${base}_RecordType`, schema);
+    for (const [where, text, own] of [
+      ["$filter", params.get("$filter") ?? "", scope],
+      ["Condition", args["Condition"] ?? "", record ?? fields],
+    ] as const)
+      for (const m of text.matchAll(/([\wА-Яа-яЁё]+)\s+(?:eq|ne)\s+guid'/g))
+        if (own.has(`${m[1]}_Type`)) {
+          violations.push(
+            `${method} ${base}: ${where} — голый guid по составному полю «${m[1]}», нужен cast`,
+          );
+          return odataError(
+            500,
+            "Неверные параметры в операции сравнения. Нельзя сравнивать поля неограниченной длины и поля " +
+              `несовместимых типов (${m[1]})`,
+          );
+        }
 
     if (method === "POST" && (fn === "Post" || fn === "Unpost")) {
       // Как в 1С: проведение меняет признак и версию документа — инструмент сверяет их после действия.

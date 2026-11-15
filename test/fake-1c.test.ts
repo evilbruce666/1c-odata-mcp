@@ -213,6 +213,12 @@ async function call(name: string, raw: Record<string, unknown>, schema = TOOL_SC
     text.length,
     `${name}: ответ ${text.length} символов — больше ${MAX_RESPONSE_CHARS}, в контекст модели не поместится`,
   ).toBeLessThanOrEqual(MAX_RESPONSE_CHARS);
+  // Текст ответа — компактный JSON: отступы — около пятой части токенов, модель читает текст целиком (идея из форка
+  // 1c-odata-mcp-kz). Проверяется и чтение, и предпросмотр записи с обёрткой operationId.
+  if (!r.isError)
+    for (const c of r.content ?? [])
+      if (c.text && /^[[{]/.test(c.text))
+        expect(c.text, `${name}: JSON ответа с отступами`).toBe(JSON.stringify(JSON.parse(c.text)));
   // Клиент, обрезающий длинный ответ сам, не должен потерять итоги и признак неполноты.
   if (!r.isError && name.startsWith("read.") && name !== "read.system.list_databases") {
     const kinds = Object.values(r.structuredContent as object).map((v) =>
@@ -276,6 +282,29 @@ describe("все инструменты чтения на снимке схем�
         expect(UT_ALLOWED_ERRORS.has(kind ?? ""), `${name}: ${kind} — ${text.slice(0, 200)}`).toBe(true);
       }
     }
+  });
+});
+
+describe("LineNumber в строках от пользователя — не отказ и не перебивает нумерацию (форк 1c-odata-mcp-kz)", () => {
+  const withLines = manifest.tools.filter((t) => {
+    const props = t.inputSchema.properties ?? {};
+    return t.name.startsWith("write.") && ("lines" in props || "line" in props);
+  });
+  const inject = (args: Record<string, unknown>) => {
+    const out = { ...args };
+    if (Array.isArray(out.lines))
+      out.lines = (out.lines as Record<string, unknown>[]).map((l) => ({ ...l, LineNumber: 99 }));
+    if (out.line && typeof out.line === "object") out.line = { ...(out.line as object), LineNumber: 99 };
+    return out;
+  };
+  it.each(withLines.map((t) => [t.name, t] as const))("%s", async (name, tool) => {
+    const raw: Record<string, unknown> = { ...argsFor(tool), ...OVERRIDES[name] };
+    const plain = await call(name, raw);
+    const injected = await call(name, inject(raw));
+    expect(injected.r.isError ?? false, `${name}: ${injected.text.slice(0, 200)}`).toBe(
+      plain.r.isError ?? false,
+    );
+    expect(injected.text).not.toContain('"LineNumber":99');
   });
 });
 
@@ -373,6 +402,32 @@ describe("самопроверка: поддельная 1С отвечает н
     expect(fake.violations.length).toBe(1);
     return fake.violations[0]!;
   };
+
+  it("голый guid по составному полю (есть «Поле_Type») — 500, как в 1С; cast(guid, тип) проходит", async () => {
+    const ref = "11111111-1111-4111-8111-111111111111";
+    const fake = fake1C({ READ_ONLY: "true" });
+    const set = "Document_ПоступлениеНаРасчетныйСчет";
+    const v = await expectRejected(fake, () =>
+      fake.conn.client.getCollection(
+        `${set}?$format=json&$filter=${encodeURIComponent(`Контрагент eq guid'${ref}'`)}`,
+      ),
+    );
+    expect(v).toContain("составному полю «Контрагент»");
+    const ok = fake1C({ READ_ONLY: "true" });
+    await ok.conn.client.getCollection(
+      `${set}?$format=json&$filter=${encodeURIComponent(`Контрагент eq cast(guid'${ref}', 'Catalog_Контрагенты')`)}`,
+    );
+    expect(ok.violations).toEqual([]);
+    // Condition функции регистра — тоже: Склад в «Выручке и себестоимости продаж» УТ составной.
+    const ut = fake1C({ READ_ONLY: "true" }, { schema: "ut11" });
+    const cond = (value: string) =>
+      `AccumulationRegister_ВыручкаИСебестоимостьПродаж/Turnovers(Condition='${value.replace(/'/g, "''")}')?$format=json`;
+    await expect(ut.conn.client.getCollection(cond(`Склад eq guid'${ref}'`))).rejects.toThrow();
+    expect(ut.violations).toHaveLength(1);
+    const ut2 = fake1C({ READ_ONLY: "true" }, { schema: "ut11" });
+    await ut2.conn.client.getCollection(cond(`Склад eq cast(guid'${ref}', 'Catalog_Склады')`));
+    expect(ut2.violations).toEqual([]);
+  });
 
   it("поле, которого нет у объекта, в $select / $filter", async () => {
     const fake = fake1C({ READ_ONLY: "true" });
