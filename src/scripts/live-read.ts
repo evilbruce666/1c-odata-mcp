@@ -11,6 +11,7 @@
  * Проверяет: health_check; все инструменты чтения без обязательных аргументов; проводки последних
  * проведённых документов — что субконто действительно приходят (dimensionsStatus), а не только что
  * ответ есть. Именно такой прогон нашёл, что на БП 3.0 записи регистра субконто не публикуют (#49).
+ * Серверный отбор по полиморфному «Контрагент» банка и кассы (cast) — против прежнего отбора у себя, см. live-poly.ts.
  * Код возврата 1 — если хоть одна проверка не прошла.
  */
 import { randomBytes } from "node:crypto";
@@ -59,8 +60,10 @@ if (OVER_HTTP) {
 async function main(): Promise<number> {
   const blockedWrites: string[] = [];
   const realFetch = globalThis.fetch;
+  let requestCount = 0;
   globalThis.fetch = async (input, init) => {
     const method = (init?.method ?? "GET").toUpperCase();
+    requestCount++;
     if (method !== "GET" && method !== "HEAD") {
       blockedWrites.push(method);
       throw new Error(`live-read: ${method} заблокирован — прогон только на чтение`);
@@ -193,6 +196,8 @@ async function main(): Promise<number> {
       );
     }
   }
+  const { checkPolyCounterparty } = await import("./live-poly.js");
+  for (const db of dbs) await checkPolyCounterparty(ctx, db, run, check, line, () => requestCount);
   check("ни одной попытки записи", blockedWrites.length === 0, blockedWrites.join(", "));
   if (http) {
     check("по HTTP видно только чтение", http.writeTools === 0, `инструментов записи: ${http.writeTools}`);

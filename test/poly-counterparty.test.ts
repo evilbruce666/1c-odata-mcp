@@ -3,6 +3,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "../src/mcp/server.js";
 import { matchesIncomingNumber, matchesOwnNumber, parseNumberQuery } from "../src/odata/doc-number.js";
 import { fake1C } from "./helpers/fake-1c.js";
+import { checkPolyCounterparty } from "../src/scripts/live-poly.js";
 
 /**
  * Отбор по полиморфному «Контрагент» банковских и кассовых документов. Корпус: документы, где в «Контрагент» лежат
@@ -304,7 +305,17 @@ async function setup(opts: { rejectCast?: boolean; ut?: boolean } = {}) {
     if (r.isError) throw new Error(`${name}: ${text}`);
     return r.structuredContent!;
   };
-  return { docs, call, counters, fake };
+  /** Вызов как в live-read: ошибка — не исключение, а err с текстом. */
+  const run = async (name: string, args: Record<string, unknown>) => {
+    const tool = tools[name]!;
+    const r = await tool.handler(tool.inputSchema!.parse(args), {});
+    return {
+      err: !!r.isError,
+      sc: r.structuredContent ?? {},
+      text: (r.content ?? []).map((c) => c.text ?? "").join(""),
+    };
+  };
+  return { docs, call, run, counters, fake };
 }
 
 // ---------- Эталон: отбор по данным корпуса, ссылка сравнивается без типа. ----------
@@ -522,5 +533,45 @@ describe("УТ: типизированный Контрагент_Key — отб
       outflow: sum(false),
     });
     expect(s["note"]).toBeUndefined();
+  });
+});
+
+describe("живая проверка live-read на корпусе (src/scripts/live-poly.ts)", () => {
+  const live = async (opts: { rejectCast?: boolean; dropFirstRow?: boolean }) => {
+    const { run, counters, fake } = await setup(opts);
+    const checks: Array<[string, boolean, string]> = [];
+    const lines: string[] = [];
+    // Испорченный инструмент: теряет первый документ в каждом ответе поиска.
+    const tool = opts.dropFirstRow
+      ? async (name: string, args: Record<string, unknown>) => {
+          const r = await run(name, args);
+          if (name === "read.document.search_documents" && Array.isArray(r.sc["rows"]))
+            r.sc["rows"] = (r.sc["rows"] as unknown[]).slice(1);
+          return r;
+        }
+      : run;
+    await checkPolyCounterparty(
+      fake.ctx,
+      fake.conn.cfg.name,
+      tool,
+      (name, ok, detail = "") => checks.push([name, ok, detail]),
+      (s) => lines.push(s),
+      () => counters.requests,
+    );
+    return { checks, lines };
+  };
+
+  it.each([false, true])("1С отвергает cast: %s — все ссылки совпали с эталоном", async (rejectCast) => {
+    const { checks, lines } = await live({ rejectCast });
+    // Три частых контрагента, физлицо или сотрудник, контрагент без документов, неизвестный guid.
+    expect(checks.length).toBe(6);
+    expect(checks.filter(([, ok]) => !ok)).toEqual([]);
+    expect(lines.join("\n")).toContain(rejectCast ? "cast отвергнут" : "cast принят");
+    expect(lines.join("\n")).toContain("расхождений: 0");
+  });
+
+  it("ловит расхождение: инструмент потерял документ — проверка не проходит", async () => {
+    const { checks } = await live({ dropFirstRow: true });
+    expect(checks.filter(([, ok]) => !ok).length).toBeGreaterThan(0);
   });
 });
