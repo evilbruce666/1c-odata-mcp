@@ -134,6 +134,9 @@ export async function checkPolyCounterparty(
     // search_documents: все страницы, только полиморфные виды.
     const got: string[] = [];
     const notes: string[] = [];
+    // Поиск не дошёл до конца: ошибка, упавший вид (failed) или упор в предел (cappedSets). Пустой список при пустом
+    // эталоне иначе дал бы ✓ (ревью).
+    const broken: string[] = [];
     const start = requests();
     for (const kind of SEARCH_KINDS) {
       let offset = 0;
@@ -148,9 +151,13 @@ export async function checkPolyCounterparty(
           offset,
         });
         if (r.err) {
-          notes.push(`ошибка: ${r.text.slice(0, 120)}`);
+          broken.push(`ошибка поиска (${kind}): ${r.text.slice(0, 120)}`);
           break;
         }
+        for (const f of (r.sc["failed"] as Json[] | undefined) ?? [])
+          broken.push(`вид ${String(f["entitySet"])} не прочитан: ${String(f["error"]).slice(0, 80)}`);
+        if (Array.isArray(r.sc["cappedSets"]) && r.sc["cappedSets"].length)
+          broken.push(`выборка упёрлась в предел: ${(r.sc["cappedSets"] as string[]).join(", ")}`);
         for (const row of (r.sc["rows"] as Json[] | undefined) ?? [])
           if (searchSets.includes(String(row["entitySet"]))) got.push(norm(row["ref"]));
         if (typeof r.sc["counterpartyFilter"] === "string") notes.push(r.sc["counterpartyFilter"]);
@@ -159,7 +166,9 @@ export async function checkPolyCounterparty(
       }
     }
     const wantRefs = want.map((d) => d.ref).sort();
-    const sameDocs = JSON.stringify([...new Set(got)].sort()) === JSON.stringify(wantRefs);
+    const duplicates = got.length - new Set(got).size;
+    if (duplicates) broken.push(`документ повторился на страницах: ${duplicates}`);
+    const sameDocs = broken.length === 0 && JSON.stringify([...got].sort()) === JSON.stringify(wantRefs);
 
     // get_payments_breakdown: проведённые, итоги в копейках.
     let samePayments = true;
@@ -193,7 +202,7 @@ export async function checkPolyCounterparty(
       `${db}: cast «Контрагент» — ${label}`,
       sameDocs && samePayments,
       `документов ${new Set(got).size} (эталон ${wantRefs.length})${paymentsDetail ? `, ${paymentsDetail}` : ""}` +
-        `${text ? ` | ${text.slice(0, 140)}` : ""}`,
+        `${broken.length ? ` | ${broken.join("; ").slice(0, 200)}` : ""}${text ? ` | ${text.slice(0, 140)}` : ""}`,
     );
   }
   line(

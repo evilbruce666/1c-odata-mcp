@@ -90,6 +90,8 @@ type SetResult =
       counterpartyNote?: string;
       /** Отбор по полиморфному «Контрагент» прошёл на сервере (cast): пустой итог ещё нужно проверить. */
       polyServer?: boolean;
+      /** Отбор по типизированному Контрагент_Key: найденное — тоже доказательство, что ссылка — контрагент. */
+      typedCounterparty?: boolean;
     }
   | { set: string; skipped: string };
 
@@ -108,9 +110,11 @@ async function searchSet(conn: Connection, set: string, p: SearchParams): Promis
   let cpClientRef: string | undefined;
   let counterpartyNote: string | undefined;
   let polyServer = false;
+  let typedCounterparty = false;
   if (p.counterpartyRef) {
     if (props.has(DOC_FIELDS.counterparty)) {
       cpServer = cmp(DOC_FIELDS.counterparty, "eq", odataGuid(p.counterpartyRef));
+      typedCounterparty = true;
     } else if (props.has(POLY_COUNTERPARTY) && p.polyMode !== "client") {
       cpServer = polyCounterpartyFilter(await conn.available(), p.counterpartyRef);
       polyServer = true;
@@ -203,13 +207,16 @@ async function searchSet(conn: Connection, set: string, p: SearchParams): Promis
     capHit: clientSide && truncated,
     ...(counterpartyNote ? { counterpartyNote } : {}),
     ...(polyServer ? { polyServer } : {}),
+    ...(typedCounterparty ? { typedCounterparty } : {}),
   };
 }
 
 /**
  * Серверный отбор по полиморфному «Контрагент» находит только контрагентов. Если он ничего не нашёл ни в одном виде,
  * а ссылка не контрагент (физлицо, сотрудник), эти виды перечитываются прежним способом — одна проверка вместо
- * молчаливой потери платежей. Найдено хоть что-то — ссылка точно контрагент, проверка не нужна.
+ * молчаливой потери платежей. Найдено серверным cast или по Контрагент_Key — ссылка точно контрагент, проверка не
+ * нужна. Найденное после отката на отбор у себя (1С не приняла cast) не доказательство: там бывают и физлица —
+ * ревью: при отказе cast в одном виде документы физлица в остальных видах терялись молча.
  */
 async function recheckPoly(
   conn: Connection,
@@ -219,8 +226,8 @@ async function recheckPoly(
   rethrow = false,
 ): Promise<Array<SetResult | { set: string; error: string }>> {
   const found = results.filter((r): r is Extract<SetResult, { rows: unknown }> => "rows" in r);
-  if (!p.counterpartyRef || !found.some((r) => r.polyServer) || found.some((r) => r.rows.length > 0))
-    return results;
+  const proves = (r: (typeof found)[number]) => (r.polyServer || r.typedCounterparty) && r.rows.length > 0;
+  if (!p.counterpartyRef || !found.some((r) => r.polyServer) || found.some(proves)) return results;
   if (await isCounterparty(conn, p.counterpartyRef)) return results;
   const out: Array<SetResult | { set: string; error: string }> = [];
   for (const r of results) {

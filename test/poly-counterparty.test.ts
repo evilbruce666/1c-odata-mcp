@@ -217,7 +217,7 @@ interface Counters {
   bytes: number;
 }
 
-async function setup(opts: { rejectCast?: boolean; ut?: boolean } = {}) {
+async function setup(opts: { rejectCast?: boolean; rejectIn?: string[]; ut?: boolean } = {}) {
   const docs = opts.ut ? utCorpus() : corpus();
   const fake = fake1C(
     { READ_ONLY: "true" },
@@ -250,7 +250,10 @@ async function setup(opts: { rejectCast?: boolean; ut?: boolean } = {}) {
     const decoded = decodeURIComponent(url);
     if (decoded.includes("$metadata")) return inner(input, init);
     counters.requests++;
-    if (opts.rejectCast && /\$filter=[^&]*Контрагент eq cast\(/.test(decoded))
+    const rejected =
+      /\$filter=[^&]*Контрагент eq cast\(/.test(decoded) &&
+      (opts.rejectCast || (opts.rejectIn ?? []).some((set) => decoded.includes(`/${set}?`)));
+    if (rejected)
       return new Response(
         JSON.stringify({
           "odata.error": {
@@ -537,19 +540,27 @@ describe("УТ: типизированный Контрагент_Key — отб
 });
 
 describe("живая проверка live-read на корпусе (src/scripts/live-poly.ts)", () => {
-  const live = async (opts: { rejectCast?: boolean; dropFirstRow?: boolean }) => {
+  const live = async (opts: {
+    rejectCast?: boolean;
+    dropFirstRow?: boolean;
+    failEmptySearch?: boolean;
+    duplicateRow?: boolean;
+  }) => {
     const { run, counters, fake } = await setup(opts);
     const checks: Array<[string, boolean, string]> = [];
     const lines: string[] = [];
     // Испорченный инструмент: теряет первый документ в каждом ответе поиска.
-    const tool = opts.dropFirstRow
-      ? async (name: string, args: Record<string, unknown>) => {
-          const r = await run(name, args);
-          if (name === "read.document.search_documents" && Array.isArray(r.sc["rows"]))
-            r.sc["rows"] = (r.sc["rows"] as unknown[]).slice(1);
-          return r;
-        }
-      : run;
+    const tool = async (name: string, args: Record<string, unknown>) => {
+      const r = await run(name, args);
+      if (name !== "read.document.search_documents" || !Array.isArray(r.sc["rows"])) return r;
+      const rows = r.sc["rows"] as unknown[];
+      if (opts.dropFirstRow) r.sc["rows"] = rows.slice(1);
+      // Поиск упал у ссылки без документов: пустой ответ совпал бы с пустым эталоном (ревью).
+      if (opts.failEmptySearch && rows.length === 0)
+        return { err: true, sc: {}, text: "Превышен таймаут запроса" };
+      if (opts.duplicateRow && rows.length) r.sc["rows"] = [...rows, rows[0]];
+      return r;
+    };
     await checkPolyCounterparty(
       fake.ctx,
       fake.conn.cfg.name,
@@ -570,8 +581,12 @@ describe("живая проверка live-read на корпусе (src/scripts
     expect(lines.join("\n")).toContain("расхождений: 0");
   });
 
-  it("ловит расхождение: инструмент потерял документ — проверка не проходит", async () => {
-    const { checks } = await live({ dropFirstRow: true });
+  it.each([
+    ["потерял документ", { dropFirstRow: true }],
+    ["упал на ссылке без документов", { failEmptySearch: true }],
+    ["повторил документ", { duplicateRow: true }],
+  ] as const)("ловит испорченный поиск: %s — проверка не проходит", async (_name, opts) => {
+    const { checks } = await live(opts);
     expect(checks.filter(([, ok]) => !ok).length).toBeGreaterThan(0);
   });
 });
@@ -618,4 +633,30 @@ describe("крупные страницы при серверном отборе
     expect((s["rows"] as unknown[]).length).toBeGreaterThan(100);
     expect(counters.requests - before).toBe(1);
   });
+});
+
+describe("1С отвергает cast только в одном виде (ревью: документы физлица в остальных видах терялись молча)", () => {
+  const rejectIn = ["Document_СписаниеСРасчетногоСчета"];
+  for (const [refName, ref] of REFS) {
+    it(`search_documents, все виды · ${refName}`, async () => {
+      const { docs, call } = await setup({ rejectIn });
+      const c: SearchCase = { ref };
+      const got = await searchAll(call, c);
+      expect([...got.refs].sort()).toEqual(expectedSearch(docs, c));
+      expect([...got.notes].join(" ")).toContain("не приняла серверный отбор");
+    });
+    it(`get_payments_breakdown, расход · ${refName}`, async () => {
+      const { docs, call } = await setup({ rejectIn });
+      const c: PayCase = { ref, direction: "out", groupBy: "operation" };
+      const s = await call("read.analytics.get_payments_breakdown", {
+        from: "2026-01-01",
+        to: "2026-03-31",
+        counterpartyRef: ref,
+        direction: "out",
+        groupBy: "operation",
+      });
+      const want = expectedPayments(docs, c);
+      expect({ documents: s["documents"], inflow: s["inflow"], outflow: s["outflow"] }).toEqual(want);
+    });
+  }
 });

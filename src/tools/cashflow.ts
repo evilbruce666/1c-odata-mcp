@@ -268,10 +268,14 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           ),
         );
         // cast находит только контрагентов: пусто везде, а ссылка не контрагент (физлицо, сотрудник) — перечитать.
+        // Доказательство «это контрагент» — только строки серверного отбора (cast или Контрагент_Key). Вид после отказа
+        // cast читается целиком, его строки ничего не доказывают (ревью: при отказе в одном виде терялись РКО физлица).
+        const proves = (r: (typeof results)[number]) =>
+          (r.plan.polyServer || !!r.plan.cp?.serverFilterable) && r.rows.length > 0;
         if (
           cpRef &&
           results.some((r) => r.plan.polyServer) &&
-          results.every((r) => r.rows.length === 0) &&
+          !results.some(proves) &&
           !(await isCounterparty(conn, cpRef))
         )
           results = await Promise.all(
