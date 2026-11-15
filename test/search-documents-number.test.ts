@@ -1,3 +1,4 @@
+import { ODataError } from "../src/odata/errors.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { createServer } from "../src/mcp/server.js";
@@ -211,6 +212,14 @@ describe("search_documents: номер, вид и поиск по основны
     }));
     vi.spyOn(f.conn.client, "getCollection").mockImplementation(async (url: string) => {
       const u = decodeURIComponent(url);
+      // 1С, где серверный отбор по полиморфному полю не работает: откат на отбор у себя, он и упирается в предел.
+      if (u.includes("cast("))
+        throw new ODataError({
+          kind: "server",
+          status: 500,
+          retryable: false,
+          message: "Нельзя сравнивать поля",
+        });
       const top = Number(/\$top=(\d+)/.exec(u)?.[1] ?? rows.length);
       const skip = Number(/\$skip=(\d+)/.exec(u)?.[1] ?? 0);
       return { value: rows.slice(skip, skip + top) as never[] };
@@ -220,6 +229,9 @@ describe("search_documents: номер, вид и поиск по основны
       truncated: true,
       cappedSets: ["Document_ПоступлениеНаРасчетныйСчет"],
     });
+    expect((r.structuredContent as { counterpartyFilter?: string }).counterpartyFilter).toContain(
+      "не приняла",
+    );
     expect((r.structuredContent as { nextOffset?: number }).nextOffset).toBeUndefined();
   });
 });

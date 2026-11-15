@@ -17,11 +17,19 @@ import {
 } from "../odata/doc-number.js";
 import type { DocumentSummary } from "../types/domain.js";
 import type { ODataEntity } from "../types/odata.js";
+import {
+  POLY_COUNTERPARTY,
+  POLY_NOT_COUNTERPARTY_NOTE,
+  POLY_REJECTED_NOTE,
+  isCounterparty,
+  polyCounterpartyFilter,
+  rejectedByOneC,
+  type PolyMode,
+} from "../odata/poly-counterparty.js";
 import { searchDocumentsResultSchema, odataEntitySchema } from "../schemas/output.js";
 
 /** Входящий номер — номер документа контрагента (накладной поставщика, платёжки покупателя). */
 const INCOMING_NUMBER = "НомерВходящегоДокумента";
-const POLY_COUNTERPARTY = "Контрагент";
 
 /**
  * Виды документов простыми словами — чтобы не угадывать технические имена. Без вида и без
@@ -67,11 +75,22 @@ interface SearchParams {
   limit: number;
   /** Явно заданный тип без поля контрагента: искать без фильтра с пометкой (как было), а не пропускать. */
   ignoreMissingCounterparty?: boolean;
+  /** Полиморфный «Контрагент»: отбор на сервере (cast) или на стороне коннектора. По умолчанию — на сервере. */
+  polyMode?: PolyMode;
+  /** Почему отбор по полиморфному полю на стороне коннектора — в counterpartyNote. */
+  polyNote?: string;
 }
 
 /** Итог по одному типу: строки или причина, по которой фильтр к типу неприменим. */
 type SetResult =
-  | { set: string; rows: DocumentSummary[]; capHit: boolean; counterpartyNote?: string }
+  | {
+      set: string;
+      rows: DocumentSummary[];
+      capHit: boolean;
+      counterpartyNote?: string;
+      /** Отбор по полиморфному «Контрагент» прошёл на сервере (cast): пустой итог ещё нужно проверить. */
+      polyServer?: boolean;
+    }
   | { set: string; skipped: string };
 
 async function searchSet(conn: Connection, set: string, p: SearchParams): Promise<SetResult> {
@@ -83,18 +102,22 @@ async function searchSet(conn: Connection, set: string, p: SearchParams): Promis
   if (p.orgKey && !props.has(DOC_FIELDS.organization))
     return { set, skipped: "нет поля организации — фильтр по организации неприменим" };
 
-  // Контрагент бывает типизированным (Контрагент_Key — фильтруем на сервере)
-  // или полиморфным (Контрагент: Edm.String — в 1С серверный eq/substringof по
-  // нему не работает, поэтому фильтруем на стороне коннектора).
+  // Контрагент бывает типизированным (Контрагент_Key) или полиморфным (Контрагент + Контрагент_Type): второй
+  // 1С сравнивает только через cast, и он находит лишь контрагентов — см. poly-counterparty.ts.
   let cpServer: string | undefined;
   let cpClientRef: string | undefined;
   let counterpartyNote: string | undefined;
+  let polyServer = false;
   if (p.counterpartyRef) {
     if (props.has(DOC_FIELDS.counterparty)) {
       cpServer = cmp(DOC_FIELDS.counterparty, "eq", odataGuid(p.counterpartyRef));
+    } else if (props.has(POLY_COUNTERPARTY) && p.polyMode !== "client") {
+      cpServer = polyCounterpartyFilter(await conn.available(), p.counterpartyRef);
+      polyServer = true;
     } else if (props.has(POLY_COUNTERPARTY)) {
       cpClientRef = p.counterpartyRef.replace(/[{}]/g, "").trim().toLowerCase();
       counterpartyNote =
+        p.polyNote ??
         "Контрагент в этом документе хранится полиморфно — фильтр применён на стороне коннектора.";
     } else if (p.ignoreMissingCounterparty) {
       counterpartyNote =
@@ -139,14 +162,23 @@ async function searchSet(conn: Connection, set: string, p: SearchParams): Promis
 
   // При клиентской фильтрации тянем больше строк (до maxRows), затем режем до limit.
   const clientSide = !!cpClientRef || !!q;
-  const { rows, truncated } = await fetchAll(
-    conn.client,
-    set,
-    { select, filter: filter || undefined, orderby: `${DOC_FIELDS.date} desc` },
-    // Отбор у себя: читаем весь период крупными страницами, иначе нужный документ может оказаться за лимитом.
-    clientSide ? ANALYTICS_PAGE : conn.behavior.pageSize,
-    clientSide ? conn.behavior.analyticsMaxRows : p.limit,
-  );
+  let fetched;
+  try {
+    fetched = await fetchAll(
+      conn.client,
+      set,
+      { select, filter: filter || undefined, orderby: `${DOC_FIELDS.date} desc` },
+      // Отбор у себя: читаем весь период крупными страницами, иначе нужный документ может оказаться за лимитом.
+      clientSide ? ANALYTICS_PAGE : conn.behavior.pageSize,
+      clientSide ? conn.behavior.analyticsMaxRows : p.limit,
+    );
+  } catch (e) {
+    // 1С не приняла cast — тот же вид прежним способом, а не пустой ответ или отказ.
+    if (polyServer && rejectedByOneC(e))
+      return searchSet(conn, set, { ...p, polyMode: "client", polyNote: POLY_REJECTED_NOTE });
+    throw e;
+  }
+  const { rows, truncated } = fetched;
   const matched = rows.filter(
     (r) =>
       (!cpClientRef ||
@@ -168,7 +200,42 @@ async function searchSet(conn: Connection, set: string, p: SearchParams): Promis
     // Лимит выборки важен только при отборе на стороне коннектора: иначе limit и есть размер страницы.
     capHit: clientSide && truncated,
     ...(counterpartyNote ? { counterpartyNote } : {}),
+    ...(polyServer ? { polyServer } : {}),
   };
+}
+
+/**
+ * Серверный отбор по полиморфному «Контрагент» находит только контрагентов. Если он ничего не нашёл ни в одном виде,
+ * а ссылка не контрагент (физлицо, сотрудник), эти виды перечитываются прежним способом — одна проверка вместо
+ * молчаливой потери платежей. Найдено хоть что-то — ссылка точно контрагент, проверка не нужна.
+ */
+async function recheckPoly(
+  conn: Connection,
+  results: Array<SetResult | { set: string; error: string }>,
+  p: SearchParams,
+  /** Один явно заданный вид: ошибка повторного чтения — как есть, со своим видом ошибки 1С. */
+  rethrow = false,
+): Promise<Array<SetResult | { set: string; error: string }>> {
+  const found = results.filter((r): r is Extract<SetResult, { rows: unknown }> => "rows" in r);
+  if (!p.counterpartyRef || !found.some((r) => r.polyServer) || found.some((r) => r.rows.length > 0))
+    return results;
+  if (await isCounterparty(conn, p.counterpartyRef)) return results;
+  const out: Array<SetResult | { set: string; error: string }> = [];
+  for (const r of results) {
+    if (!("rows" in r) || !r.polyServer) {
+      out.push(r);
+      continue;
+    }
+    try {
+      out.push(
+        await searchSet(conn, r.set, { ...p, polyMode: "client", polyNote: POLY_NOT_COUNTERPARTY_NOTE }),
+      );
+    } catch (e) {
+      if (rethrow) throw e;
+      out.push({ set: r.set, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  return out;
 }
 
 export function registerDocumentTools(server: McpServer, ctx: ServerContext): void {
@@ -249,7 +316,10 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
         };
 
         if (entitySet) {
-          const r = await searchSet(conn, entitySet, { ...params, ignoreMissingCounterparty: true });
+          const one = { ...params, ignoreMissingCounterparty: true };
+          const [r] = (await recheckPoly(conn, [await searchSet(conn, entitySet, one)], one, true)) as [
+            SetResult,
+          ];
           // Явно заданный тип: неприменимый фильтр — отказ, а не молчаливый пропуск.
           if ("skipped" in r)
             throw new InputError(
@@ -285,7 +355,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
           );
         // Виды — по одному: облачная 1С (1cfresh) одновременные запросы не ускоряет, а тормозит —
         // замер на живой базе: 8 запросов подряд 7,5 с, одновременно 32 с.
-        const results: Array<SetResult | { set: string; error: string }> = [];
+        let results: Array<SetResult | { set: string; error: string }> = [];
         for (const set of sets) {
           try {
             results.push(await searchSet(conn, set, params));
@@ -293,12 +363,16 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
             results.push({ set, error: e instanceof Error ? e.message : String(e) });
           }
         }
+        results = await recheckPoly(conn, results, params);
         const found = results.filter((r): r is Extract<SetResult, { rows: unknown }> => "rows" in r);
         const failed = results.filter((r): r is { set: string; error: string } => "error" in r);
         if (found.length === 0 && failed.length > 0)
           throw new InputError(`Поиск не удался ни по одному виду документов: ${failed[0]!.error}`);
         const merged = found.flatMap((r) => r.rows).sort(byNumberMatchThenDate);
+        // Как отобран контрагент в отдельных видах (откат серверного отбора, полиморфное поле) — в ответ, а не теряется.
+        const cpNotes = [...new Set(found.flatMap((r) => (r.counterpartyNote ? [r.counterpartyNote] : [])))];
         const head = {
+          ...(cpNotes.length ? { counterpartyFilter: cpNotes.join(" ") } : {}),
           searched: found.map((r) => ({ entitySet: r.set, found: r.rows.length })),
           ...(results.some((r) => "skipped" in r)
             ? {

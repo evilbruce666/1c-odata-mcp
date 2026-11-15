@@ -1,4 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/server";
+import {
+  POLY_NOT_COUNTERPARTY_NOTE,
+  POLY_REJECTED_NOTE,
+  isCounterparty,
+  polyCounterpartyFilter,
+  rejectedByOneC,
+} from "../odata/poly-counterparty.js";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
 import {
@@ -47,9 +54,9 @@ async function propsOf(conn: Connection, set: string): Promise<Set<string>> {
 }
 
 /**
- * Имя поля контрагента в документе: типизированное `Контрагент_Key` (можно
- * фильтровать на сервере) или полиморфное `Контрагент` (Edm.String — фильтруется
- * только на клиенте, серверный eq/substringof по нему в 1С не работает).
+ * Имя поля контрагента в документе: типизированное `Контрагент_Key` (голый guid — на сервере) или полиморфное
+ * `Контрагент` (рядом Контрагент_Type): его 1С сравнивает только через cast, а cast находит лишь контрагентов —
+ * см. poly-counterparty.ts.
  */
 function counterpartyField(props: Set<string>): { field: string; serverFilterable: boolean } | undefined {
   if (props.has("Контрагент_Key")) return { field: "Контрагент_Key", serverFilterable: true };
@@ -179,6 +186,10 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           hasCfi: boolean;
           op: string | undefined;
           baseFilter: string | undefined;
+          /** Отбор по полиморфному «Контрагент» на сервере (cast); false — на стороне коннектора, как раньше. */
+          polyServer: boolean;
+          /** Тот же отбор без контрагента — для отбора на стороне коннектора. */
+          clientFilter: string | undefined;
           select: string[];
         }
         const plans: Plan[] = [];
@@ -193,38 +204,79 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           const cp = counterpartyField(props);
           const op = operationField(props);
 
-          const baseFilter =
+          const polyServer = !!cpRef && !!cp && !cp.serverFilterable;
+          const filterWith = (cpClause: string | undefined) =>
             and(
               org ? cmp(DOC_FIELDS.organization, "eq", odataGuid(org.ref)) : undefined,
               cmp(DOC_FIELDS.posted, "eq", "true"),
               purposeContains && hasPurpose ? contains("НазначениеПлатежа", purposeContains) : undefined,
-              cpRef && cp?.serverFilterable ? cmp(cp.field, "eq", odataGuid(cpRef)) : undefined,
+              cpClause,
               hasCfi ? cashflowItemFilter(itemRefs) : undefined,
             ) || undefined;
+          const baseFilter = filterWith(
+            cpRef && cp
+              ? cp.serverFilterable
+                ? cmp(cp.field, "eq", odataGuid(cpRef))
+                : polyCounterpartyFilter(available, cpRef)
+              : undefined,
+          );
+          const clientFilter = filterWith(undefined);
 
           const select: string[] = [DOC_FIELDS.date, DOC_FIELDS.amount];
           if (cp) select.push(cp.field);
           if (op) select.push(op);
           if (hasCfi) select.push("СтатьяДвиженияДенежныхСредств_Key");
 
-          plans.push({ set, isIn: inSets.has(candidate), cp, hasCfi, op, baseFilter, select });
+          plans.push({
+            set,
+            isIn: inSets.has(candidate),
+            cp,
+            hasCfi,
+            op,
+            baseFilter,
+            polyServer,
+            clientFilter,
+            select,
+          });
         }
         if (plans.length === 0) {
           return fail("Банковские/кассовые документы не опубликованы в OData. Добавьте их в «Состав OData».");
         }
 
+        const notes = new Set<string>();
+        const collect = (p: Plan) =>
+          collectDocuments(conn, p.set, {
+            baseFilter: p.baseFilter,
+            dateField: DOC_FIELDS.date,
+            from,
+            to,
+            select: p.select,
+          }).then((r) => ({ plan: p, rows: r.rows, meta: r.meta }));
+        // Полиморфный «Контрагент» прежним способом: все документы периода, отбор на стороне коннектора.
+        const asClient = (p: Plan, note: string) => {
+          notes.add(note);
+          return collect({ ...p, polyServer: false, baseFilter: p.clientFilter });
+        };
         // Параллельная выборка по видам документов (авто-чанкинг + громкое переполнение внутри).
-        const results = await Promise.all(
+        let results = await Promise.all(
           plans.map((p) =>
-            collectDocuments(conn, p.set, {
-              baseFilter: p.baseFilter,
-              dateField: DOC_FIELDS.date,
-              from,
-              to,
-              select: p.select,
-            }).then((r) => ({ plan: p, rows: r.rows, meta: r.meta })),
+            collect(p).catch((e: unknown) => {
+              // 1С не приняла cast — этот вид прежним способом, а не отказ всего отчёта.
+              if (p.polyServer && rejectedByOneC(e)) return asClient(p, POLY_REJECTED_NOTE);
+              throw e;
+            }),
           ),
         );
+        // cast находит только контрагентов: пусто везде, а ссылка не контрагент (физлицо, сотрудник) — перечитать.
+        if (
+          cpRef &&
+          results.some((r) => r.plan.polyServer) &&
+          results.every((r) => r.rows.length === 0) &&
+          !(await isCounterparty(conn, cpRef))
+        )
+          results = await Promise.all(
+            results.map((r) => (r.plan.polyServer ? asClient(r.plan, POLY_NOT_COUNTERPARTY_NOTE) : r)),
+          );
 
         const buckets = new Map<string, Bucket>();
         const bump = (key: string, cents: number, isIn: boolean): void => {
@@ -246,7 +298,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
           meta = addMeta(meta, m);
           for (const r of rows) {
             const cpNorm = plan.cp ? normGuid(r[plan.cp.field]) : "";
-            if (cpRef && !(plan.cp?.serverFilterable ?? false) && cpNorm !== cpRef) continue;
+            if (cpRef && !(plan.cp?.serverFilterable || plan.polyServer) && cpNorm !== cpRef) continue;
             if (kindSet && (!cpNorm || !kindSet.has(cpNorm))) continue;
             const operation = plan.op ? String(r[plan.op] ?? "") : "";
             if (opType && operation !== opType) continue;
@@ -318,6 +370,7 @@ export function registerCashflowTools(server: McpServer, ctx: ServerContext): vo
             ...(operationType ? { operationType } : {}),
           },
           groupBy,
+          ...(notes.size ? { note: [...notes].join(" ") } : {}),
           documents: docCount,
           inflow: fromCents(inflowC),
           outflow: fromCents(outflowC),
