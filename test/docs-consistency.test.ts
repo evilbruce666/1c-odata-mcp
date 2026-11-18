@@ -131,7 +131,9 @@ describe("документация совпадает с кодом", () => {
     expect(readme).toContain(
       `${names.length} ${toolsWord(names.length)} (${reads} чтение/аналитика + ${writes} записей)`,
     );
-    expect(readme).toContain(`У всех ${names.length} инструментов`);
+    // Родительный падеж: «у всех 81 инструмента», «у всех 80 инструментов».
+    const genitive = names.length % 10 === 1 && names.length % 100 !== 11 ? "инструмента" : "инструментов";
+    expect(readme).toContain(`У всех ${names.length} ${genitive}`);
     expect(pkg.description).toContain(`${names.length} tools`);
     expect(manifest.long_description).toContain(`${names.length} ${toolsWord(names.length)}`);
   });

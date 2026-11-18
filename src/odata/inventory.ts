@@ -73,6 +73,8 @@ export interface ItemGroup {
   ref: string;
   name: string;
   parent?: string;
+  code?: string;
+  deletionMark?: boolean;
 }
 
 /** Все группы (папки) справочника номенклатуры. */
@@ -82,19 +84,31 @@ export function loadItemGroups(conn: Connection, set: string): Promise<ItemGroup
       conn,
       `inventory-groups:${set}`,
       async () => {
+        const props = await propsOf(conn, set);
         const { rows } = await fetchAllForAggregation(
           conn,
           set,
-          { filter: cmp("IsFolder", "eq", "true"), select: ["Ref_Key", "Description", "Parent_Key"] },
+          {
+            filter: cmp("IsFolder", "eq", "true"),
+            select: [
+              "Ref_Key",
+              "Description",
+              "Parent_Key",
+              ...["Code", "DeletionMark"].filter((f) => props.has(f)),
+            ],
+          },
           "группы номенклатуры",
           CATALOG_PAGE,
         );
         return rows.map((r) => {
           const parent = refOf(r["Parent_Key"]);
+          const code = typeof r["Code"] === "string" ? r["Code"].trim() : "";
           return {
             ref: String(r["Ref_Key"]),
             name: String(r["Description"] ?? ""),
             ...(parent ? { parent } : {}),
+            ...(code ? { code } : {}),
+            ...(r["DeletionMark"] === true ? { deletionMark: true } : {}),
           };
         });
       },
@@ -203,8 +217,8 @@ export function resolveItemGroup(query: string, groups: readonly ItemGroup[]): I
           ? path
           : part;
   if (found.length === 1) return found[0]!;
-  if (!found.length) throw new InputError(`Группа номенклатуры "${query}" не найдена.`);
   const index = new Map(groups.map((g) => [g.ref, g]));
+  if (!found.length) throw new InputError(notFoundText(query, groups, index));
   const shown = found
     .map((g) => `${pathIn(g, index)} (${g.ref})`)
     .sort()
@@ -215,6 +229,40 @@ export function resolveItemGroup(query: string, groups: readonly ItemGroup[]): I
     `Под "${query}" подходит несколько групп (${found.length}): ${shown}${more}. ` +
       `Укажите путь, например «Родитель${PATH_SEPARATOR}Группа», или Ref_Key нужной.`,
   );
+}
+
+/** Сколько похожих групп назвать в отказе. */
+const HINTS = 10;
+
+/**
+ * Отказ «группа не найдена» с похожими путями: последняя часть запроса (сама группа, без номера и без учёта похожих
+ * букв) входит в название группы или наоборот. Подсказка ничего не выбирает сама: ошибка в ней стоит одного
+ * повторного вызова.
+ */
+function notFoundText(
+  query: string,
+  groups: readonly ItemGroup[],
+  index: ReadonlyMap<string, ItemGroup>,
+): string {
+  const last = query.split(PATH_SEPARATOR).at(-1)!.trim();
+  const needle = foldText(withoutNumber(last)).trim();
+  const words = needle.split(/\s+/).filter((w) => w.length >= 3);
+  const close = (g: ItemGroup) => {
+    const name = foldText(withoutNumber(g.name.trim())).trim();
+    return !!needle && (name.includes(needle) || (name.length >= 3 && needle.includes(name)));
+  };
+  const byWord = (g: ItemGroup) => {
+    const name = foldText(g.name);
+    return words.some((w) => name.includes(w));
+  };
+  const similar = groups.filter(close);
+  const hints = (similar.length ? similar : groups.filter(byWord))
+    .map((g) => `${pathIn(g, index)} (${g.ref})`)
+    .sort();
+  const base = `Группа номенклатуры "${query}" не найдена.`;
+  if (!hints.length) return `${base} Похожих групп нет: проверьте название или укажите Ref_Key группы.`;
+  const more = hints.length > HINTS ? ` и ещё ${hints.length - HINTS}` : "";
+  return `${base} Похожие группы: ${hints.slice(0, HINTS).join("; ")}${more}. Укажите путь из списка или Ref_Key.`;
 }
 
 /** Группа и все её подгруппы на любой глубине. Цикл в данных не зациклит обход. */
@@ -236,22 +284,40 @@ export interface ItemAttributes {
   name?: string;
   article?: string;
   groupRef?: string;
+  code?: string;
+  deletionMark?: boolean;
+  /** ИспользованиеХарактеристик (УТ, КА, ERP): значение перечисления как есть. */
+  characteristicsUsage?: string;
+}
+
+/** Реквизит номенклатуры УТ, КА и ERP: ведутся ли характеристики и откуда их список. */
+export const CHARACTERISTICS_USAGE = "ИспользованиеХарактеристик";
+
+async function propsOf(conn: Connection, set: string): Promise<Set<string>> {
+  const meta = await conn.getMetadata();
+  return new Set(meta.entities.get(set)?.properties.map((p) => p.name));
 }
 
 /** Поля, которых нет в схеме базы, не запрашиваются: иначе 1С ответит 400. */
 async function itemFields(conn: Connection, set: string): Promise<string[]> {
-  const meta = await conn.getMetadata();
-  const props = new Set(meta.entities.get(set)?.properties.map((p) => p.name));
-  return ["Ref_Key", "Description", ...["Артикул", "Parent_Key"].filter((f) => props.has(f))];
+  const props = await propsOf(conn, set);
+  const optional = ["Артикул", "Parent_Key", "Code", "DeletionMark", CHARACTERISTICS_USAGE];
+  return ["Ref_Key", "Description", ...optional.filter((f) => props.has(f))];
 }
 
 const toAttributes = (r: ODataEntity): ItemAttributes => {
-  const article = typeof r["Артикул"] === "string" ? r["Артикул"].trim() : "";
+  const text = (field: string) => (typeof r[field] === "string" ? (r[field] as string).trim() : "");
+  const article = text("Артикул");
+  const code = text("Code");
+  const usage = text(CHARACTERISTICS_USAGE);
   const groupRef = refOf(r["Parent_Key"]);
   return {
     ...(r["Description"] ? { name: String(r["Description"]) } : {}),
     ...(article ? { article } : {}),
     ...(groupRef ? { groupRef } : {}),
+    ...(code ? { code } : {}),
+    ...(r["DeletionMark"] === true ? { deletionMark: true } : {}),
+    ...(usage ? { characteristicsUsage: usage } : {}),
   };
 };
 
@@ -314,6 +380,51 @@ export function readAllItems(conn: Connection, set: string): Promise<Map<string,
       },
       itemsTtl(),
     ),
+  );
+}
+
+/**
+ * Больше стольких позиций на странице — их сведения берутся из справочника целиком, а не пачками по 20 ссылок: страница
+ * в 200 позиций стоила 10 запросов, листание 6000 позиций остатков — около 1400 запросов к 1С. Справочник на 15 тыс.
+ * позиций — 3 запроса, и следующие страницы в течение минуты берут его из кэша.
+ */
+const WHOLE_CATALOG_ATTRIBUTES_FROM = 60;
+
+/**
+ * Название, артикул и папка позиций страницы. Справочник, который не помещается в предел выборки, читается по ссылкам,
+ * как раньше: отказ здесь сломал бы ответ, который без этой оптимизации работал.
+ */
+export async function readPageAttributes(
+  conn: Connection,
+  set: string,
+  refs: Iterable<string>,
+): Promise<Map<string, ItemAttributes>> {
+  const unique = [...new Set(refs)];
+  if (unique.length <= WHOLE_CATALOG_ATTRIBUTES_FROM) return readItemAttributes(conn, set, unique);
+  let all: Map<string, ItemAttributes>;
+  try {
+    all = await readAllItems(conn, set);
+  } catch (e) {
+    if (!(e instanceof InputError)) throw e;
+    return readItemAttributes(conn, set, unique);
+  }
+  const out = new Map(unique.flatMap((ref) => (all.has(ref) ? [[ref, all.get(ref)!] as const] : [])));
+  // Позиция, заведённая после чтения справочника (кэш продолжения страниц), — по ссылке.
+  const missing = unique.filter((ref) => !out.has(ref));
+  if (missing.length) for (const [ref, a] of await readItemAttributes(conn, set, missing)) out.set(ref, a);
+  return out;
+}
+
+/** Названия папок позиций страницы: много папок — весь список групп (один запрос, кэш), иначе по ссылкам. */
+export async function pageGroupNames(
+  conn: Connection,
+  set: string,
+  refs: readonly string[],
+): Promise<Map<string, string>> {
+  if (refs.length <= 20) return resolveNames(conn, set, refs);
+  const wanted = new Set(refs);
+  return new Map(
+    (await loadItemGroups(conn, set)).filter((g) => wanted.has(g.ref)).map((g) => [g.ref, g.name]),
   );
 }
 
@@ -418,36 +529,79 @@ export interface ItemSelection<L> {
   attributes: Map<string, ItemAttributes>;
   groups?: ItemGroup[];
   selectedGroup?: ItemGroup;
+  /** Группы из groups[] в порядке запроса, без повторов. */
+  selectedGroups?: ItemGroup[];
+  /** Позиция → какая из groups[] её отобрала (самая глубокая, если группы вложены). */
+  matchedGroup?: Map<string, string>;
   /** Найдено только с учётом похожих букв кириллицы и латиницы. */
   lookalikeMatch: boolean;
   /** Позиции, похожие на запрос другой раскладкой букв, при буквальных совпадениях: в итог не входят. */
   otherSimilar: L[];
 }
 
-/** Отбор строк по группе номенклатуры (с подгруппами) и поиску по названию или артикулу. */
+/** Сколько групп можно передать списком groups. */
+export const MAX_ITEM_GROUPS = 50;
+
+/**
+ * Группы из списка: каждая со своими подгруппами. Папка вложенных групп («Смартфоны» и «Смартфоны/Бренд») достаётся
+ * самой глубокой: она точнее, а позиция попадает в ответ один раз.
+ */
+export function groupOwners(
+  selected: readonly ItemGroup[],
+  groups: readonly ItemGroup[],
+): Map<string, string> {
+  const index = new Map(groups.map((g) => [g.ref, g]));
+  const depth = (g: ItemGroup) => ancestry(g, index).length;
+  const owner = new Map<string, string>();
+  for (const g of [...selected].sort((a, b) => depth(a) - depth(b)))
+    for (const folder of subtreeOf(g.ref, groups)) owner.set(folder, g.ref);
+  return owner;
+}
+
+/** Отбор строк по группе номенклатуры (с подгруппами) или списку групп и поиску по названию или артикулу. */
 export async function selectByItem<L extends { itemRef?: string | undefined }>(
   conn: Connection,
   nomSet: string | undefined,
   rows: L[],
-  { group, query }: { group?: string | undefined; query?: string | undefined },
+  {
+    group,
+    groups: groupList,
+    query,
+  }: { group?: string | undefined; groups?: readonly string[] | undefined; query?: string | undefined },
 ): Promise<ItemSelection<L>> {
   const attributes = new Map<string, ItemAttributes>();
   let lines = rows;
   let groups: ItemGroup[] | undefined;
   let selectedGroup: ItemGroup | undefined;
+  let selectedGroups: ItemGroup[] | undefined;
+  let matchedGroup: Map<string, string> | undefined;
   let lookalikeMatch = false;
   let otherSimilar: L[] = [];
-  if (group) {
+  if (group && groupList?.length) throw new InputError("Укажите group или groups, не оба сразу.");
+  const wanted = groupList?.length ? groupList : group ? [group] : [];
+  if (wanted.length) {
     if (!nomSet) throw new InputError("Справочник номенклатуры не опубликован: отбор по группе невозможен.");
     groups = await loadItemGroups(conn, nomSet);
-    selectedGroup = resolveItemGroup(group, groups);
-    const allowed = subtreeOf(selectedGroup.ref, groups);
-    for (const [ref, a] of await readItemsInGroups(conn, nomSet, allowed)) attributes.set(ref, a);
+    const all = groups;
+    const resolved = [
+      ...new Map(wanted.map((q) => resolveItemGroup(q, all)).map((g) => [g.ref, g])).values(),
+    ];
+    const owner = groupOwners(resolved, groups);
+    for (const [ref, a] of await readItemsInGroups(conn, nomSet, owner.keys())) attributes.set(ref, a);
     lines = lines.filter((l) => !!l.itemRef && attributes.has(l.itemRef));
+    if (groupList?.length) {
+      selectedGroups = resolved;
+      matchedGroup = new Map(
+        [...attributes].flatMap(([ref, a]) => {
+          const g = a.groupRef ? owner.get(a.groupRef) : undefined;
+          return g ? [[ref, g] as const] : [];
+        }),
+      );
+    } else selectedGroup = resolved[0];
   }
   if (query) {
     if (!nomSet) throw new InputError("Справочник номенклатуры не опубликован: поиск по товару невозможен.");
-    if (!group) for (const [ref, a] of await readAllItems(conn, nomSet)) attributes.set(ref, a);
+    if (!wanted.length) for (const [ref, a] of await readAllItems(conn, nomSet)) attributes.set(ref, a);
     const stock = lines;
     const matching = (fold: (text: string) => string) =>
       stock.filter((l) => {
@@ -467,6 +621,8 @@ export async function selectByItem<L extends { itemRef?: string | undefined }>(
     attributes,
     ...(groups ? { groups } : {}),
     ...(selectedGroup ? { selectedGroup } : {}),
+    ...(selectedGroups ? { selectedGroups } : {}),
+    ...(matchedGroup ? { matchedGroup } : {}),
     lookalikeMatch,
     otherSimilar,
   };
@@ -477,9 +633,14 @@ export async function selectionNotes(
   conn: Connection,
   nomSet: string | undefined,
   sel: ItemSelection<unknown>,
-  { group, query }: { group?: string | undefined; query?: string | undefined },
+  {
+    group: oneGroup,
+    groups: groupList,
+    query,
+  }: { group?: string | undefined; groups?: readonly string[] | undefined; query?: string | undefined },
   absent: string,
 ): Promise<string[]> {
+  const group = oneGroup ?? (groupList?.length ? groupList.join(", ") : undefined);
   const notes: string[] = [];
   if (query && nomSet && !(await articlePublished(conn, nomSet))) {
     notes.push("Артикул не опубликован в OData: поиск шёл только по названию.");
@@ -495,7 +656,7 @@ export async function selectionNotes(
     );
   }
   if (query && !sel.lines.length) {
-    const scope = group ? "в выбранной группе" : "в справочнике";
+    const scope = groupList?.length ? "в выбранных группах" : group ? "в выбранной группе" : "в справочнике";
     const items = [...sel.attributes.values()];
     const known = items.some((a) => matchesItemQuery(a, query, strictText));
     const similar = !known && items.some((a) => matchesItemQuery(a, query));
@@ -505,7 +666,7 @@ export async function selectionNotes(
         : similar
           ? `Товар с похожими буквами другой раскладки (А и A) есть ${scope}, но ${absent} нет (с учётом других отборов).`
           : group
-            ? "В выбранной группе такого товара нет; вне группы поиск не проверял."
+            ? `В ${groupList?.length ? "выбранных группах" : "выбранной группе"} такого товара нет; вне ${groupList?.length ? "них" : "группы"} поиск не проверял.`
             : "В справочнике такого товара не найдено. Попробуйте основу слова (бумаг, а не бумаги) или другую часть названия.",
     );
   }

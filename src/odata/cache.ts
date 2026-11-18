@@ -67,3 +67,48 @@ export async function lookupWithRefresh<T, R>(
   invalidate(owner, key);
   return pick(await cached(owner, key, load, REFERENCE_TTL_MS, now));
 }
+
+/** Сколько держать чтение для следующих страниц того же вызова: за это время клиент дочитывает список. */
+export const PAGE_READ_TTL_MS = 60_000;
+
+/**
+ * Сколько разных чтений держать на подключение. Это полные выборки регистра: без предела бот с разными периодами
+ * копил бы их в памяти.
+ */
+export const PAGE_READ_ENTRIES = 4;
+
+const pageStore = new WeakMap<object, Map<string, Entry>>();
+
+/**
+ * Чтение для страниц одного списка. Первая страница (offset=0) всегда читает свежие данные и кладёт их сюда, следующие
+ * в течение PAGE_READ_TTL_MS берут те же строки: иначе каждая страница заново читала бы весь регистр (6000 позиций —
+ * 28 страниц и 28 чтений). Так страницы ещё и согласованы между собой: все из одного чтения. Окно истекло — чтение
+ * заново, как раньше.
+ */
+export function pageCached<T>(
+  owner: object,
+  key: string,
+  firstPage: boolean,
+  load: () => Promise<T>,
+  now: () => number = Date.now,
+): Promise<T> {
+  let map = pageStore.get(owner);
+  if (!map) {
+    map = new Map();
+    pageStore.set(owner, map);
+  }
+  const at = now();
+  for (const [k, e] of map) if (at - e.at >= PAGE_READ_TTL_MS) map.delete(k);
+  const hit = map.get(key);
+  if (hit && !firstPage) return untilCallAborted(hit.value as Promise<T>);
+  const value = detachedFromCall(load);
+  const entry: Entry = { at, value };
+  // Новая запись — в конец: при переполнении уходит самая старая.
+  map.delete(key);
+  map.set(key, entry);
+  while (map.size > PAGE_READ_ENTRIES) map.delete(map.keys().next().value!);
+  value.catch(() => {
+    if (map.get(key) === entry) map.delete(key);
+  });
+  return untilCallAborted(value);
+}

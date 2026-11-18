@@ -3,6 +3,8 @@ import { CATALOGS, resolveEntity } from "../config/mapping.js";
 import { InputError } from "../errors.js";
 import type { ODataEntity } from "../types/odata.js";
 import { AggregateOverflowError, fetchAllForAggregation } from "./aggregate.js";
+import { pageCached } from "./cache.js";
+import { callPageStart } from "./call-context.js";
 import { nextDay, num } from "./accounting.js";
 import { requireEntity } from "./publication.js";
 import { and, buildQuery, cmp, odataGuid, odataString, or } from "./query.js";
@@ -57,22 +59,33 @@ const SELECT = [
 ];
 
 /** Строки оборотов; при складах — пачками, отбор на стороне 1С. Пачки не пересекаются, строки не задваиваются. */
-export async function readItemSales(
+export function readItemSales(conn: Connection, args: ItemSalesRead): Promise<ODataEntity[]> {
+  const warehouses = [...new Set((args.warehouses ?? []).map((w) => w.toLowerCase()))].sort();
+  const key = [
+    args.from,
+    args.to,
+    args.warehouseSet ?? "",
+    args.withBuyer ? "buyer" : "",
+    warehouses.join(","),
+  ];
+  // Следующие страницы списка берут строки первой, а не читают регистр заново.
+  return pageCached(conn, `item-sales:${key.join(":")}`, callPageStart() === 0, () =>
+    readItemSalesFresh(conn, args),
+  );
+}
+
+interface ItemSalesRead {
+  from: string;
+  to: string;
+  warehouses?: readonly string[] | undefined;
+  warehouseSet?: string | undefined;
+  /** Покупатель строки: ещё одно измерение — без нужды строк больше (на УТ 11.5 за 45 дней +0,4 с, итоги те же). */
+  withBuyer?: boolean;
+}
+
+async function readItemSalesFresh(
   conn: Connection,
-  {
-    from,
-    to,
-    warehouses,
-    warehouseSet,
-    withBuyer = false,
-  }: {
-    from: string;
-    to: string;
-    warehouses?: readonly string[] | undefined;
-    warehouseSet?: string | undefined;
-    /** Покупатель строки: ещё одно измерение — без нужды строк больше (на УТ 11.5 за 45 дней +0,4 с, итоги те же). */
-    withBuyer?: boolean;
-  },
+  { from, to, warehouses, warehouseSet, withBuyer = false }: ItemSalesRead,
 ): Promise<ODataEntity[]> {
   const register = await requireEntity(conn, [SALES_REGISTER], SALES_LABEL);
   const read = async (condition?: string) =>

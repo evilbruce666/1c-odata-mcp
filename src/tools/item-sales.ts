@@ -4,7 +4,15 @@ import type { ServerContext } from "../context.js";
 import { CATALOGS, resolveEntity } from "../config/mapping.js";
 import { resolveNames } from "../odata/accounting.js";
 import { callPageStart } from "../odata/call-context.js";
-import { nomenclatureSet, readItemAttributes, selectByItem, selectionNotes } from "../odata/inventory.js";
+import {
+  MAX_ITEM_GROUPS,
+  groupPath,
+  nomenclatureSet,
+  pageGroupNames,
+  readPageAttributes,
+  selectByItem,
+  selectionNotes,
+} from "../odata/inventory.js";
 import {
   aggregateSales,
   checkPeriod,
@@ -49,13 +57,15 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
         "РеализацияКлиенту, ВозвратТоваровОтКлиентаПрошлыхПериодов, СторноРеализации…). Розница попадает в регистр только " +
         "отчётом о розничных продажах после закрытия смены: retailReports.completeThrough — дата, по которую розница " +
         "видна по всем складам выборки, latest — самый свежий отчёт; какой склад отстаёт — отбор warehouses. Отбор: warehouses — Ref_Key складов (как в get_warehouse_stock), group — группа " +
-        "номенклатуры с подгруппами (Ref_Key, название или путь «Телефоны/Смартфоны/Apple»), query — часть названия или " +
+        "номенклатуры с подгруппами (Ref_Key, название или путь «Телефоны/Смартфоны/Apple»), groups — несколько групп за " +
+        "один вызов (итоги каждой в byGroup, у позиции matchedGroupRef), query — часть названия или " +
         "артикул. groupBy=warehouse — по складам. excludeOwnOrganizations=true — без продаж своим организациям: в УТ это " +
         "обычная продажа клиенту, и покупатель узнаётся по ИНН, совпавшему с ИНН организации базы; исключённые штуки и " +
         "выручка и все контрагенты, признанные своими по ИНН, — в excludedOwnOrganizations (организация без ИНН так не узнаётся, их число там же). revenue и revenueExVat — выручка с НДС и без НДС, нетто (возвраты и сторно " +
         "вычитаются), в валюте управленческого учёта базы (обычно рубли): розница с комиссионным товаром сверена с отчётами " +
         "о розничных продажах до рубля. count — всего позиций; длинный список " +
-        "читайте с offset=nextOffset, пока он есть.",
+        "читайте с offset=nextOffset, пока он есть: следующие страницы в течение минуты берут строки первой, регистр " +
+        "заново не читается.",
       inputSchema: z.object({
         database: databaseField,
         from: dateField("Начало периода (включительно)"),
@@ -81,13 +91,23 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
           .describe(
             "Группа номенклатуры: Ref_Key, название или путь через «/» («Смартфоны/Apple»). Подгруппы входят",
           ),
+        groups: z
+          .array(z.string().trim().min(1).max(500))
+          .min(1)
+          .max(MAX_ITEM_GROUPS)
+          .optional()
+          .describe(
+            `Несколько групп номенклатуры за один вызов (до ${MAX_ITEM_GROUPS}), каждая как group, с подгруппами; вместо ` +
+              "group. Позиция входит один раз; у вложенных групп — в самую глубокую. matchedGroupRef у позиции и byGroup " +
+              "с итогами по каждой группе",
+          ),
         query: z
           .string()
           .trim()
           .min(1)
           .max(200)
           .optional()
-          .describe("Поиск товара: части слов из названия или артикул. Можно вместе с group"),
+          .describe("Поиск товара: части слов из названия или артикул. Можно вместе с group или groups"),
         excludeOwnOrganizations: z
           .boolean()
           .default(false)
@@ -98,7 +118,18 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
       }),
       outputSchema: getItemSalesResultSchema,
     },
-    ({ database, from, to, warehouses, groupBy, group, query, excludeOwnOrganizations, limit }) =>
+    ({
+      database,
+      from,
+      to,
+      warehouses,
+      groupBy,
+      group,
+      groups: groupList,
+      query,
+      excludeOwnOrganizations,
+      limit,
+    }) =>
       guard("read.analytics.get_sales_register", async () => {
         const t0 = Date.now();
         checkPeriod(from, to);
@@ -118,13 +149,17 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
         });
         const nomSet = await nomenclatureSet(conn);
         // Отбор по товару — по строкам до свёртки: из них же считаются итоги по операциям.
-        const sel = await selectByItem(conn, nomSet, toSalesRows(raw, CATALOGS.warehouses), { group, query });
+        const sel = await selectByItem(conn, nomSet, toSalesRows(raw, CATALOGS.warehouses), {
+          group,
+          groups: groupList,
+          query,
+        });
         // Свои организации-покупатели узнаются по ИНН; исключённое считается после отбора по товару и складу.
         const own = excludeOwnOrganizations ? await ownBuyers(conn) : undefined;
         const orgSet = own ? resolveEntity(CATALOGS.organizations, await conn.available()) : undefined;
         const kept = own ? sel.lines.filter((r) => !isOwnBuyer(r, own, orgSet)) : sel.lines;
         const excluded = own ? sel.lines.filter((r) => isOwnBuyer(r, own, orgSet)) : [];
-        const { attributes, selectedGroup, groups, otherSimilar } = sel;
+        const { attributes, selectedGroup, selectedGroups, matchedGroup, groups, otherSimilar } = sel;
         const lines = aggregateSales(kept, byWarehouse);
         const pageStart = callPageStart();
 
@@ -143,13 +178,13 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
         const page = shown.slice(pageStart);
         if (nomSet) {
           const unread = page.map((l) => l.itemRef).filter((ref) => !attributes.has(ref));
-          for (const [ref, a] of await readItemAttributes(conn, nomSet, unread)) attributes.set(ref, a);
+          for (const [ref, a] of await readPageAttributes(conn, nomSet, unread)) attributes.set(ref, a);
         }
         const parentRefs = [...new Set(page.flatMap((l) => attributes.get(l.itemRef)?.groupRef ?? []))];
         const groupNames = groups
           ? new Map(groups.map((g) => [g.ref, g.name]))
           : nomSet
-            ? await resolveNames(conn, nomSet, parentRefs)
+            ? await pageGroupNames(conn, nomSet, parentRefs)
             : new Map<string, string>();
         const charSet = resolveEntity(CHARACTERISTICS, await conn.available());
         const charRefs = page.flatMap((l) => l.characteristicRef ?? []);
@@ -195,6 +230,7 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
             ...(a?.groupRef ? { groupRef: a.groupRef } : {}),
             ...(characteristic ? { characteristic } : {}),
             ...(l.characteristicRef ? { characteristicRef: l.characteristicRef } : {}),
+            ...(matchedGroup?.has(l.itemRef) ? { matchedGroupRef: matchedGroup.get(l.itemRef)! } : {}),
             ...(l.warehouseRef
               ? {
                   warehouse: warehouseOf(l.warehouseRef)?.name ?? l.warehouseRef,
@@ -209,7 +245,33 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
           };
         });
 
-        const notes = await selectionNotes(conn, nomSet, sel, { group, query }, "продаж за период");
+        // Итоги по каждой группе из groups — на первой странице, по всем строкам отбора: сумма равна общим итогам.
+        const byGroup =
+          selectedGroups && groups && pageStart === 0
+            ? selectedGroups.map((g) => {
+                const own = withItem.filter((l) => matchedGroup?.get(l.itemRef) === g.ref);
+                const add = (pick: (l: Line) => number) => own.reduce((t, l) => t + pick(l), 0);
+                return {
+                  name: g.name,
+                  ref: g.ref,
+                  path: groupPath(g, groups),
+                  positions: own.length,
+                  quantity: qty(add((l) => l.quantity)),
+                  sold: qty(add((l) => l.sold)),
+                  returns: qty(add((l) => l.returns)),
+                  // В копейках: строки уже округлены до копейки, сумма float накопила бы хвост.
+                  revenue: add((l) => Math.round(l.revenue * 100)) / 100,
+                  revenueExVat: add((l) => Math.round(l.revenueExVat * 100)) / 100,
+                };
+              })
+            : undefined;
+        const notes = await selectionNotes(
+          conn,
+          nomSet,
+          sel,
+          { group, groups: groupList, query },
+          "продаж за период",
+        );
         if (!charSet && page.some((l) => l.characteristicRef)) {
           notes.push(
             "Справочник характеристик не опубликован в OData: у строк с характеристикой только characteristicRef.",
@@ -275,6 +337,17 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
           ...(selectedGroup
             ? { itemGroup: { name: selectedGroup.name, ref: selectedGroup.ref, includesSubgroups: true } }
             : {}),
+          ...(selectedGroups && groups
+            ? {
+                itemGroups: selectedGroups.map((g) => ({
+                  name: g.name,
+                  ref: g.ref,
+                  path: groupPath(g, groups),
+                  includesSubgroups: true,
+                })),
+              }
+            : {}),
+          ...(byGroup ? { byGroup } : {}),
           ...(query ? { query } : {}),
           ...(otherSimilar.length
             ? {

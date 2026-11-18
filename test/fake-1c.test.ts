@@ -45,8 +45,10 @@ const SETTINGS_UPDATE = { mode: "update", singleWriter: true, accounts: { custom
 
 /** Аргументы, которые не подобрать по имени поля. Новый инструмент обычно сюда не нужен. */
 const OVERRIDES: Record<string, Record<string, unknown>> = {
-  "read.analytics.get_warehouse_stock": { warehouses: [id] },
-  "read.analytics.get_sales_register": { warehouses: [id] },
+  // groups — вместо group, не вместе с ним: список групп проверяют test/stock.test.ts и test/items.test.ts.
+  "read.analytics.get_warehouse_stock": { warehouses: [id], groups: undefined },
+  "read.analytics.get_sales_register": { warehouses: [id], groups: undefined },
+  "read.catalog.list_items": { groups: undefined },
   "read.analytics.get_partner_settlements": { partner: id },
   "read.document.get_document": { entitySet: "Document_РеализацияТоваровУслуг", ref: id },
   "read.document.search_documents": { entitySet: "Document_РеализацияТоваровУслуг" },
@@ -506,6 +508,7 @@ const FLAGS_OMIT: Record<string, string[]> = {
   "read.analytics.get_inventory": ["group"],
   "read.analytics.get_warehouse_stock": ["group"],
   "read.analytics.get_sales_register": ["group"],
+  "read.catalog.list_items": ["group"],
   "read.document.search_documents": ["kind"],
 };
 

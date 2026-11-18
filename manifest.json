@@ -4,7 +4,7 @@
   "display_name": "1С через OData: Бухгалтерия и Торговля",
   "version": "0.15.0",
   "description": "MCP-сервер для 1С:Предприятие через OData: Бухгалтерия 3.0 (аналитика и запись документов с предпросмотром) и Управление торговлей 11 (остатки на складах, продажи с розницей, расчёты с партнёрами — чтение) на естественном языке.",
-  "long_description": "Подключает любой MCP-клиент (Claude, Cursor, VS Code и др.) к базе 1С:Предприятие через стандартный интерфейс OData. Ничего не устанавливается внутри 1С. Конфигурации: Бухгалтерия 3.0 — полностью, Управление торговлей 11 — только чтение (проверено на 11.5), КА 2 и ERP 2 — по тем же регистрам, без проверки на живой базе. По умолчанию только чтение — 80 инструментов и 3 готовых сценария: аналитика Бухгалтерии (дебиторка и кредиторка по срокам, деньги на счетах, неоплаченные счета, проверка закрытия месяца, карточка счёта, акт сверки, остатки, продажи, движение денег, налоги, ОСВ по счёту, проводки документа, хронология для аудита), Управления торговлей (остатки на складах, продажи в штуках с розницей и выручкой, расчёты с клиентами и поставщиками, деньги в кассах и на счетах, список складов), справочники и документы. Запись включается отдельно (readOnly=false), в Управлении торговлей запрещена, и всегда работает в режиме предпросмотра — сначала показывает, что будет создано/изменено, и пишет только после подтверждения.",
+  "long_description": "Подключает любой MCP-клиент (Claude, Cursor, VS Code и др.) к базе 1С:Предприятие через стандартный интерфейс OData. Ничего не устанавливается внутри 1С. Конфигурации: Бухгалтерия 3.0 — полностью, Управление торговлей 11 — только чтение (проверено на 11.5), КА 2 и ERP 2 — по тем же регистрам, без проверки на живой базе. По умолчанию только чтение — 81 инструмент и 3 готовых сценария: аналитика Бухгалтерии (дебиторка и кредиторка по срокам, деньги на счетах, неоплаченные счета, проверка закрытия месяца, карточка счёта, акт сверки, остатки, продажи, движение денег, налоги, ОСВ по счёту, проводки документа, хронология для аудита), Управления торговлей (остатки на складах, продажи в штуках с розницей и выручкой, расчёты с клиентами и поставщиками, деньги в кассах и на счетах, списки складов и номенклатуры), справочники и документы. Запись включается отдельно (readOnly=false), в Управлении торговлей запрещена, и всегда работает в режиме предпросмотра — сначала показывает, что будет создано/изменено, и пишет только после подтверждения.",
   "author": {
     "name": "evilbruce666",
     "url": "https://github.com/evilbruce666"
@@ -2176,7 +2176,7 @@
     {
       "name": "read.analytics.get_warehouse_stock",
       "title": "Остатки на складах (УТ 11, КА 2, ERP 2)",
-      "description": "Остатки товаров по регистру «Товары на складах» (оперативный учёт по складам: УТ 11, КА 2, ERP 2; проверено на УТ 11.5). В УТ нет Хозрасчётного, и остатки — только здесь; в Бухгалтерии, КА и ERP остатки по счетам с суммами — get_inventory. Только количество: inStock — в наличии, toShip — к отгрузке (зарезервировано под отгрузку, ещё на складе); сумм в этом регистре нет. Назначение, помещение, серия и партия сворачиваются. По умолчанию — текущие остатки, asOf=YYYY-MM-DD — на конец даты. warehouses — Ref_Key складов (ответ перечисляет их с типом в warehouseFilter); Ref_Key и типы складов с остатком — в byWarehouse при groupBy=warehouse на первой странице (у сети в сотни складов он может не поместиться — см. truncatedLists, сузьте warehouses). group — группа номенклатуры с подгруппами: Ref_Key, название или путь «Телефоны/Смартфоны/Apple» (несколько совпадений — отказ со списком путей). query — часть названия или артикул, как в get_inventory. Характеристика — characteristicRef, название — если справочник характеристик опубликован; пустая характеристика обычна (товар без характеристик). Товары в пути между складами в остаток не входят. count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть.",
+      "description": "Остатки товаров по регистру «Товары на складах» (оперативный учёт по складам: УТ 11, КА 2, ERP 2; проверено на УТ 11.5). В УТ нет Хозрасчётного, и остатки — только здесь; в Бухгалтерии, КА и ERP остатки по счетам с суммами — get_inventory. Только количество: inStock — в наличии, toShip — к отгрузке (зарезервировано под отгрузку, ещё на складе); сумм в этом регистре нет. Назначение, помещение, серия и партия сворачиваются. По умолчанию — текущие остатки, asOf=YYYY-MM-DD — на конец даты. warehouses — Ref_Key складов (ответ перечисляет их с типом в warehouseFilter); Ref_Key и типы складов с остатком — в byWarehouse при groupBy=warehouse на первой странице (у сети в сотни складов он может не поместиться — см. truncatedLists, сузьте warehouses). group — группа номенклатуры с подгруппами: Ref_Key, название или путь «Телефоны/Смартфоны/Apple» (несколько совпадений — отказ со списком путей); groups — несколько групп за один вызов, итоги каждой в byGroup, у позиции matchedGroupRef. query — часть названия или артикул, как в get_inventory. Характеристика — characteristicRef, название — если справочник характеристик опубликован; пустая характеристика обычна (товар без характеристик). Товары в пути между складами в остаток не входят. count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть: следующие страницы в течение минуты берут строки первой, регистр заново не читается.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2214,8 +2214,19 @@
             "minLength": 1,
             "maxLength": 500
           },
+          "groups": {
+            "description": "Несколько групп номенклатуры за один вызов (до 50), каждая как group, с подгруппами; вместо group. Позиция входит один раз; у вложенных групп — в самую глубокую. matchedGroupRef у позиции и byGroup с итогами по каждой группе",
+            "minItems": 1,
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          },
           "query": {
-            "description": "Поиск товара: части слов из названия или артикул. Можно вместе с group",
+            "description": "Поиск товара: части слов из названия или артикул. Можно вместе с group или groups",
             "type": "string",
             "minLength": 1,
             "maxLength": 200
@@ -2286,6 +2297,68 @@
               "ref"
             ],
             "additionalProperties": {}
+          },
+          "itemGroups": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "ref": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "includesSubgroups": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "name",
+                "ref",
+                "path",
+                "includesSubgroups"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "byGroup": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "ref": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "positions": {
+                  "type": "number"
+                },
+                "inStock": {
+                  "type": "number"
+                },
+                "toShip": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "name",
+                "ref",
+                "path",
+                "positions",
+                "inStock",
+                "toShip"
+              ],
+              "additionalProperties": {}
+            }
           },
           "query": {
             "type": "string"
@@ -2387,6 +2460,9 @@
                 "characteristicRef": {
                   "type": "string"
                 },
+                "matchedGroupRef": {
+                  "type": "string"
+                },
                 "warehouse": {
                   "type": "string"
                 },
@@ -2450,7 +2526,7 @@
     {
       "name": "read.analytics.get_sales_register",
       "title": "Продажи по номенклатуре (УТ 11, КА 2, ERP 2)",
-      "description": "Продажи товаров в штуках за период по регистру «Выручка и себестоимость продаж» (УТ 11, КА 2, ERP 2; проверено на УТ 11.5), включая розницу (в Бухгалтерии продажи по документам — get_sales_breakdown). quantity — нетто: sold (продано) минус returns (возвраты и сторно продаж, в регистре они с минусом); byOperation — то же по хозяйственным операциям (РеализацияВРозницу, РеализацияКлиенту, ВозвратТоваровОтКлиентаПрошлыхПериодов, СторноРеализации…). Розница попадает в регистр только отчётом о розничных продажах после закрытия смены: retailReports.completeThrough — дата, по которую розница видна по всем складам выборки, latest — самый свежий отчёт; какой склад отстаёт — отбор warehouses. Отбор: warehouses — Ref_Key складов (как в get_warehouse_stock), group — группа номенклатуры с подгруппами (Ref_Key, название или путь «Телефоны/Смартфоны/Apple»), query — часть названия или артикул. groupBy=warehouse — по складам. excludeOwnOrganizations=true — без продаж своим организациям: в УТ это обычная продажа клиенту, и покупатель узнаётся по ИНН, совпавшему с ИНН организации базы; исключённые штуки и выручка и все контрагенты, признанные своими по ИНН, — в excludedOwnOrganizations (организация без ИНН так не узнаётся, их число там же). revenue и revenueExVat — выручка с НДС и без НДС, нетто (возвраты и сторно вычитаются), в валюте управленческого учёта базы (обычно рубли): розница с комиссионным товаром сверена с отчётами о розничных продажах до рубля. count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть.",
+      "description": "Продажи товаров в штуках за период по регистру «Выручка и себестоимость продаж» (УТ 11, КА 2, ERP 2; проверено на УТ 11.5), включая розницу (в Бухгалтерии продажи по документам — get_sales_breakdown). quantity — нетто: sold (продано) минус returns (возвраты и сторно продаж, в регистре они с минусом); byOperation — то же по хозяйственным операциям (РеализацияВРозницу, РеализацияКлиенту, ВозвратТоваровОтКлиентаПрошлыхПериодов, СторноРеализации…). Розница попадает в регистр только отчётом о розничных продажах после закрытия смены: retailReports.completeThrough — дата, по которую розница видна по всем складам выборки, latest — самый свежий отчёт; какой склад отстаёт — отбор warehouses. Отбор: warehouses — Ref_Key складов (как в get_warehouse_stock), group — группа номенклатуры с подгруппами (Ref_Key, название или путь «Телефоны/Смартфоны/Apple»), groups — несколько групп за один вызов (итоги каждой в byGroup, у позиции matchedGroupRef), query — часть названия или артикул. groupBy=warehouse — по складам. excludeOwnOrganizations=true — без продаж своим организациям: в УТ это обычная продажа клиенту, и покупатель узнаётся по ИНН, совпавшему с ИНН организации базы; исключённые штуки и выручка и все контрагенты, признанные своими по ИНН, — в excludedOwnOrganizations (организация без ИНН так не узнаётся, их число там же). revenue и revenueExVat — выручка с НДС и без НДС, нетто (возвраты и сторно вычитаются), в валюте управленческого учёта базы (обычно рубли): розница с комиссионным товаром сверена с отчётами о розничных продажах до рубля. count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть: следующие страницы в течение минуты берут строки первой, регистр заново не читается.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2493,8 +2569,19 @@
             "minLength": 1,
             "maxLength": 500
           },
+          "groups": {
+            "description": "Несколько групп номенклатуры за один вызов (до 50), каждая как group, с подгруппами; вместо group. Позиция входит один раз; у вложенных групп — в самую глубокую. matchedGroupRef у позиции и byGroup с итогами по каждой группе",
+            "minItems": 1,
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          },
           "query": {
-            "description": "Поиск товара: части слов из названия или артикул. Можно вместе с group",
+            "description": "Поиск товара: части слов из названия или артикул. Можно вместе с group или groups",
             "type": "string",
             "minLength": 1,
             "maxLength": 200
@@ -2577,6 +2664,80 @@
               "ref"
             ],
             "additionalProperties": {}
+          },
+          "itemGroups": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "ref": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "includesSubgroups": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "name",
+                "ref",
+                "path",
+                "includesSubgroups"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "byGroup": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "ref": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "positions": {
+                  "type": "number"
+                },
+                "quantity": {
+                  "type": "number"
+                },
+                "sold": {
+                  "type": "number"
+                },
+                "returns": {
+                  "type": "number"
+                },
+                "revenue": {
+                  "type": "number"
+                },
+                "revenueExVat": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "name",
+                "ref",
+                "path",
+                "positions",
+                "quantity",
+                "sold",
+                "returns",
+                "revenue",
+                "revenueExVat"
+              ],
+              "additionalProperties": {}
+            }
           },
           "query": {
             "type": "string"
@@ -2796,6 +2957,9 @@
                   "type": "string"
                 },
                 "characteristicRef": {
+                  "type": "string"
+                },
+                "matchedGroupRef": {
                   "type": "string"
                 },
                 "warehouse": {
@@ -3178,6 +3342,195 @@
                 },
                 "deletionMark": {
                   "type": "boolean"
+                }
+              },
+              "required": [
+                "ref",
+                "name",
+                "isFolder",
+                "deletionMark"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "scan": {
+            "type": "object",
+            "properties": {
+              "documentsScanned": {
+                "type": "number"
+              },
+              "rowsScanned": {
+                "type": "number"
+              },
+              "windows": {
+                "type": "number"
+              },
+              "elapsedMs": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "elapsedMs"
+            ],
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "database",
+          "count",
+          "items",
+          "scan"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "read.catalog.list_items",
+      "title": "Номенклатура",
+      "description": "Список номенклатуры справочника — все позиции, в том числе без остатка и продаж (get_warehouse_stock, get_sales_register и get_inventory показывают только позиции с движением). Поля: ref (Ref_Key — как ref в остатках и продажах), name, article, code, groupRef и path — папка позиции и её путь (у папки — её собственный путь), isFolder, deletionMark, characteristicsUsage — реквизит ИспользованиеХарактеристик как есть (УТ, КА, ERP; «ОбщиеДляВидаНоменклатуры» — характеристики задаются видом номенклатуры). Отбор: group или groups — группа или несколько групп с подгруппами, как в get_warehouse_stock (у позиции matchedGroupRef); query — части слов названия или артикул; kind — items (по умолчанию), folders или all; помеченные на удаление не показываются без includeDeleted=true. count — всего; длинный список читайте с offset=nextOffset, пока он есть.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
+            "type": "string"
+          },
+          "group": {
+            "description": "Группа номенклатуры: Ref_Key, название или путь через «/». Подгруппы входят",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "groups": {
+            "description": "Несколько групп (до 50), каждая как group, с подгруппами; вместо group. У вложенных групп позиция относится к самой глубокой (matchedGroupRef)",
+            "minItems": 1,
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          },
+          "query": {
+            "description": "Части слов из названия или артикул; у папок — из названия",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "kind": {
+            "default": "items",
+            "description": "items — позиции (по умолчанию), folders — папки (при group — подгруппы), all — всё",
+            "type": "string",
+            "enum": [
+              "items",
+              "folders",
+              "all"
+            ]
+          },
+          "includeDeleted": {
+            "default": false,
+            "description": "Показывать помеченные на удаление",
+            "type": "boolean"
+          },
+          "limit": {
+            "default": 500,
+            "description": "Сколько строк вернуть",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 1000
+          },
+          "offset": {
+            "default": 0,
+            "description": "С какой строки начать (0 — с начала); значение из nextOffset прошлого ответа",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string"
+          },
+          "itemGroups": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "ref": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "includesSubgroups": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "name",
+                "ref",
+                "path",
+                "includesSubgroups"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "query": {
+            "type": "string"
+          },
+          "count": {
+            "type": "number"
+          },
+          "note": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ref": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "article": {
+                  "type": "string"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "groupRef": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "isFolder": {
+                  "type": "boolean"
+                },
+                "deletionMark": {
+                  "type": "boolean"
+                },
+                "characteristicsUsage": {
+                  "type": "string"
+                },
+                "matchedGroupRef": {
+                  "type": "string"
                 }
               },
               "required": [

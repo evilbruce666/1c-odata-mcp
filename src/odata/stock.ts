@@ -4,6 +4,8 @@ import { CATALOGS, resolveEntity } from "../config/mapping.js";
 import { InputError } from "../errors.js";
 import type { ODataEntity } from "../types/odata.js";
 import { fetchAllForAggregation } from "./aggregate.js";
+import { pageCached } from "./cache.js";
+import { callPageStart } from "./call-context.js";
 import { nextDay, num, readByRefs } from "./accounting.js";
 import { NotPublishedError, requireEntity } from "./publication.js";
 import { tradeRefusal, tradeWithoutAccounting } from "./configuration.js";
@@ -53,8 +55,24 @@ export function balancePath(register: string, asOf?: string, condition?: string)
 
 const SELECT = ["Номенклатура_Key", "Характеристика_Key", "Склад_Key", "ВНаличииBalance", "КОтгрузкеBalance"];
 
-/** Строки остатков; при складах — пачками по WAREHOUSE_BATCH. Пачки не пересекаются, строки не задваиваются. */
-export async function readStockBalance(
+/**
+ * Строки остатков; при складах — пачками по WAREHOUSE_BATCH. Пачки не пересекаются, строки не задваиваются. Следующие
+ * страницы списка берут строки первой (pageCached), а не читают регистр заново.
+ */
+export function readStockBalance(
+  conn: Connection,
+  args: { asOf?: string | undefined; warehouses?: readonly string[] | undefined },
+): Promise<ODataEntity[]> {
+  const warehouses = [...new Set((args.warehouses ?? []).map((w) => w.toLowerCase()))].sort();
+  return pageCached(
+    conn,
+    `stock-balance:${args.asOf ?? ""}:${warehouses.join(",")}`,
+    callPageStart() === 0,
+    () => readStockBalanceFresh(conn, args),
+  );
+}
+
+async function readStockBalanceFresh(
   conn: Connection,
   { asOf, warehouses }: { asOf?: string | undefined; warehouses?: readonly string[] | undefined },
 ): Promise<ODataEntity[]> {

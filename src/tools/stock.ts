@@ -4,7 +4,15 @@ import type { ServerContext } from "../context.js";
 import { resolveEntity } from "../config/mapping.js";
 import { resolveNames } from "../odata/accounting.js";
 import { callPageStart } from "../odata/call-context.js";
-import { nomenclatureSet, readItemAttributes, selectByItem, selectionNotes } from "../odata/inventory.js";
+import {
+  MAX_ITEM_GROUPS,
+  groupPath,
+  nomenclatureSet,
+  pageGroupNames,
+  readPageAttributes,
+  selectByItem,
+  selectionNotes,
+} from "../odata/inventory.js";
 import {
   CHARACTERISTICS,
   MAX_WAREHOUSES,
@@ -40,10 +48,12 @@ export function registerStockTools(server: McpServer, ctx: ServerContext): void 
         "(ответ перечисляет их с типом в warehouseFilter); Ref_Key и типы складов с остатком — в byWarehouse при " +
         "groupBy=warehouse на первой странице (у сети в сотни складов он может не поместиться — см. truncatedLists, сузьте " +
         "warehouses). group — группа номенклатуры с подгруппами: Ref_Key, название или путь «Телефоны/Смартфоны/Apple» " +
-        "(несколько совпадений — отказ со списком путей). query — часть названия или артикул, как в get_inventory. " +
+        "(несколько совпадений — отказ со списком путей); groups — несколько групп за один вызов, итоги каждой в byGroup, " +
+        "у позиции matchedGroupRef. query — часть названия или артикул, как в get_inventory. " +
         "Характеристика — characteristicRef, название — если справочник характеристик опубликован; пустая характеристика " +
         "обычна (товар без характеристик). Товары в пути между складами в остаток не входят. count — всего позиций; " +
-        "длинный список читайте с offset=nextOffset, пока он есть.",
+        "длинный список читайте с offset=nextOffset, пока он есть: следующие страницы в течение минуты берут строки " +
+        "первой, регистр заново не читается.",
       inputSchema: z.object({
         database: databaseField,
         asOf: dateField("Дата остатков — на конец этой даты (без параметра — текущие)").optional(),
@@ -68,18 +78,28 @@ export function registerStockTools(server: McpServer, ctx: ServerContext): void 
           .describe(
             "Группа номенклатуры: Ref_Key, название или путь через «/» («Смартфоны/Apple»). Подгруппы входят",
           ),
+        groups: z
+          .array(z.string().trim().min(1).max(500))
+          .min(1)
+          .max(MAX_ITEM_GROUPS)
+          .optional()
+          .describe(
+            `Несколько групп номенклатуры за один вызов (до ${MAX_ITEM_GROUPS}), каждая как group, с подгруппами; вместо ` +
+              "group. Позиция входит один раз; у вложенных групп — в самую глубокую. matchedGroupRef у позиции и byGroup " +
+              "с итогами по каждой группе",
+          ),
         query: z
           .string()
           .trim()
           .min(1)
           .max(200)
           .optional()
-          .describe("Поиск товара: части слов из названия или артикул. Можно вместе с group"),
+          .describe("Поиск товара: части слов из названия или артикул. Можно вместе с group или groups"),
         limit: z.number().int().positive().max(1000).default(200).describe("Сколько позиций вернуть"),
       }),
       outputSchema: getStockResultSchema,
     },
-    ({ database, asOf, warehouses, groupBy, group, query, limit }) =>
+    ({ database, asOf, warehouses, groupBy, group, groups: groupList, query, limit }) =>
       guard("read.analytics.get_warehouse_stock", async () => {
         const t0 = Date.now();
         const conn = ctx.db(database);
@@ -92,9 +112,10 @@ export function registerStockTools(server: McpServer, ctx: ServerContext): void 
         const nomSet = await nomenclatureSet(conn);
         const sel = await selectByItem(conn, nomSet, aggregateWarehouseStock(rows, byWarehouse), {
           group,
+          groups: groupList,
           query,
         });
-        const { attributes, selectedGroup, groups, otherSimilar } = sel;
+        const { attributes, selectedGroup, selectedGroups, matchedGroup, groups, otherSimilar } = sel;
         const pageStart = callPageStart();
 
         const withItem = sel.lines
@@ -113,13 +134,13 @@ export function registerStockTools(server: McpServer, ctx: ServerContext): void 
         const page = shown.slice(pageStart);
         if (nomSet) {
           const unread = page.map((l) => l.itemRef).filter((ref) => !attributes.has(ref));
-          for (const [ref, a] of await readItemAttributes(conn, nomSet, unread)) attributes.set(ref, a);
+          for (const [ref, a] of await readPageAttributes(conn, nomSet, unread)) attributes.set(ref, a);
         }
         const parentRefs = [...new Set(page.flatMap((l) => attributes.get(l.itemRef)?.groupRef ?? []))];
         const groupNames = groups
           ? new Map(groups.map((g) => [g.ref, g.name]))
           : nomSet
-            ? await resolveNames(conn, nomSet, parentRefs)
+            ? await pageGroupNames(conn, nomSet, parentRefs)
             : new Map<string, string>();
         const charSet = resolveEntity(CHARACTERISTICS, await conn.available());
         const charRefs = page.flatMap((l) => l.characteristicRef ?? []);
@@ -151,6 +172,7 @@ export function registerStockTools(server: McpServer, ctx: ServerContext): void 
             ...(a?.groupRef ? { groupRef: a.groupRef } : {}),
             ...(characteristic ? { characteristic } : {}),
             ...(l.characteristicRef ? { characteristicRef: l.characteristicRef } : {}),
+            ...(matchedGroup?.has(l.itemRef) ? { matchedGroupRef: matchedGroup.get(l.itemRef)! } : {}),
             ...(l.warehouseRef
               ? {
                   warehouse: warehouseOf(l.warehouseRef)?.name ?? l.warehouseRef,
@@ -162,7 +184,28 @@ export function registerStockTools(server: McpServer, ctx: ServerContext): void 
           };
         });
 
-        const notes = await selectionNotes(conn, nomSet, sel, { group, query }, "остатка на складах");
+        // Итоги по каждой группе из groups — на первой странице, по всем строкам отбора: сумма равна общим итогам.
+        const byGroup =
+          selectedGroups && groups && pageStart === 0
+            ? selectedGroups.map((g) => {
+                const own = withItem.filter((l) => matchedGroup?.get(l.itemRef) === g.ref);
+                return {
+                  name: g.name,
+                  ref: g.ref,
+                  path: groupPath(g, groups),
+                  positions: own.length,
+                  inStock: sum(own, "inStock"),
+                  toShip: sum(own, "toShip"),
+                };
+              })
+            : undefined;
+        const notes = await selectionNotes(
+          conn,
+          nomSet,
+          sel,
+          { group, groups: groupList, query },
+          "остатка на складах",
+        );
         if (!charSet && page.some((l) => l.characteristicRef)) {
           notes.push(
             "Справочник характеристик не опубликован в OData: у строк с характеристикой только characteristicRef.",
@@ -188,6 +231,17 @@ export function registerStockTools(server: McpServer, ctx: ServerContext): void 
           ...(selectedGroup
             ? { itemGroup: { name: selectedGroup.name, ref: selectedGroup.ref, includesSubgroups: true } }
             : {}),
+          ...(selectedGroups && groups
+            ? {
+                itemGroups: selectedGroups.map((g) => ({
+                  name: g.name,
+                  ref: g.ref,
+                  path: groupPath(g, groups),
+                  includesSubgroups: true,
+                })),
+              }
+            : {}),
+          ...(byGroup ? { byGroup } : {}),
           ...(query ? { query } : {}),
           ...(otherSimilar.length
             ? {

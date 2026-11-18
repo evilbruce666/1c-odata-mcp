@@ -500,6 +500,39 @@ export const listWarehousesResultSchema = z
   })
   .passthrough();
 
+export const listItemsResultSchema = z
+  .object({
+    database: z.string(),
+    itemGroups: z
+      .array(
+        z
+          .object({ name: z.string(), ref: z.string(), path: z.string(), includesSubgroups: z.boolean() })
+          .passthrough(),
+      )
+      .optional(),
+    query: z.string().optional(),
+    count: z.number(),
+    note: z.string().optional(),
+    items: z.array(
+      z
+        .object({
+          ref: z.string(),
+          name: z.string(),
+          article: z.string().optional(),
+          code: z.string().optional(),
+          groupRef: z.string().optional(),
+          path: z.string().optional(),
+          isFolder: z.boolean(),
+          deletionMark: z.boolean(),
+          characteristicsUsage: z.string().optional(),
+          matchedGroupRef: z.string().optional(),
+        })
+        .passthrough(),
+    ),
+    scan: scanSchema,
+  })
+  .passthrough();
+
 export const partnerSettlementsResultSchema = z
   .object({
     database: z.string(),
@@ -538,6 +571,14 @@ export const partnerSettlementsResultSchema = z
   })
   .passthrough();
 
+const itemGroupsSchema = z
+  .array(
+    z
+      .object({ name: z.string(), ref: z.string(), path: z.string(), includesSubgroups: z.boolean() })
+      .passthrough(),
+  )
+  .optional();
+
 export const getItemSalesResultSchema = z
   .object({
     database: z.string(),
@@ -546,6 +587,24 @@ export const getItemSalesResultSchema = z
     groupBy: z.string().optional(),
     warehouseFilter: warehouseFilterSchema,
     itemGroup: z.object({ name: z.string(), ref: z.string() }).passthrough().optional(),
+    itemGroups: itemGroupsSchema,
+    byGroup: z
+      .array(
+        z
+          .object({
+            name: z.string(),
+            ref: z.string(),
+            path: z.string(),
+            positions: z.number(),
+            quantity: z.number(),
+            sold: z.number(),
+            returns: z.number(),
+            revenue: z.number(),
+            revenueExVat: z.number(),
+          })
+          .passthrough(),
+      )
+      .optional(),
     query: z.string().optional(),
     otherSimilar: z
       .object({ count: z.number(), quantity: z.number(), examples: z.array(z.string()) })
@@ -617,6 +676,7 @@ export const getItemSalesResultSchema = z
           groupRef: z.string().optional(),
           characteristic: z.string().optional(),
           characteristicRef: z.string().optional(),
+          matchedGroupRef: z.string().optional(),
           warehouse: z.string().optional(),
           warehouseRef: z.string().optional(),
           quantity: z.number(),
@@ -638,6 +698,21 @@ export const getStockResultSchema = z
     groupBy: z.string().optional(),
     warehouseFilter: warehouseFilterSchema,
     itemGroup: z.object({ name: z.string(), ref: z.string() }).passthrough().optional(),
+    itemGroups: itemGroupsSchema,
+    byGroup: z
+      .array(
+        z
+          .object({
+            name: z.string(),
+            ref: z.string(),
+            path: z.string(),
+            positions: z.number(),
+            inStock: z.number(),
+            toShip: z.number(),
+          })
+          .passthrough(),
+      )
+      .optional(),
     query: z.string().optional(),
     otherSimilar: z
       .object({ count: z.number(), inStock: z.number(), examples: z.array(z.string()) })
@@ -671,6 +746,7 @@ export const getStockResultSchema = z
           groupRef: z.string().optional(),
           characteristic: z.string().optional(),
           characteristicRef: z.string().optional(),
+          matchedGroupRef: z.string().optional(),
           warehouse: z.string().optional(),
           warehouseRef: z.string().optional(),
           inStock: z.number(),
