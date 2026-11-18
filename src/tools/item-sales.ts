@@ -33,7 +33,7 @@ import {
   type Warehouse,
 } from "../odata/stock.js";
 import { getItemSalesResultSchema } from "../schemas/output.js";
-import { databaseField, dateField, guard, ok } from "./_shared.js";
+import { databaseField, dateField, guard, ok, snapshotField, snapshotFields } from "./_shared.js";
 
 const GUID = /^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$/;
 
@@ -115,6 +115,7 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
             "Не считать продажи своим организациям: покупатель-контрагент с ИНН одной из организаций базы. Исключённое — в excludedOwnOrganizations",
           ),
         limit: z.number().int().positive().max(1000).default(200).describe("Сколько позиций вернуть"),
+        snapshot: snapshotField,
       }),
       outputSchema: getItemSalesResultSchema,
     },
@@ -129,6 +130,7 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
       query,
       excludeOwnOrganizations,
       limit,
+      snapshot,
     }) =>
       guard("read.analytics.get_sales_register", async () => {
         const t0 = Date.now();
@@ -277,6 +279,16 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
             "Справочник характеристик не опубликован в OData: у строк с характеристикой только characteristicRef.",
           );
         }
+        // Метка итогов: страница через минуту читает регистр заново, и если в 1С провели документы, склеивать нельзя.
+        const changes = snapshotFields(
+          {
+            count: withItem.length,
+            quantity: total(kept, (q) => q),
+            revenue: kept.reduce((t, r) => t + r.revenueCents, 0),
+          },
+          snapshot,
+        );
+        if (changes.note) notes.unshift(changes.note);
         const noItem = lines.filter((l) => !l.itemRef);
         if (noItem.length) notes.push("Строки без номенклатуры не показаны, но входят в итоги.");
         if (byWarehouse && first && kept.some((r) => !r.warehouseRef)) {
@@ -380,6 +392,7 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
           revenueExVat: kept.reduce((t, r) => t + r.revenueExVatCents, 0) / 100,
           // Всего, а не на странице: сколько в этом ответе — длина списка и returned (его добавляет обёртка страниц).
           count: withItem.length,
+          ...changes.fields,
           ...(first
             ? {
                 byOperation: [...byOperation]

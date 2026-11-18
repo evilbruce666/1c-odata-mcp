@@ -431,6 +431,28 @@ describe("самопроверка: поддельная 1С отвечает н
     expect(ut2.violations).toEqual([]);
   });
 
+  it("объект по ключу из данных теста — одна запись или 404, а не вся коллекция", async () => {
+    // Раньше подделка отдавала на Catalog_Контрагенты(guid'…') весь список данных теста: счётчик строк видел 5 строк
+    // там, где 1С вернёт одну.
+    const known = "11111111-1111-4111-8111-111111111111";
+    const rows = [known, "22222222-2222-4222-8222-222222222222"].map((Ref_Key) => ({
+      Ref_Key,
+      Description: "Тест",
+    }));
+    const fake = fake1C(
+      { READ_ONLY: "true" },
+      { data: (q) => (q.base === "Catalog_Контрагенты" ? rows : undefined) },
+    );
+    const one = await fake.conn.client.getEntity(`Catalog_Контрагенты(guid'${known}')?$format=json`);
+    expect(one).toMatchObject({ Ref_Key: known });
+    expect(one).not.toHaveProperty("value");
+    await expect(
+      fake.conn.client.getEntity(
+        "Catalog_Контрагенты(guid'33333333-3333-4333-8333-333333333333')?$format=json",
+      ),
+    ).rejects.toMatchObject({ kind: "not_found" });
+  });
+
   it("поле, которого нет у объекта, в $select / $filter", async () => {
     const fake = fake1C({ READ_ONLY: "true" });
     const v = await expectRejected(fake, () =>

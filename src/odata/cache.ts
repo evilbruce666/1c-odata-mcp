@@ -120,5 +120,10 @@ export async function pageCached<T>(
   value.catch(() => {
     if (map.get(key) === entry) map.delete(key);
   });
+  // В простое запись уходит по таймеру, а не ждёт следующего вызова: полная выборка регистра — до сотен тысяч строк.
+  const expire = setTimeout(() => {
+    if (map.get(key) === entry) map.delete(key);
+  }, PAGE_READ_TTL_MS);
+  expire.unref?.();
   return value;
 }

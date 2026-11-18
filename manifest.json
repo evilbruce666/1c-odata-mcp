@@ -2238,6 +2238,10 @@
             "exclusiveMinimum": 0,
             "maximum": 1000
           },
+          "snapshot": {
+            "description": "snapshot прошлой страницы: если данные изменились, в ответе будет dataChanged",
+            "type": "string"
+          },
           "offset": {
             "default": 0,
             "description": "С какой строки начать (0 — с начала); значение из nextOffset прошлого ответа",
@@ -2394,6 +2398,12 @@
           },
           "count": {
             "type": "number"
+          },
+          "snapshot": {
+            "type": "string"
+          },
+          "dataChanged": {
+            "type": "boolean"
           },
           "byWarehouse": {
             "type": "array",
@@ -2597,6 +2607,10 @@
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 1000
+          },
+          "snapshot": {
+            "description": "snapshot прошлой страницы: если данные изменились, в ответе будет dataChanged",
+            "type": "string"
           },
           "offset": {
             "default": 0,
@@ -2829,6 +2843,12 @@
           },
           "count": {
             "type": "number"
+          },
+          "snapshot": {
+            "type": "string"
+          },
+          "dataChanged": {
+            "type": "boolean"
           },
           "byOperation": {
             "type": "array",

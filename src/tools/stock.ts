@@ -25,7 +25,7 @@ import {
   type WarehouseStockLine,
 } from "../odata/stock.js";
 import { getStockResultSchema } from "../schemas/output.js";
-import { databaseField, dateField, guard, ok } from "./_shared.js";
+import { databaseField, dateField, guard, ok, snapshotField, snapshotFields } from "./_shared.js";
 
 const GUID = /^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$/;
 
@@ -96,10 +96,11 @@ export function registerStockTools(server: McpServer, ctx: ServerContext): void 
           .optional()
           .describe("Поиск товара: части слов из названия или артикул. Можно вместе с group или groups"),
         limit: z.number().int().positive().max(1000).default(200).describe("Сколько позиций вернуть"),
+        snapshot: snapshotField,
       }),
       outputSchema: getStockResultSchema,
     },
-    ({ database, asOf, warehouses, groupBy, group, groups: groupList, query, limit }) =>
+    ({ database, asOf, warehouses, groupBy, group, groups: groupList, query, limit, snapshot }) =>
       guard("read.analytics.get_warehouse_stock", async () => {
         const t0 = Date.now();
         const conn = ctx.db(database);
@@ -211,6 +212,12 @@ export function registerStockTools(server: McpServer, ctx: ServerContext): void 
             "Справочник характеристик не опубликован в OData: у строк с характеристикой только characteristicRef.",
           );
         }
+        // Метка итогов: страница через минуту читает регистр заново, и если в 1С провели документы, склеивать нельзя.
+        const changes = snapshotFields(
+          { count: withItem.length, inStock: sum(sel.lines, "inStock"), toShip: sum(sel.lines, "toShip") },
+          snapshot,
+        );
+        if (changes.note) notes.unshift(changes.note);
         const noItem = sel.lines.filter((l) => !l.itemRef);
         if (noItem.length) notes.push("Строки без номенклатуры не показаны, но входят в итоги.");
 
@@ -259,6 +266,7 @@ export function registerStockTools(server: McpServer, ctx: ServerContext): void 
           totalToShip: sum(sel.lines, "toShip"),
           // Всего, а не на странице: сколько в этом ответе — длина списка и returned.
           count: withItem.length,
+          ...changes.fields,
           ...(totalsShown
             ? {
                 byWarehouse: [...byWarehouseTotals]

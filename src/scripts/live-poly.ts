@@ -23,6 +23,8 @@ const SEARCH_KINDS = ["bank", "cash"] as const;
 const SEARCH_KEYS = ["bankIn", "bankOut", "paymentOrder", "cashIn", "cashOut", "cardPayment"] as const;
 /** Движение денег get_payments_breakdown: поступления и списания по счёту, ПКО и РКО. */
 const PAYMENT_KEYS: Record<string, boolean> = { bankIn: true, cashIn: true, bankOut: false, cashOut: false };
+/** Предел страниц поиска на один вид: по 500 документов — 100 тыс. на вид. */
+const MAX_PAGES = 200;
 
 const norm = (v: unknown) =>
   String(v ?? "")
@@ -140,7 +142,9 @@ export async function checkPolyCounterparty(
     const start = requests();
     for (const kind of SEARCH_KINDS) {
       let offset = 0;
-      for (let guard = 0; guard < 200; guard++) {
+      let finished = false;
+      let errored = false;
+      for (let guard = 0; guard < MAX_PAGES; guard++) {
         const r = await run("read.document.search_documents", {
           database: db,
           kind,
@@ -152,6 +156,7 @@ export async function checkPolyCounterparty(
         });
         if (r.err) {
           broken.push(`ошибка поиска (${kind}): ${r.text.slice(0, 120)}`);
+          errored = true;
           break;
         }
         for (const f of (r.sc["failed"] as Json[] | undefined) ?? [])
@@ -161,9 +166,14 @@ export async function checkPolyCounterparty(
         for (const row of (r.sc["rows"] as Json[] | undefined) ?? [])
           if (searchSets.includes(String(row["entitySet"]))) got.push(norm(row["ref"]));
         if (typeof r.sc["counterpartyFilter"] === "string") notes.push(r.sc["counterpartyFilter"]);
-        if (r.sc["nextOffset"] === undefined) break;
+        if (r.sc["nextOffset"] === undefined) {
+          finished = true;
+          break;
+        }
         offset = r.sc["nextOffset"] as number;
       }
+      // Упёрлись в предел страниц: проверка не дочитана, а не «совпала» (ревью).
+      if (!finished && !errored) broken.push(`поиск (${kind}) не дочитан за ${MAX_PAGES} страниц`);
     }
     const wantRefs = want.map((d) => d.ref).sort();
     const duplicates = got.length - new Set(got).size;

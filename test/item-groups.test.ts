@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createServer } from "../src/mcp/server.js";
-import { PAGE_READ_ENTRIES, PAGE_READ_TTL_MS } from "../src/odata/cache.js";
+import { PAGE_READ_ENTRIES, PAGE_READ_TTL_MS, pageCached } from "../src/odata/cache.js";
 import { fake1C, type FakeQuery } from "./helpers/fake-1c.js";
 
 /**
@@ -244,6 +244,57 @@ describe("листание длинного списка: регистр чит�
     expect(next.isError, next.text.slice(0, 200)).toBeFalsy();
     expect(next.structuredContent.items.length).toBeGreaterThan(0);
     expect(counter.balance).toBe(1); // прерванное чтение до подделки не дошло, своё — одно
+  });
+
+  it("snapshot: в окне кэша данные те же; окно истекло и в 1С провели документ — dataChanged", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const balance = BALANCE.slice(0, 600);
+    const { call } = await setup({}, balance);
+    const first = await call(STOCK, { limit: 1000 });
+    const snapshot = first.structuredContent["snapshot"] as string;
+    expect(snapshot).toMatch(/^[0-9a-f]{16}$/);
+    const next = first.structuredContent["nextOffset"] as number;
+    const same = await call(STOCK, { limit: 1000, offset: next, snapshot });
+    expect(same.structuredContent["dataChanged"]).toBeUndefined();
+    balance.push(bal(I(1), 5, 0)); // новый остаток после первой страницы
+    vi.setSystemTime(Date.now() + PAGE_READ_TTL_MS + 1);
+    const changed = await call(STOCK, { limit: 1000, offset: next, snapshot });
+    expect(changed.structuredContent["dataChanged"]).toBe(true);
+    expect(changed.structuredContent["note"]).toContain("прочитайте заново с offset=0");
+  });
+
+  it("snapshot есть и у продаж", async () => {
+    const { call } = await setup();
+    const r = await call(SALES_TOOL, { ...PERIOD, limit: 10 });
+    expect(r.structuredContent["snapshot"]).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it("в простое чтение уходит из памяти по таймеру, а не ждёт следующего вызова", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout"] });
+    const owner = {};
+    let loads = 0;
+    const load = async () => ++loads;
+    await pageCached(owner, "k", true, load);
+    expect(await pageCached(owner, "k", false, load)).toBe(1); // в окне — то же чтение
+    vi.advanceTimersByTime(PAGE_READ_TTL_MS);
+    // Время запроса отстаёт от таймера: запись ушла именно по таймеру, а не по сроку при поиске.
+    vi.setSystemTime(Date.now() - PAGE_READ_TTL_MS + 1);
+    expect(await pageCached(owner, "k", false, load)).toBe(2);
+  });
+
+  it("справочник не поместился в предел — следующие страницы не пробуют читать его целиком заново", async () => {
+    const { call, counter } = await setup({ ODATA_ANALYTICS_MAX_ROWS: "1000" }, BALANCE.slice(0, 500));
+    let offset = 0;
+    const attempts: number[] = [];
+    for (let page = 0; page < 4; page++) {
+      const r = await call(STOCK, { limit: 100, offset });
+      expect(r.isError, r.text.slice(0, 200)).toBeFalsy();
+      attempts.push(counter.wholeCatalog);
+      offset = r.structuredContent["nextOffset"] as number;
+    }
+    expect(attempts[0]).toBe(0); // первая страница — по ссылкам
+    expect(attempts[1]).toBeGreaterThan(0); // первая попытка на продолжении
+    expect(attempts[3]).toBe(attempts[1]); // дальше — сразу по ссылкам
   });
 
   it("справочник больше предела выборки — сведения по ссылкам, как раньше, ответ не ломается", async () => {

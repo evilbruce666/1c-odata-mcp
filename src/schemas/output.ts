@@ -628,6 +628,8 @@ export const getItemSalesResultSchema = z
     revenue: z.number(),
     revenueExVat: z.number(),
     count: z.number(),
+    snapshot: z.string().optional(),
+    dataChanged: z.boolean().optional(),
     byOperation: z
       .array(
         z
@@ -721,6 +723,8 @@ export const getStockResultSchema = z
     totalInStock: z.number(),
     totalToShip: z.number(),
     count: z.number(),
+    snapshot: z.string().optional(),
+    dataChanged: z.boolean().optional(),
     byWarehouse: z
       .array(
         z

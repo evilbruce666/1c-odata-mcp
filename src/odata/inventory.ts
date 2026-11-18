@@ -401,6 +401,14 @@ const WHOLE_CATALOG_FIRST_PAGE_FROM = 200;
  * Название, артикул и папка позиций страницы. Справочник, который не помещается в предел выборки, читается по ссылкам,
  * как раньше: отказ здесь сломал бы ответ, который без этой оптимизации работал.
  */
+/**
+ * Справочник, который уже не поместился в ODATA_ANALYTICS_MAX_ROWS: следующие страницы сразу читают по ссылкам, а не
+ * пробуют весь справочник на каждой странице заново (ревью: 408 запросов вместо 378). Помним 10 минут — справочник так
+ * быстро не уменьшается.
+ */
+const catalogTooBig = new WeakMap<object, Map<string, number>>();
+const TOO_BIG_TTL_MS = 10 * 60_000;
+
 export async function readPageAttributes(
   conn: Connection,
   set: string,
@@ -409,11 +417,17 @@ export async function readPageAttributes(
   const unique = [...new Set(refs)];
   const from = callPageStart() === 0 ? WHOLE_CATALOG_FIRST_PAGE_FROM : WHOLE_CATALOG_ATTRIBUTES_FROM;
   if (unique.length <= from) return readItemAttributes(conn, set, unique);
+  const tooBig = catalogTooBig.get(conn)?.get(set);
+  if (tooBig !== undefined && Date.now() - tooBig < TOO_BIG_TTL_MS)
+    return readItemAttributes(conn, set, unique);
   let all: Map<string, ItemAttributes>;
   try {
     all = await readAllItems(conn, set);
   } catch (e) {
     if (!(e instanceof InputError)) throw e;
+    const marks = catalogTooBig.get(conn) ?? new Map<string, number>();
+    marks.set(set, Date.now());
+    catalogTooBig.set(conn, marks);
     return readItemAttributes(conn, set, unique);
   }
   const out = new Map(unique.flatMap((ref) => (all.has(ref) ? [[ref, all.get(ref)!] as const] : [])));

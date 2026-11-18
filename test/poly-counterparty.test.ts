@@ -545,12 +545,16 @@ describe("живая проверка live-read на корпусе (src/scripts
     dropFirstRow?: boolean;
     failEmptySearch?: boolean;
     duplicateRow?: boolean;
+    endlessPages?: boolean;
   }) => {
     const { run, counters, fake } = await setup(opts);
     const checks: Array<[string, boolean, string]> = [];
     const lines: string[] = [];
     // Испорченный инструмент: теряет первый документ в каждом ответе поиска.
     const tool = async (name: string, args: Record<string, unknown>) => {
+      // Листание не кончается: проверка упирается в предел страниц и не должна считаться совпавшей (ревью).
+      if (opts.endlessPages && name === "read.document.search_documents")
+        return { err: false, sc: { rows: [], nextOffset: Number(args["offset"] ?? 0) + 1 }, text: "" };
       const r = await run(name, args);
       if (name !== "read.document.search_documents" || !Array.isArray(r.sc["rows"])) return r;
       const rows = r.sc["rows"] as unknown[];
@@ -588,6 +592,14 @@ describe("живая проверка live-read на корпусе (src/scripts
   ] as const)("ловит испорченный поиск: %s — проверка не проходит", async (_name, opts) => {
     const { checks } = await live(opts);
     expect(checks.filter(([, ok]) => !ok).length).toBeGreaterThan(0);
+  });
+
+  it("листание не кончается — не проходит ни одна проверка, и у ссылок без документов тоже", async () => {
+    // Пустой список у ссылки без документов совпадает с пустым эталоном: без отметки «не дочитан» был бы ✓ (ревью).
+    const { checks } = await live({ endlessPages: true });
+    expect(checks.length).toBe(6);
+    expect(checks.filter(([, ok]) => ok)).toEqual([]);
+    expect(checks.find(([name]) => name.includes("неизвестный guid"))![2]).toContain("не дочитан");
   });
 });
 
@@ -659,4 +671,30 @@ describe("1С отвергает cast только в одном виде (ре�
       expect({ documents: s["documents"], inflow: s["inflow"], outflow: s["outflow"] }).toEqual(want);
     });
   }
+});
+
+describe("найденное типизированным Контрагент_Key — тоже доказательство, что ссылка — контрагент", () => {
+  it("cast в банке и кассе ничего не нашёл, реализации нашлись — без проверки справочника и без отката", async () => {
+    // Ветка typedCounterparty в recheckPoly: без неё ушёл бы лишний GET Catalog_Контрагенты(guid) (ревью).
+    const { call } = await setup();
+    const inner = globalThis.fetch;
+    let keyedChecks = 0;
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const decoded = decodeURIComponent(url);
+      if (/Catalog_Контрагенты\(guid'/.test(decoded)) keyedChecks++;
+      // Серверный отбор по полиморфному полю ничего не находит: документов контрагента в банке и кассе нет.
+      if (decoded.includes("cast(guid'"))
+        return new Response(JSON.stringify({ value: [] }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      return inner(input, init);
+    });
+    const s = await call("read.document.search_documents", { counterpartyRef: CP(1), limit: 500 });
+    const rows = s["rows"] as Array<{ entitySet: string }>;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.entitySet === TYPED_SET)).toBe(true);
+    expect(keyedChecks).toBe(0);
+    expect(String(s["counterpartyFilter"] ?? "")).not.toContain("не найдена среди контрагентов");
+  });
 });

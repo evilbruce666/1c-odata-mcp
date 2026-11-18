@@ -378,6 +378,17 @@ export function fake1C(env: Record<string, string> = {}, options: FakeOptions = 
     }
 
     const own = method === "GET" ? options.data?.({ base, ...(fn ? { fn } : {}), args, params }) : undefined;
+    // Объект по ключу: одна запись или 404, как в 1С, а не вся коллекция данных теста.
+    const ownKey =
+      own && tail === "" ? /^[^(]+\(guid'([0-9a-f-]{36})'\)$/i.exec(path)?.[1]?.toLowerCase() : undefined;
+    if (own && ownKey && own.some((r) => "Ref_Key" in r)) {
+      const row = own.find((r) => String(r["Ref_Key"]).toLowerCase() === ownKey);
+      return row
+        ? json(200, row)
+        : json(404, {
+            "odata.error": { code: "9", message: { lang: "ru", value: "Экземпляр сущности не найден" } },
+          });
+    }
     if (own) {
       const skip = Number(params.get("$skip") ?? 0);
       const top = params.has("$top") ? Number(params.get("$top")) : own.length;
