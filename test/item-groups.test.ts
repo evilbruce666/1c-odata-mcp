@@ -15,6 +15,7 @@ import { fake1C, type FakeQuery } from "./helpers/fake-1c.js";
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 const uuid = (kind: string, i: number) => `${kind}0000000-0000-4000-8000-${String(i).padStart(12, "0")}`;
@@ -96,7 +97,7 @@ const SALES = ITEMS.flatMap((it, i) =>
 const guidsIn = (text: string) =>
   new Set([...text.matchAll(/guid'([0-9a-f-]{36})'/gi)].map((m) => m[1]!.toLowerCase()));
 
-function data(counter: { balance: number; turnovers: number }, balance = BALANCE) {
+function data(counter: { balance: number; turnovers: number; wholeCatalog: number }, balance = BALANCE) {
   return (q: FakeQuery) => {
     const filter = q.params.get("$filter") ?? "";
     if (q.fn === "Balance") {
@@ -113,7 +114,10 @@ function data(counter: { balance: number; turnovers: number }, balance = BALANCE
       const refs = guidsIn(filter);
       if (filter.includes("Parent_Key eq")) return ITEMS.filter((i) => refs.has(i.Parent_Key));
       if (filter.includes("Ref_Key eq")) return [...ITEMS, ...GROUPS].filter((i) => refs.has(i.Ref_Key));
-      if (filter.includes("IsFolder eq false")) return ITEMS;
+      if (filter.includes("IsFolder eq false")) {
+        counter.wholeCatalog++;
+        return ITEMS;
+      }
     }
     return undefined;
   };
@@ -128,7 +132,7 @@ interface Row extends Json {
 }
 
 async function setup(env: Record<string, string> = {}, balance = BALANCE) {
-  const counter = { balance: 0, turnovers: 0 };
+  const counter = { balance: 0, turnovers: 0, wholeCatalog: 0 };
   const fake = fake1C({ READ_ONLY: "true", ...env }, { schema: "ut11", data: data(counter, balance) });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await createServer(fake.ctx).connect(a);
@@ -181,6 +185,65 @@ describe("листание длинного списка: регистр чит�
     // Сведения о позициях — из справочника целиком, а не пачками по 20 на странице: было около 1400 запросов.
     expect(fake.requests.length).toBeLessThan(2 * calls);
     expect(rows.every((r) => typeof r["item"] === "string" && r["item"] !== r.ref)).toBe(true);
+  });
+
+  it("первая страница без отбора — сведения по ссылкам: справочник целиком только для продолжения", async () => {
+    // Следующих страниц может не быть: справочник на 100 тыс. позиций ради одной страницы стоил бы вдвое дороже (ревью).
+    const { call, counter } = await setup();
+    const r = await call(STOCK, { limit: 200 });
+    expect(counter.wholeCatalog).toBe(0);
+    await call(STOCK, { limit: 200, offset: r.structuredContent["nextOffset"] as number });
+    expect(counter.wholeCatalog).toBeGreaterThan(0); // 6000 позиций — две страницы по 5000
+  });
+
+  it("дедлайн вызова останавливает чтение регистра, а не только ожидание ответа", async () => {
+    // pageCached сначала отсоединял чтение от вызова: запрос к 1С доживал до конца и держал очередь (ревью).
+    const { call } = await setup({ ODATA_TOOL_DEADLINE_MS: "200", ODATA_RETRIES: "0" });
+    const real = globalThis.fetch;
+    const balance = { aborted: 0, done: 0 };
+    vi.stubGlobal("fetch", (url: string | URL, init?: RequestInit) => {
+      if (!decodeURIComponent(String(url)).includes("/Balance")) return real(url, init);
+      return new Promise<Response>((resolve, reject) => {
+        const t = setTimeout(() => {
+          balance.done++;
+          resolve(real(url, init));
+        }, 1000);
+        init?.signal?.addEventListener("abort", () => {
+          clearTimeout(t);
+          balance.aborted++;
+          reject(new DOMException("aborted", "AbortError"));
+        });
+      });
+    });
+    const r = await call(STOCK, { limit: 10 });
+    expect(r.isError).toBe(true);
+    await new Promise((res) => setTimeout(res, 1200));
+    expect(balance).toEqual({ aborted: 1, done: 0 });
+  });
+
+  it("продолжение, ждавшее чужое чтение, которое прервали, читает само, а не отдаёт чужую ошибку", async () => {
+    const { call, counter } = await setup({ ODATA_TOOL_DEADLINE_MS: "300", ODATA_RETRIES: "0" });
+    const real = globalThis.fetch;
+    let slowFirst = true;
+    vi.stubGlobal("fetch", (url: string | URL, init?: RequestInit) => {
+      if (!decodeURIComponent(String(url)).includes("/Balance") || !slowFirst) return real(url, init);
+      slowFirst = false;
+      return new Promise<Response>((resolve, reject) => {
+        const t = setTimeout(() => resolve(real(url, init)), 2000);
+        init?.signal?.addEventListener("abort", () => {
+          clearTimeout(t);
+          reject(new DOMException("aborted", "AbortError"));
+        });
+      });
+    });
+    // Первая страница медленная и упрётся в дедлайн; продолжение приходит, пока она читает, и ждёт её чтение.
+    const first = call(STOCK, { limit: 1000 });
+    await new Promise((res) => setTimeout(res, 100));
+    const next = await call(STOCK, { limit: 1000, offset: 200 });
+    expect((await first).isError).toBe(true);
+    expect(next.isError, next.text.slice(0, 200)).toBeFalsy();
+    expect(next.structuredContent.items.length).toBeGreaterThan(0);
+    expect(counter.balance).toBe(1); // прерванное чтение до подделки не дошло, своё — одно
   });
 
   it("справочник больше предела выборки — сведения по ссылкам, как раньше, ответ не ломается", async () => {

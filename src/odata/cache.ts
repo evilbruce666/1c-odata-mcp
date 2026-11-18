@@ -5,7 +5,7 @@
  * вместе с ним). Хранится промис: параллельные вызовы ждут одну загрузку. Ошибка не кэшируется.
  */
 
-import { detachedFromCall, untilCallAborted } from "./call-context.js";
+import { callAbortError, detachedFromCall, untilCallAborted } from "./call-context.js";
 
 export const REFERENCE_TTL_MS = 10 * 60_000;
 
@@ -84,8 +84,12 @@ const pageStore = new WeakMap<object, Map<string, Entry>>();
  * в течение PAGE_READ_TTL_MS берут те же строки: иначе каждая страница заново читала бы весь регистр (6000 позиций —
  * 28 страниц и 28 чтений). Так страницы ещё и согласованы между собой: все из одного чтения. Окно истекло — чтение
  * заново, как раньше.
+ *
+ * Чтение идёт в контексте своего вызова, а не отдельно от него, как в cached: отмена клиентом и ODATA_TOOL_DEADLINE_MS
+ * останавливают запросы к 1С (ревью). Готовое чтение другого вызова только переиспользуется; если тот вызов прервали,
+ * продолжение читает само.
  */
-export function pageCached<T>(
+export async function pageCached<T>(
   owner: object,
   key: string,
   firstPage: boolean,
@@ -97,12 +101,18 @@ export function pageCached<T>(
     map = new Map();
     pageStore.set(owner, map);
   }
-  const at = now();
-  for (const [k, e] of map) if (at - e.at >= PAGE_READ_TTL_MS) map.delete(k);
+  for (const [k, e] of map) if (now() - e.at >= PAGE_READ_TTL_MS) map.delete(k);
   const hit = map.get(key);
-  if (hit && !firstPage) return untilCallAborted(hit.value as Promise<T>);
-  const value = detachedFromCall(load);
-  const entry: Entry = { at, value };
+  if (hit && !firstPage) {
+    try {
+      return await untilCallAborted(hit.value as Promise<T>);
+    } catch (e) {
+      // Своя отмена — наружу; чужое прерванное или неудачное чтение — читаем сами.
+      if (callAbortError()) throw e;
+    }
+  }
+  const value = load();
+  const entry: Entry = { at: now(), value };
   // Новая запись — в конец: при переполнении уходит самая старая.
   map.delete(key);
   map.set(key, entry);
@@ -110,5 +120,5 @@ export function pageCached<T>(
   value.catch(() => {
     if (map.get(key) === entry) map.delete(key);
   });
-  return untilCallAborted(value);
+  return value;
 }

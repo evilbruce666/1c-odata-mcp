@@ -384,11 +384,18 @@ export function readAllItems(conn: Connection, set: string): Promise<Map<string,
 }
 
 /**
- * Больше стольких позиций на странице — их сведения берутся из справочника целиком, а не пачками по 20 ссылок: страница
- * в 200 позиций стоила 10 запросов, листание 6000 позиций остатков — около 1400 запросов к 1С. Справочник на 15 тыс.
- * позиций — 3 запроса, и следующие страницы в течение минуты берут его из кэша.
+ * Больше стольких позиций на странице продолжения — их сведения берутся из справочника целиком, а не пачками по 20
+ * ссылок: листание 6000 позиций остатков стоило около 1400 запросов к 1С. Справочник на 15 тыс. позиций — 3 запроса, и
+ * следующие страницы в течение минуты берут его из кэша.
  */
 const WHOLE_CATALOG_ATTRIBUTES_FROM = 60;
+
+/**
+ * Первая страница — по ссылкам до стольких позиций (не больше 10 запросов): следующих страниц может и не быть, а
+ * справочник на 100 тыс. позиций ради страницы в 200 позиций — 20 запросов вместо 10 (ревью). Больше — справочник
+ * целиком: окно limit=1000 по ссылкам — 50 запросов.
+ */
+const WHOLE_CATALOG_FIRST_PAGE_FROM = 200;
 
 /**
  * Название, артикул и папка позиций страницы. Справочник, который не помещается в предел выборки, читается по ссылкам,
@@ -400,7 +407,8 @@ export async function readPageAttributes(
   refs: Iterable<string>,
 ): Promise<Map<string, ItemAttributes>> {
   const unique = [...new Set(refs)];
-  if (unique.length <= WHOLE_CATALOG_ATTRIBUTES_FROM) return readItemAttributes(conn, set, unique);
+  const from = callPageStart() === 0 ? WHOLE_CATALOG_FIRST_PAGE_FROM : WHOLE_CATALOG_ATTRIBUTES_FROM;
+  if (unique.length <= from) return readItemAttributes(conn, set, unique);
   let all: Map<string, ItemAttributes>;
   try {
     all = await readAllItems(conn, set);
@@ -415,13 +423,13 @@ export async function readPageAttributes(
   return out;
 }
 
-/** Названия папок позиций страницы: много папок — весь список групп (один запрос, кэш), иначе по ссылкам. */
+/** Названия папок позиций страницы: на продолжении с многими папками — весь список групп (кэш), иначе по ссылкам. */
 export async function pageGroupNames(
   conn: Connection,
   set: string,
   refs: readonly string[],
 ): Promise<Map<string, string>> {
-  if (refs.length <= 20) return resolveNames(conn, set, refs);
+  if (callPageStart() === 0 || refs.length <= 20) return resolveNames(conn, set, refs);
   const wanted = new Set(refs);
   return new Map(
     (await loadItemGroups(conn, set)).filter((g) => wanted.has(g.ref)).map((g) => [g.ref, g.name]),
