@@ -77,7 +77,19 @@ export const PAGE_READ_TTL_MS = 60_000;
  */
 export const PAGE_READ_ENTRIES = 4;
 
-const pageStore = new WeakMap<object, Map<string, Entry>>();
+/** Запись кэша страниц со своим таймером: его снимают при вытеснении, иначе таймер держал бы выборку в памяти. */
+interface PageEntry extends Entry {
+  timer?: ReturnType<typeof setTimeout>;
+}
+
+const pageStore = new WeakMap<object, Map<string, PageEntry>>();
+
+/** Убрать запись и её таймер (ревью: таймер держал вытесненные выборки, предел в 4 чтения не ограничивал память). */
+function dropPage(map: Map<string, PageEntry>, key: string): void {
+  const e = map.get(key);
+  if (e?.timer) clearTimeout(e.timer);
+  map.delete(key);
+}
 
 /**
  * Чтение для страниц одного списка. Первая страница (offset=0) всегда читает свежие данные и кладёт их сюда, следующие
@@ -101,7 +113,7 @@ export async function pageCached<T>(
     map = new Map();
     pageStore.set(owner, map);
   }
-  for (const [k, e] of map) if (now() - e.at >= PAGE_READ_TTL_MS) map.delete(k);
+  for (const [k, e] of map) if (now() - e.at >= PAGE_READ_TTL_MS) dropPage(map, k);
   const hit = map.get(key);
   if (hit && !firstPage) {
     try {
@@ -112,18 +124,21 @@ export async function pageCached<T>(
     }
   }
   const value = load();
-  const entry: Entry = { at: now(), value };
+  const entry: PageEntry = { at: now(), value };
   // Новая запись — в конец: при переполнении уходит самая старая.
-  map.delete(key);
+  dropPage(map, key);
   map.set(key, entry);
-  while (map.size > PAGE_READ_ENTRIES) map.delete(map.keys().next().value!);
+  while (map.size > PAGE_READ_ENTRIES) dropPage(map, map.keys().next().value!);
+  const store = map;
   value.catch(() => {
-    if (map.get(key) === entry) map.delete(key);
+    if (store.get(key) === entry) dropPage(store, key);
   });
   // В простое запись уходит по таймеру, а не ждёт следующего вызова: полная выборка регистра — до сотен тысяч строк.
-  const expire = setTimeout(() => {
-    if (map.get(key) === entry) map.delete(key);
+  // Таймер держит только ключ и сравнивает по метке времени, а не саму запись: вытесненная выборка освобождается.
+  const at = entry.at;
+  entry.timer = setTimeout(() => {
+    if (store.get(key)?.at === at) dropPage(store, key);
   }, PAGE_READ_TTL_MS);
-  expire.unref?.();
+  entry.timer.unref?.();
   return value;
 }

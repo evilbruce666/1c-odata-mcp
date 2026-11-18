@@ -282,6 +282,19 @@ describe("листание длинного списка: регистр чит�
     expect(await pageCached(owner, "k", false, load)).toBe(2);
   });
 
+  it("вытесненные и заменённые чтения не держатся таймерами: таймеров не больше записей", async () => {
+    // Таймер удаления держал запись в замыкании: 10 разных периодов и 5 повторов первой страницы — 15 выборок в памяти
+    // вместо 4 (ревью).
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const owner = {};
+    for (let i = 0; i < 10; i++) await pageCached(owner, `k${i}`, true, async () => i);
+    expect(vi.getTimerCount()).toBe(PAGE_READ_ENTRIES);
+    for (let i = 0; i < 5; i++) await pageCached(owner, "k9", true, async () => i);
+    expect(vi.getTimerCount()).toBe(PAGE_READ_ENTRIES);
+    vi.advanceTimersByTime(PAGE_READ_TTL_MS);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("справочник не поместился в предел — следующие страницы не пробуют читать его целиком заново", async () => {
     const { call, counter } = await setup({ ODATA_ANALYTICS_MAX_ROWS: "1000" }, BALANCE.slice(0, 500));
     let offset = 0;
