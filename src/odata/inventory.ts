@@ -288,6 +288,8 @@ export interface ItemAttributes {
   deletionMark?: boolean;
   /** ИспользованиеХарактеристик (УТ, КА, ERP): значение перечисления как есть. */
   characteristicsUsage?: string;
+  /** Папка, а не позиция: чтение по ссылкам находит и её. */
+  isFolder?: boolean;
 }
 
 /** Реквизит номенклатуры УТ, КА и ERP: ведутся ли характеристики и откуда их список. */
@@ -301,7 +303,7 @@ async function propsOf(conn: Connection, set: string): Promise<Set<string>> {
 /** Поля, которых нет в схеме базы, не запрашиваются: иначе 1С ответит 400. */
 async function itemFields(conn: Connection, set: string): Promise<string[]> {
   const props = await propsOf(conn, set);
-  const optional = ["Артикул", "Parent_Key", "Code", "DeletionMark", CHARACTERISTICS_USAGE];
+  const optional = ["Артикул", "Parent_Key", "Code", "DeletionMark", CHARACTERISTICS_USAGE, "IsFolder"];
   return ["Ref_Key", "Description", ...optional.filter((f) => props.has(f))];
 }
 
@@ -318,6 +320,7 @@ const toAttributes = (r: ODataEntity): ItemAttributes => {
     ...(code ? { code } : {}),
     ...(r["DeletionMark"] === true ? { deletionMark: true } : {}),
     ...(usage ? { characteristicsUsage: usage } : {}),
+    ...(r["IsFolder"] === true ? { isFolder: true } : {}),
   };
 };
 

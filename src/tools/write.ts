@@ -40,7 +40,7 @@ import { currentWriteOperationId, fingerprintRecordFields } from "../odata/write
 import { InputError } from "../errors.js";
 import { ODataError } from "../odata/errors.js";
 import { getDocumentPostings } from "./registers.js";
-import { PRICE_DOC, verifyPriceMovements } from "../odata/pricing.js";
+import { PRICE_DOC, priceMechanisms, verifyPriceMovements } from "../odata/pricing.js";
 import { tryPreviewView } from "./preview-view.js";
 
 /** Тип ссылки на номенклатуру в табличной части (полиморфная ссылка 1С). */
@@ -2057,7 +2057,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       inputSchema: z.object({
         database: databaseField,
         entitySet: z.string().describe("Имя объекта, напр. Catalog_Контрагенты"),
-        ref: z.string().describe("Ref_Key объекта (GUID)"),
+        // Только GUID: иначе «guid/../Другой_Набор(...)» уводил PATCH к другому объекту в обход защиты (ревью).
+        ref: z.string().trim().regex(GUID_RE, "Ref_Key (GUID)").describe("Ref_Key объекта (GUID)"),
         mark: z.boolean().default(true).describe("true — пометить на удаление, false — снять пометку"),
         confirm: confirmField,
       }),
@@ -2070,7 +2071,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const guid = ref.replace(/[{}']/g, "");
         const path = `${entitySet}(guid'${guid}')?$format=json`;
         // Проведённый документ цен с пометкой продолжал бы действовать: его записи регистра цен остаются.
-        if (mark && entitySet === PRICE_DOC) {
+        // Только для документа цен Управления торговлей: в Бухгалтерии документ с тем же именем устроен иначе (ревью).
+        if (mark && entitySet === PRICE_DOC && (await priceMechanisms(conn)).length) {
           const doc = await conn.client.getEntity<ODataEntity>(
             `${entitySet}(guid'${guid}')?$format=json&$select=Posted`,
           );
@@ -2303,7 +2305,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       inputSchema: z.object({
         database: databaseField,
         entitySet: z.string().describe("Имя документа, напр. Document_СчетНаОплатуПокупателю"),
-        ref: z.string().describe("Ref_Key документа (GUID)"),
+        ref: z.string().trim().regex(GUID_RE, "Ref_Key (GUID)").describe("Ref_Key документа (GUID)"),
         expectedDataVersion: expectedDocumentVersion
           .optional()
           .describe(

@@ -2,6 +2,7 @@ import type { Connection } from "../context.js";
 import { InputError } from "../errors.js";
 import type { ODataEntity } from "../types/odata.js";
 import { GUID_RE } from "./accounting.js";
+import { ODataError } from "./errors.js";
 import { fetchAllForAggregation } from "./aggregate.js";
 import { cached } from "./cache.js";
 import { strictText } from "./inventory.js";
@@ -102,17 +103,24 @@ export async function detectMechanism(conn: Connection, explicit?: PriceMechanis
   }
   if (found.length === 1) return found[0]!;
   return cached(conn, "price-mechanism", async () => {
+    // Только ссылки последних документов, строки — по одной из набора табличной части: строк в документе бывают
+    // тысячи (ревью: $select табличных частей 20 документов тянул их все).
     const recent = await conn.client.getCollection(
-      `${PRICE_DOC}${buildQuery({
-        select: found.map((m) => MECHANISMS[m].rows),
-        filter: cmp("Posted", "eq", "true"),
-        orderby: "Date desc",
-        top: 20,
-      })}`,
+      `${PRICE_DOC}${buildQuery({ select: ["Ref_Key"], filter: cmp("Posted", "eq", "true"), orderby: "Date desc", top: 5 })}`,
     );
-    const used = found.filter((m) =>
-      (recent.value ?? []).some((d) => (d[MECHANISMS[m].rows] as unknown[])?.length),
-    );
+    const refs = (recent.value ?? []).map((d) => String(d["Ref_Key"]));
+    const used: PriceMechanism[] = [];
+    if (refs.length)
+      for (const m of found) {
+        const rows = await conn.client.getCollection(
+          `${PRICE_DOC}_${MECHANISMS[m].rows}${buildQuery({
+            select: ["Ref_Key"],
+            filter: or(...refs.map((r) => cmp("Ref_Key", "eq", odataGuid(r)))),
+            top: 1,
+          })}`,
+        );
+        if (rows.value?.length) used.push(m);
+      }
     if (used.length === 1) return used[0]!;
     const withRecords: PriceMechanism[] = [];
     for (const m of found) {
@@ -312,9 +320,16 @@ export async function priceMovements(
 ): Promise<PriceRecord[]> {
   const { register } = MECHANISMS[mech];
   const guid = docRef.replace(/[{}']/g, "");
-  const set = await conn.client.getEntity<ODataEntity>(
-    `${register}(Recorder=${quoted(guid)}, Recorder_Type=${quoted(PRICE_DOC_TYPE)})?$format=json`,
-  );
+  let set: ODataEntity;
+  try {
+    set = await conn.client.getEntity<ODataEntity>(
+      `${register}(Recorder=${quoted(guid)}, Recorder_Type=${quoted(PRICE_DOC_TYPE)})?$format=json`,
+    );
+  } catch (e) {
+    // Живая УТ 11.5: у документа без движений набора записей нет — 404, а не пустой набор.
+    if (e instanceof ODataError && e.kind === "not_found") return [];
+    throw e;
+  }
   return ((set["RecordSet"] as ODataEntity[] | undefined) ?? [])
     .filter((r) => r["Active"] !== false)
     .map(toRecord(mech))

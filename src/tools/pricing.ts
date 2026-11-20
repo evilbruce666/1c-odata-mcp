@@ -32,7 +32,11 @@ import { confirmField, createCore } from "./write.js";
 
 const GUID = /^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$/;
 const MOMENT_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2})?$/;
-const MAX_LINES = 500;
+/**
+ * Строк в документе. Предпросмотр — одна строка ответа на позицию: на 500 строках он выходил за норму ответа, и клиент
+ * терял operationId (ревью). В ночных документах базы — до 32 строк; больше — несколькими документами.
+ */
+const MAX_LINES = 100;
 
 const mechanismField = z
   .enum(["legacy", "2.5"])
@@ -78,7 +82,8 @@ export function registerPricingTools(server: McpServer, ctx: ServerContext): voi
         "проведения (write.document.post_document, отдельный предпросмотр). Предпросмотр показывает по каждой позиции " +
         "текущую цену и новую (prices) и предупреждает: у вида цен есть зависимые виды (наценка на этот вид) — 1С их " +
         "при записи через OData не пересчитает; у позиции уже есть цена с более поздней датой — новая её не перекроет; " +
-        "цена на тот же момент — отказ. date — момент цены, по умолчанию сейчас; дата без времени — начало дня. " +
+        "цена на тот же момент — отказ. date — момент цены, по умолчанию сейчас (по часам компьютера с коннектором); дата " +
+        "без времени — начало дня. До 100 строк на документ. " +
         "Механизм определяется по базе (mechanism — явно). Ценообразование 2.5 на живой базе не проверено. Только " +
         "Управление торговлей 11 (КА 2 и ERP 2 — по тем же полям, без проверки); в Бухгалтерии — отказ.",
       inputSchema: z.object({
@@ -148,7 +153,7 @@ export function registerPricingTools(server: McpServer, ctx: ServerContext): voi
         const nomSet = await nomenclatureSet(conn);
         if (!nomSet) throw new InputError("Справочник номенклатуры не опубликован: позиции не проверить.");
         const attrs = await readItemAttributes(conn, nomSet, itemRefs);
-        const unknown = itemRefs.filter((r) => !attrs.has(r));
+        const unknown = itemRefs.filter((r) => !attrs.has(r) || attrs.get(r)!.isFolder);
         if (unknown.length)
           throw new InputError(
             `Нет в справочнике номенклатуры (или это папки): ${unknown.slice(0, 10).join(", ")}.`,
@@ -235,7 +240,20 @@ export function registerPricingTools(server: McpServer, ctx: ServerContext): voi
           })),
         };
         const result = await createCore(conn, PRICE_DOC, payload, confirm, warnings, () => undefined);
-        return withFields(result, {
+        // Строки документа в предпросмотре — только в prices: вдвоём с payload они не помещались в норму ответа.
+        const compact =
+          confirm || result.isError || !result.structuredContent
+            ? result
+            : withFields(result, {
+                payload: {
+                  ...((result.structuredContent as Record<string, unknown>)["payload"] as Record<
+                    string,
+                    unknown
+                  >),
+                  [s.rows]: `${lines.length} строк — см. prices`,
+                },
+              });
+        return withFields(compact, {
           mechanism: mech,
           priceKind: { name: kind.name, ref: kind.ref },
           date: at,
