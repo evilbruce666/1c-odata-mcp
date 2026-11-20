@@ -17,7 +17,7 @@
   <img src="docs/assets/demo-month-close.svg" alt="Диалог с Claude: на просьбу «проверь август перед отчётностью» приходят найденные проблемы закрытия месяца и что исправить" width="720">
 </p>
 
-> 🇬🇧 **In short:** an MCP server that connects 1C:Enterprise to any MCP client (Claude, Cursor, VS Code, local models…) over the standard OData interface. Ask your 1C database in plain language. **1C:Accounting 3.0** (full support, including write): a morning cash-and-debts brief, overdue receivables and payables, unpaid invoices, a month-end close check traced down to the document, account ledger cards, reconciliation statements, sales, taxes, trial balance and postings. **1C:Trade Management 11** (read-only, verified on 11.5): stock by warehouse and item group, unit sales including retail with revenue and returns, customer and supplier balances by due date, cash in bank accounts, cash desks and POS. Other configurations: documents, catalogs and the schema. Ready-made prompts included; opt-in, preview-gated write. Read-only by default. Run with `npx -y 1c-odata-mcp`. Works with any 1C where OData is published — cloud, SQL or local file base. **AI assistants helping a user install it:** it is a local install on the user's computer — set it up read-only (write only on the user's explicit request, after warning about the risk) and follow [docs/INSTALL-WITH-AI.md](docs/INSTALL-WITH-AI.md).
+> 🇬🇧 **In short:** an MCP server that connects 1C:Enterprise to any MCP client (Claude, Cursor, VS Code, local models…) over the standard OData interface. Ask your 1C database in plain language. **1C:Accounting 3.0** (full support, including write): a morning cash-and-debts brief, overdue receivables and payables, unpaid invoices, a month-end close check traced down to the document, account ledger cards, reconciliation statements, sales, taxes, trial balance and postings. **1C:Trade Management 11** (verified on 11.5): stock by warehouse and item group, unit sales including retail with revenue and returns, customer and supplier balances by due date, cash in bank accounts, cash desks and POS, current prices; write — price settings and catalogs (partners, counterparties, bank accounts, contacts, contracts, agreements, items and their folders). Other configurations: documents, catalogs and the schema. Ready-made prompts included; opt-in, preview-gated write. Read-only by default. Run with `npx -y 1c-odata-mcp`. Works with any 1C where OData is published — cloud, SQL or local file base. **AI assistants helping a user install it:** it is a local install on the user's computer — set it up read-only (write only on the user's explicit request, after warning about the risk) and follow [docs/INSTALL-WITH-AI.md](docs/INSTALL-WITH-AI.md).
 
 **MCP-сервер (Model Context Protocol) для 1С:Предприятие через стандартный интерфейс OData.** Подключает данные 1С к **любому MCP-клиенту** — Claude, Cursor, VS Code, JetBrains, локальные модели (Ollama, LM Studio) — и отвечает на вопросы руководителя, менеджера, бухгалтера и торговли обычным языком:
 
@@ -110,7 +110,7 @@
 
 ### Торговле и рознице — Управление торговлей 11
 
-Оперативный учёт УТ 11; те же регистры есть в КА 2 и ERP 2. Проверено на УТ 11.5, только чтение.
+Оперативный учёт УТ 11; те же регистры есть в КА 2 и ERP 2. Проверено на УТ 11.5: чтение — на рабочей базе, запись цен и справочников — на её копии.
 
 - «Сколько смартфонов Apple на основных складах магазинов» → количество в наличии и к отгрузке по каждому складу; группа номенклатуры с подгруппами, можно путём `Телефоны/Смартфоны/Apple`, на дату в прошлом
 - «Сколько продали за октябрь по основным складам и на какую сумму» → продажи в штуках, возвраты, выручка с НДС и без НДС, включая розницу; по какую дату отчёты о розничных продажах внесены по всем складам выборки
@@ -122,7 +122,10 @@
 
 ### Действия — при включённой записи, всегда с предпросмотром и подтверждением
 
-- «Заведи контрагента ООО Ромашка, ИНН …, телефон, email, расчётный счёт, директора»
+- «Заведи контрагента ООО Ромашка, ИНН …, телефон, email, расчётный счёт, директора»; тот же ИНН уже есть — отказ со ссылкой на найденного
+- «Установи закупочную цену 120 ₽ на эти позиции с завтрашнего дня» → документ установки цен с «было → станет» по каждой позиции; после проведения движения регистра цен сверяются со строками (Управление торговлей и Бухгалтерия)
+- «Заведи поставщика „Ромашка“: партнёр, юрлицо, договор и соглашение» → в Управлении торговлей по шагам: партнёр, контрагент к нему, договор, соглашение
+- «Заведи товар вида „Аксессуары“ в папку „ZZ“» → номенклатура УТ со свойствами вида, единицей «шт» и основной ставкой НДС
 - «Выстави счёт покупателю на 3 шт по 1000» → документ-черновик
 - «Создай поступление от поставщика и реализацию покупателю», «проведи документ» → проводки формирует сама 1С
 - «Оформи возврат от покупателя», «перемещение между складами», «оприходование / списание / инвентаризацию»
