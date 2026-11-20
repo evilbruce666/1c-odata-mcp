@@ -32,12 +32,16 @@ local process that talks only to your 1C; with a local model your data never lea
       "env": {
         "ODATA_BASE_URL": "https://<server>/<base>/odata/standard.odata/",
         "ODATA_USERNAME": "...",
-        "ODATA_PASSWORD": "..."
+        "ODATA_PASSWORD": "...",
+        "TOOLS_PROFILE": "read"
       }
     }
   }
 }
 ```
+
+`TOOLS_PROFILE=read` exposes only the read tools: less for the model to read, and it cannot write to 1C. Remove
+this line to enable writing.
 
 Restart the client and ask "check the connection to 1C". Ready-made prompts: `morning_brief`, `month_close_review`,
 `reconciliation_act`.

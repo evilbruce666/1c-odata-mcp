@@ -261,6 +261,45 @@ describe("ссылки между документами", () => {
     expect([...used].filter((n) => !env.includes(n)).sort()).toEqual([]);
   });
 
+  it("примеры конфига npx одинаковы и только на чтение: ни одна копия не отстаёт", () => {
+    // Конфиг повторяется в README, README.en и INSTALL-WITH-AI (основная копия). Копия без TOOLS_PROFILE=read
+    // или с переменной записи незаметно расходится с остальными.
+    const envs: Array<{ file: string; env: Record<string, string> }> = [];
+    for (const file of files) {
+      for (const [, body] of read(file).matchAll(/```json\n([\s\S]*?)```/g)) {
+        if (!body!.includes('"1c-odata-mcp"')) continue;
+        const cfg = JSON.parse(body!) as Record<string, Record<string, { env: Record<string, string> }>>;
+        const server = (cfg.mcpServers ?? cfg.servers)!["1c-odata"]!;
+        envs.push({ file, env: server.env });
+      }
+      for (const [, cmd] of read(file).matchAll(/^(?:claude|codex) mcp add 1c-odata (.*-- npx.*)$/gm)) {
+        const env = Object.fromEntries([...cmd!.matchAll(/--env (\w+)=(\S+)/g)].map(([, k, v]) => [k!, v!]));
+        envs.push({ file, env });
+      }
+    }
+    for (const file of files)
+      for (const [, body] of read(file).matchAll(/```toml\n([\s\S]*?)```/g))
+        if (body!.includes('"1c-odata-mcp"')) expect(body, file).toContain('TOOLS_PROFILE = "read"');
+    expect(envs.length).toBeGreaterThanOrEqual(5);
+    for (const { file, env } of envs) {
+      expect(Object.keys(env).sort(), file).toEqual([
+        "ODATA_BASE_URL",
+        "ODATA_PASSWORD",
+        "ODATA_USERNAME",
+        "TOOLS_PROFILE",
+      ]);
+      expect(env.TOOLS_PROFILE, file).toBe("read");
+    }
+    // Значение принимает разбор настроек и прячет запись.
+    const cfg = parseConfig({
+      ODATA_BASE_URL: "https://example.com/odata/standard.odata/",
+      ODATA_USERNAME: "u",
+      ODATA_PASSWORD: "p",
+      TOOLS_PROFILE: "read",
+    });
+    expect(cfg.behavior.toolsProfile).toBe("read");
+  });
+
   it("README короткий: подробности — в docs/, README — вход и карта", () => {
     expect(read("README.md").split("\n").length).toBeLessThanOrEqual(250);
   });

@@ -28,11 +28,11 @@
 2. **Не затирай чужие настройки.** Если в конфиге уже есть другие MCP-серверы, добавь `1c-odata`
    рядом с ними, а не заменяй файл целиком.
 3. **Настраивай только чтение.** Конфиги в этом документе — только для чтения, и так их и оставляй:
-   не добавляй `READ_ONLY`, `ODATA_WRITABLE`, `ODATA_DB_<ИМЯ>_WRITABLE` и другие переменные записи,
-   даже если думаешь, что они пригодятся. Для подключения посоветуй отдельного пользователя 1С с
+   не добавляй `READ_ONLY`, `ODATA_WRITABLE`, `ODATA_DB_<ИМЯ>_WRITABLE` и другие переменные записи и не
+   убирай `TOOLS_PROFILE=read`, даже если думаешь, что это пригодится. Для подключения посоветуй отдельного пользователя 1С с
    правами **только на чтение** — тогда и ошибка в настройке ничего не сможет изменить в базе.
 4. **Если пользователь сам просит запись — сначала предупреди о риске,** и только после его явного
-   «да» направь в [CONNECTING.md](CONNECTING.md#включение-записи-опционально). Скажи прямо:
+   «да» направь в [WRITE.md](WRITE.md#как-включить-запись). Скажи прямо:
    - с записью ИИ сможет создавать, изменять и проводить документы и справочники в **рабочей
      бухгалтерии**; проведённый документ меняет учёт и отчётность, ошибку придётся искать и
      исправлять бухгалтеру;
@@ -128,8 +128,9 @@ https://<сервер>/<имя_базы>/odata/standard.odata/
 
 ## Шаг 4. Подключить сервер к приложению
 
-Во всех приложениях запись одна и та же — команда `npx -y 1c-odata-mcp` и три переменные. Меняется
-только файл и название раздела.
+Во всех приложениях запись одна и та же — команда `npx -y 1c-odata-mcp` и четыре переменные: адрес, логин,
+пароль и `TOOLS_PROFILE=read` (только инструменты чтения — модели меньше читать). Меняется только файл и название
+раздела. Это основная копия конфигов: остальные документы ссылаются сюда.
 
 ### 4А. Claude Desktop
 
@@ -146,7 +147,8 @@ https://<сервер>/<имя_базы>/odata/standard.odata/
       "env": {
         "ODATA_BASE_URL": "https://<сервер>/<база>/odata/standard.odata/",
         "ODATA_USERNAME": "...",
-        "ODATA_PASSWORD": "..."
+        "ODATA_PASSWORD": "...",
+        "TOOLS_PROFILE": "read"
       }
     }
   }
@@ -171,13 +173,14 @@ args = ["-y", "1c-odata-mcp"]
 ODATA_BASE_URL = "https://<сервер>/<база>/odata/standard.odata/"
 ODATA_USERNAME = "..."
 ODATA_PASSWORD = "..."
+TOOLS_PROFILE = "read"
 ```
 
 Или одной командой в терминале (пароль останется в истории терминала — если это неприемлемо, правь файл
 конфигурации, как выше):
 
 ```bash
-codex mcp add 1c-odata --env ODATA_BASE_URL=https://<сервер>/<база>/odata/standard.odata/ --env ODATA_USERNAME=... --env ODATA_PASSWORD=... -- npx -y 1c-odata-mcp
+codex mcp add 1c-odata --env ODATA_BASE_URL=https://<сервер>/<база>/odata/standard.odata/ --env ODATA_USERNAME=... --env ODATA_PASSWORD=... --env TOOLS_PROFILE=read -- npx -y 1c-odata-mcp
 ```
 
 Проверка — `codex mcp list`. Перезапустить приложение. Готовых сценариев (MCP prompts) Codex не
@@ -210,7 +213,8 @@ codex mcp add 1c-odata --env ODATA_BASE_URL=https://<сервер>/<база>/od
       "env": {
         "ODATA_BASE_URL": "https://<сервер>/<база>/odata/standard.odata/",
         "ODATA_USERNAME": "...",
-        "ODATA_PASSWORD": "..."
+        "ODATA_PASSWORD": "...",
+        "TOOLS_PROFILE": "read"
       }
     }
   }
@@ -226,7 +230,7 @@ codex mcp add 1c-odata --env ODATA_BASE_URL=https://<сервер>/<база>/od
 ([CONNECTING.md](CONNECTING.md#вариант-б-из-исходников-с-env-пароль-не-в-конфиге)).
 
 ```bash
-claude mcp add 1c-odata -s user --env ODATA_BASE_URL=https://<сервер>/<база>/odata/standard.odata/ --env ODATA_USERNAME=... --env ODATA_PASSWORD=... -- npx -y 1c-odata-mcp
+claude mcp add 1c-odata -s user --env ODATA_BASE_URL=https://<сервер>/<база>/odata/standard.odata/ --env ODATA_USERNAME=... --env ODATA_PASSWORD=... --env TOOLS_PROFILE=read -- npx -y 1c-odata-mcp
 ```
 
 Проверка — `claude mcp list`.
