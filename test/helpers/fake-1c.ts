@@ -392,7 +392,11 @@ export function fake1C(env: Record<string, string> = {}, options: FakeOptions = 
     if (own) {
       const skip = Number(params.get("$skip") ?? 0);
       const top = params.has("$top") ? Number(params.get("$top")) : own.length;
-      return json(200, { value: own.slice(skip, skip + top) });
+      // $inlinecount=allpages: 1С отдаёт общее число строк отбора в odata.count (строкой).
+      return json(200, {
+        value: own.slice(skip, skip + top),
+        ...(params.get("$inlinecount") === "allpages" ? { "odata.count": String(own.length) } : {}),
+      });
     }
     if (virtual) {
       const row = syntheticRow(virtual, base, schema);

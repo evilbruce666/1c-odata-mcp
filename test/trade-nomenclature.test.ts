@@ -86,7 +86,7 @@ function select(rows: Record<string, unknown>[], filter: string) {
   );
 }
 
-function setup(schema: FakeSchema = "ut11", usedUnits: string[] = [PCS]) {
+function setup(schema: FakeSchema = "ut11", usage: Record<string, number> = { [PCS]: 14998, [PCS2]: 2 }) {
   const posts: { set: string; body: Record<string, unknown> }[] = [];
   const fake = fake1C(
     {
@@ -100,7 +100,7 @@ function setup(schema: FakeSchema = "ut11", usedUnits: string[] = [PCS]) {
         const filter = q.params.get("$filter") ?? "";
         const unit = /ЕдиницаИзмерения_Key eq guid'([0-9a-f-]{36})'/.exec(filter)?.[1];
         if (q.base === "Catalog_Номенклатура" && unit)
-          return usedUnits.includes(unit) ? [{ Ref_Key: g(99) }] : [];
+          return Array.from({ length: usage[unit] ?? 0 }, (_, i) => ({ Ref_Key: g(1000 + i) }));
         const rows = TABLES[q.base];
         return rows ? select(rows, q.params.get("$filter") ?? "") : undefined;
       },
@@ -242,12 +242,12 @@ describe("create_nomenclature в Управлении торговлей", () =>
     expect(r.sc["payload"]).not.toHaveProperty("ЕдиницаДляОтчетов_Key");
   });
 
-  it("две «шт» в базе — взята та, которой пользуется номенклатура, с заметкой; обе в ходу — отказ", async () => {
+  it("две «шт» в базе — взята самая используемая (вдвое и больше), с заметкой; без перевеса — отказ", async () => {
     const r = await setup().call({ name: "ZZ-TEST", kind: "Товары" });
     expect(r.isError, r.text.slice(0, 300)).toBeFalsy();
     expect(r.sc["payload"]).toMatchObject({ ЕдиницаИзмерения_Key: PCS });
-    expect(JSON.stringify(r.sc["notes"])).toContain("пользуется номенклатура");
-    const both = await setup("ut11", [PCS, PCS2]).call({ name: "ZZ-TEST", kind: "Товары" });
+    expect(JSON.stringify(r.sc["notes"])).toContain("самая используемая");
+    const both = await setup("ut11", { [PCS]: 10, [PCS2]: 6 }).call({ name: "ZZ-TEST", kind: "Товары" });
     expect(both.isError).toBe(true);
     expect(both.text).toContain(PCS2);
     const explicit = await setup().call({ name: "ZZ-TEST", kind: "Товары", unit: PCS2 });

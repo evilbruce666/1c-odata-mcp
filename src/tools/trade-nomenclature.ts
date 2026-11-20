@@ -91,8 +91,9 @@ async function one(
 }
 
 /**
- * Единица по названию или коду. Одинаковых бывает несколько (на живой УТ — две «шт»: «0796» и заведённая позже «796 »):
- * тогда берётся та, которой пользуется номенклатура базы, если такая одна; иначе — отказ со ссылками.
+ * Единица по названию или коду. Одинаковых бывает несколько (на живой УТ — две «шт»: «0796» у 14998 позиций и
+ * заведённая позже «796 » у двух): тогда берётся та, у которой позиций хотя бы вдвое больше, чем у следующей; иначе —
+ * отказ со ссылками и числами.
  */
 async function resolveUnit(
   conn: Connection,
@@ -118,27 +119,34 @@ async function resolveUnit(
   );
   if (value.length === 1) return value[0]!;
   if (value.length === 0) return `Единица измерения «${q}» не найдена. Ничего не создано.`;
-  const used: ODataEntity[] = [];
+  const counts: number[] = [];
   for (const u of value) {
-    const { value: items } = await conn.client.getCollection<ODataEntity>(
+    const r = await conn.client.getCollection<ODataEntity>(
       `${set}${buildQuery({
         filter: cmp("ЕдиницаИзмерения_Key", "eq", odataGuid(String(u["Ref_Key"]))),
         select: ["Ref_Key"],
         top: 1,
+        count: true,
       })}`,
     );
-    if (items.length) used.push(u);
+    counts.push(Number(r["odata.count"] ?? r.value.length));
   }
-  if (used.length === 1) {
+  const order = counts.map((n, i) => [n, i] as const).sort((a, b) => b[0] - a[0]);
+  const [first, second] = order;
+  const list = value
+    .map(
+      (r, i) =>
+        `${String(r["Description"])}, код ${String(r["Code"]).trim()} (${String(r["Ref_Key"])}) — позиций ${counts[i]}`,
+    )
+    .join("; ");
+  // Явный перевес — хотя бы вдвое больше позиций, чем у следующей: иначе угадывать нельзя.
+  if (first && first[0] > 0 && (!second || first[0] >= 2 * second[0])) {
     notes.push(
-      `Единиц «${q}» в базе ${value.length}; взята та, которой пользуется номенклатура: код ${String(used[0]!["Code"]).trim()} ` +
-        `(${String(used[0]!["Ref_Key"])}). Другая — unit с её Ref_Key.`,
+      `Единиц «${q}» в базе ${value.length}: ${list}. Взята самая используемая; другая — unit с её Ref_Key.`,
     );
-    return used[0]!;
+    return value[first[1]]!;
   }
-  return `Единица измерения: под «${q}» подходит несколько — ${value
-    .map((r) => `${String(r["Description"])}, код ${String(r["Code"]).trim()} (${String(r["Ref_Key"])})`)
-    .join("; ")}. Укажите Ref_Key. Ничего не создано.`;
+  return `Единица измерения: под «${q}» подходит несколько — ${list}. Укажите Ref_Key. Ничего не создано.`;
 }
 
 /** Основная действующая ставка НДС на день: признак «Основная», не расчётная, день внутри периода действия. */
