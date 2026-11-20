@@ -247,4 +247,22 @@ describe("create_counterparty в Управлении торговлей", () =>
     expect(s.posts).toEqual([]);
     expect(s.fake.violations).toEqual([]);
   });
+
+  it.each(["Catalog_Контрагенты", "Catalog_Партнеры"])(
+    "mark_for_deletion в УТ: %s — проходит защиту (предпросмотр); другой справочник — отказ",
+    async (entitySet) => {
+      const s = setup();
+      const ref = "cccccccc-0000-0000-0000-00000000000c";
+      const r = await s.call({ entitySet, ref, mark: true }, "write.entity.mark_for_deletion");
+      expect(r.isError, r.text.slice(0, 300)).toBeFalsy();
+      expect(r.sc["dryRun"]).toBe(true);
+      const other = await s.call(
+        { entitySet: "Catalog_Номенклатура", ref, mark: true },
+        "write.entity.mark_for_deletion",
+      );
+      expect(other.isError).toBe(true);
+      expect(other.text).toContain("только для Бухгалтерии");
+      expect(s.fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
+    },
+  );
 });

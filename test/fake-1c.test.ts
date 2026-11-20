@@ -75,7 +75,8 @@ const OVERRIDES: Record<string, Record<string, unknown>> = {
   "write.catalog.update_nomenclature": { ref: id, name: "Тест" },
   "read.schema.describe_entity": { entitySet: "Catalog_Контрагенты" },
   "write.document.post_document": { entitySet: "Document_РеализацияТоваровУслуг", ref: id },
-  "write.entity.mark_for_deletion": { entitySet: "Catalog_Контрагенты", ref: id },
+  // Справочник, который запись в УТ не создаёт: пометка контрагентов и партнёров в УТ разрешена (TRADE_WRITE).
+  "write.entity.mark_for_deletion": { entitySet: "Catalog_Номенклатура", ref: id },
   "write.entity.update_entity": {
     entitySet: "Catalog_Контрагенты",
     ref: id,

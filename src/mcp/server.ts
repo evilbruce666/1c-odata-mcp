@@ -22,7 +22,7 @@ import { registerPricingTools } from "../tools/pricing.js";
 import { registerWarehouseTools } from "../tools/warehouses.js";
 import { tradeWithoutAccounting, withoutAccounting } from "../odata/configuration.js";
 import { PRICE_DOC, priceMechanisms } from "../odata/pricing.js";
-import { tradeCounterpartySchema } from "../tools/trade-counterparty.js";
+import { PARTNERS, tradeCounterpartySchema } from "../tools/trade-counterparty.js";
 import { registerDebtTools } from "../tools/debts.js";
 import { registerMonthCloseTools } from "../tools/month-close.js";
 import { registerCardTools } from "../tools/card.js";
@@ -424,14 +424,20 @@ interface TradeWrite {
   /** Вызов из поддержанного в УТ набора (например, документ цен, а не любой документ). */
   applies: (args: Record<string, unknown>) => boolean;
   /** Схема базы позволяет: у цен — опубликован механизм цен, у контрагента — партнёры. */
-  ready: (conn: Connection) => Promise<boolean>;
+  ready: (conn: Connection, args: Record<string, unknown>) => Promise<boolean>;
 }
+/** Справочники, которые запись в УТ создаёт. */
+const TRADE_CATALOGS = new Set(["Catalog_Контрагенты", PARTNERS]);
 const prices = async (conn: Connection) => (await priceMechanisms(conn)).length > 0;
 const partners = (conn: Connection) => tradeCounterpartySchema(conn);
 const TRADE_WRITE: Record<string, TradeWrite> = {
   "write.pricing.create_price_setting": { applies: () => true, ready: prices },
   "write.document.post_document": { applies: (a) => a.entitySet === PRICE_DOC, ready: prices },
-  "write.entity.mark_for_deletion": { applies: (a) => a.entitySet === PRICE_DOC, ready: prices },
+  // Пометка — и для справочников, которые в УТ создаются (ошибочно созданного контрагента и партнёра убрать).
+  "write.entity.mark_for_deletion": {
+    applies: (a) => a.entitySet === PRICE_DOC || TRADE_CATALOGS.has(String(a.entitySet)),
+    ready: (conn, a) => (a.entitySet === PRICE_DOC ? prices(conn) : partners(conn)),
+  },
   "write.counterparty.create_counterparty": { applies: () => true, ready: partners },
   "write.counterparty.update_counterparty": { applies: () => true, ready: partners },
 };
@@ -471,7 +477,7 @@ function refuseWriteWithoutAccounting(
         noAccounting = await withoutAccounting(conn);
         if (noAccounting) trade = await tradeWithoutAccounting(conn);
         const tradeWrite = TRADE_WRITE[name];
-        if (noAccounting && tradeWrite?.applies(args)) tradeAllowed = await tradeWrite.ready(conn);
+        if (noAccounting && tradeWrite?.applies(args)) tradeAllowed = await tradeWrite.ready(conn, args);
       } catch (e) {
         // Защита закрывается, а не открывается: при сбое схемы инструмент сам перечитал бы её и записал (ревью:
         // первый $metadata 503 — и PATCH уходил в базу УТ).
