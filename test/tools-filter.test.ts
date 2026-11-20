@@ -19,15 +19,15 @@ async function connect(env: Record<string, string>) {
 describe("фильтр инструментов", () => {
   it("по умолчанию видны все, и при READ_ONLY=true тоже: предпросмотр записи остаётся", async () => {
     const { names, client } = await connect({});
-    expect(names).toHaveLength(81);
-    expect(names.filter((n) => n.startsWith("write."))).toHaveLength(42);
+    expect(names).toHaveLength(83);
+    expect(names.filter((n) => n.startsWith("write."))).toHaveLength(43);
     expect((await client.listPrompts()).prompts).toHaveLength(PROMPTS.length);
     expect(client.getInstructions()).not.toContain("TOOLS_");
   });
 
   it("TOOLS_PROFILE=read: только чтение, запись нельзя вызвать", async () => {
     const { names, client } = await connect({ TOOLS_PROFILE: "read" });
-    expect(names).toHaveLength(39);
+    expect(names).toHaveLength(40);
     expect(names.every((n) => n.startsWith("read."))).toBe(true);
     expect(client.getInstructions()).toContain("TOOLS_PROFILE=read");
     await expect(client.callTool({ name: "write.sales.create_invoice", arguments: {} })).rejects.toThrow(

@@ -56,7 +56,11 @@ export const SNAPSHOT_REF = "11111111-1111-4111-8111-111111111111";
  * синтетическими объектами. Запись идёт через настоящий клиент и журнал (каталог журнала задаёт
  * вызывающий через env), поэтому `send` можно подменить, а журнал проверить.
  */
-export function snapshotConnection(env: Record<string, string> = {}): Connection {
+export function snapshotConnection(
+  env: Record<string, string> = {},
+  /** ut11 — для инструментов Управления торговлей (цены). */
+  schema: "bp30" | "ut11" = "bp30",
+): Connection {
   const parsed = parseConfig({
     ODATA_BASE_URL: "https://example.invalid/odata/",
     ODATA_USERNAME: "u",
@@ -64,7 +68,7 @@ export function snapshotConnection(env: Record<string, string> = {}): Connection
     ...env,
   });
   const conn = new Connection(parsed.connections[0]!, parsed.behavior);
-  const meta = bp30Metadata();
+  const meta = schema === "ut11" ? ut11Metadata() : bp30Metadata();
   const id = SNAPSHOT_REF;
   const row = { LineNumber: "1", Номенклатура_Key: id, Количество: 1, Цена: 100, Сумма: 100 };
   vi.spyOn(conn, "available").mockResolvedValue(new Set(meta.entities.keys()));
@@ -90,7 +94,7 @@ export function snapshotConnection(env: Record<string, string> = {}): Connection
       ? ["41.01", "60.01", "60.02", "62.01", "62.02", "90.01.1", "90.02.1", "91.01", "91.02", "94"].map(
           (Code) => ({ Ref_Key: id, Code, Description: Code }),
         )
-      : [{ Ref_Key: id, Description: "Synthetic", Code: "1", Owner_Key: id }],
+      : [{ Ref_Key: id, Description: "Synthetic", Code: "1", Owner_Key: id, ВалютаЦены_Key: id }],
   }));
   vi.spyOn(conn.client, "getText").mockResolvedValue("");
   return conn;

@@ -146,6 +146,16 @@ export const postDocumentResultSchema = z
       })
       .optional(),
     postingsNote: z.string().optional(),
+    movementsVerified: z.boolean().optional(),
+    movements: z
+      .object({
+        mechanism: z.string(),
+        expected: z.number(),
+        found: z.number(),
+        mismatches: z.array(z.string()).optional(),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 
@@ -493,6 +503,34 @@ export const listWarehousesResultSchema = z
           path: z.string().optional(),
           isFolder: z.boolean(),
           deletionMark: z.boolean(),
+        })
+        .passthrough(),
+    ),
+    scan: scanSchema,
+  })
+  .passthrough();
+
+export const getPricesResultSchema = z
+  .object({
+    database: z.string(),
+    mechanism: z.enum(["legacy", "2.5"]),
+    asOf: z.string().optional(),
+    priceKinds: z.array(z.object({ name: z.string(), ref: z.string() }).passthrough()),
+    count: z.number(),
+    note: z.string().optional(),
+    items: z.array(
+      z
+        .object({
+          item: z.string(),
+          ref: z.string(),
+          article: z.string().optional(),
+          characteristicRef: z.string().optional(),
+          priceKind: z.string(),
+          priceKindRef: z.string(),
+          price: z.number(),
+          since: z.string(),
+          recorderRef: z.string().optional(),
+          matchedGroupRef: z.string().optional(),
         })
         .passthrough(),
     ),

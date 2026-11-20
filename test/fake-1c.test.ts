@@ -49,6 +49,19 @@ const OVERRIDES: Record<string, Record<string, unknown>> = {
   "read.analytics.get_warehouse_stock": { warehouses: [id], groups: undefined },
   "read.analytics.get_sales_register": { warehouses: [id], groups: undefined },
   "read.catalog.list_items": { groups: undefined },
+  // Механизм — явно: синтетические записи есть в обоих регистрах цен.
+  "read.analytics.get_prices": {
+    items: [id],
+    priceKinds: [id],
+    groups: undefined,
+    asOf: "2026-01-01",
+    mechanism: "legacy",
+  },
+  "write.pricing.create_price_setting": {
+    priceKind: id,
+    lines: [{ itemRef: id, price: 100 }],
+    mechanism: "legacy",
+  },
   "read.analytics.get_partner_settlements": { partner: id },
   "read.document.get_document": { entitySet: "Document_РеализацияТоваровУслуг", ref: id },
   "read.document.search_documents": { entitySet: "Document_РеализацияТоваровУслуг" },
@@ -199,6 +212,8 @@ type Tools = Record<
 const TOOL_SCHEMA: Record<string, FakeSchema> = {
   "read.analytics.get_warehouse_stock": "ut11",
   "read.analytics.get_sales_register": "ut11",
+  "read.analytics.get_prices": "ut11",
+  "write.pricing.create_price_setting": "ut11",
   "read.analytics.get_partner_settlements": "ut11",
 };
 
@@ -333,9 +348,13 @@ const TRADE_REGISTERS = [
   "AccumulationRegister_ВыручкаИСебестоимостьПродаж",
 ];
 
+/** Запись, проверенная для Управления торговлей (TRADE_WRITE в src/mcp/server.ts): её допуск — отдельным тестом ниже. */
+const TRADE_WRITE_TOOLS = new Set(["write.pricing.create_price_setting"]);
+
 describe("запись на снимке схемы УТ 11 отказывает до предпросмотра", () => {
   const writes = manifest.tools.filter(
-    (t) => t.name.startsWith("write.") && t.name !== "write.operation.status",
+    (t) =>
+      t.name.startsWith("write.") && t.name !== "write.operation.status" && !TRADE_WRITE_TOOLS.has(t.name),
   );
   const cases = writes.flatMap((t) => [
     [t.name, "полный состав", t] as const,
@@ -359,6 +378,66 @@ describe("запись на снимке схемы УТ 11 отказывает
     const text = (r.content ?? []).map((c) => c.text ?? "").join("");
     expect(r.isError, `${name}: ${text.slice(0, 160)}`).toBe(true);
     expect(text).toContain("только для Бухгалтерии");
+    expect(fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
+  });
+});
+
+describe("запись цен в УТ: допуск только для документа цен, остальное по-прежнему отказывает", () => {
+  const PRICE_DOC = "Document_УстановкаЦенНоменклатуры";
+  const call = async (name: string, args: Record<string, unknown>, schema: FakeSchema = "ut11") => {
+    const fake = fake1C({ READ_ONLY: "false", ODATA_WRITABLE: "true" }, { schema });
+    const registered = (createServer(fake.ctx) as unknown as { _registeredTools: Tools })._registeredTools[
+      name
+    ]!;
+    const r = await registered.handler(registered.inputSchema!.parse(args), {});
+    return { fake, r, text: (r.content ?? []).map((c) => c.text ?? "").join("") };
+  };
+  const price = { priceKind: id, lines: [{ itemRef: id, price: 100 }], mechanism: "legacy" };
+
+  it("установка цен в УТ проходит защиту: предпросмотр, ничего не записано", async () => {
+    const { r, text, fake } = await call("write.pricing.create_price_setting", price);
+    expect(r.isError, text.slice(0, 300)).toBeFalsy();
+    expect(text).toContain('"dryRun":true');
+    expect(fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
+  });
+
+  it.each([
+    ["write.document.post_document", { ref: id, post: true }],
+    ["write.entity.mark_for_deletion", { ref: id, mark: true }],
+  ] as const)("%s: документ цен — проходит, другой документ УТ — отказ", async (name, args) => {
+    const allowed = await call(name, { ...args, entitySet: PRICE_DOC });
+    expect(allowed.text).not.toContain("только для Бухгалтерии");
+    const other = await call(name, { ...args, entitySet: "Document_РеализацияТоваровУслуг" });
+    expect(other.r.isError).toBe(true);
+    expect(other.text).toContain("только для Бухгалтерии");
+    expect(other.text).toContain("write.pricing.create_price_setting");
+    expect([...allowed.fake.requests, ...other.fake.requests].filter((q) => q.method !== "GET")).toEqual([]);
+  });
+
+  it("в Бухгалтерии установка цен отказывает: цены там — типы цен", async () => {
+    const { r, text } = await call("write.pricing.create_price_setting", price, "bp30");
+    expect(r.isError).toBe(true);
+    expect(text).toContain("Управления торговлей");
+  });
+
+  it("сбой чтения схемы при проверке цен — отказ, а не допуск", async () => {
+    const fake = fake1C({ READ_ONLY: "false", ODATA_WRITABLE: "true" }, { schema: "ut11" });
+    // Состав базы известен (регистр бухгалтерии не опубликован — УТ), а схема полей не читается: проверка цен падает.
+    const meta = await fake.conn.getMetadata();
+    vi.spyOn(fake.conn, "available").mockResolvedValue(new Set(meta.entities.keys()));
+    vi.spyOn(fake.conn, "getMetadata").mockRejectedValue(new Error("503 при чтении $metadata"));
+    const registered = (createServer(fake.ctx) as unknown as { _registeredTools: Tools })._registeredTools[
+      "write.document.post_document"
+    ]!;
+    const r = await registered.handler(
+      registered.inputSchema!.parse({ entitySet: PRICE_DOC, ref: id, post: true, confirm: true }),
+      {},
+    );
+    expect(r.isError).toBe(true);
+    // Отказ именно защиты: иначе тест прошёл бы и при допуске — инструмент упал бы на той же схеме сам.
+    expect((r.content ?? []).map((c) => c.text ?? "").join("")).toContain(
+      "Не удалось проверить конфигурацию",
+    );
     expect(fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
   });
 });
@@ -531,6 +610,7 @@ const FLAGS_OMIT: Record<string, string[]> = {
   "read.analytics.get_warehouse_stock": ["group"],
   "read.analytics.get_sales_register": ["group"],
   "read.catalog.list_items": ["group"],
+  "read.analytics.get_prices": ["group"],
   "read.document.search_documents": ["kind"],
 };
 

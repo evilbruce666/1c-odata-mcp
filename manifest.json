@@ -4,7 +4,7 @@
   "display_name": "1С через OData: Бухгалтерия и Торговля",
   "version": "0.16.0",
   "description": "MCP-сервер для 1С:Предприятие через OData: Бухгалтерия 3.0 (аналитика и запись документов с предпросмотром) и Управление торговлей 11 (остатки на складах, продажи с розницей, расчёты с партнёрами — чтение) на естественном языке.",
-  "long_description": "Подключает любой MCP-клиент (Claude, Cursor, VS Code и др.) к базе 1С:Предприятие через стандартный интерфейс OData. Ничего не устанавливается внутри 1С. Конфигурации: Бухгалтерия 3.0 — полностью, Управление торговлей 11 — только чтение (проверено на 11.5), КА 2 и ERP 2 — по тем же регистрам, без проверки на живой базе. По умолчанию только чтение — 81 инструмент и 3 готовых сценария: аналитика Бухгалтерии (дебиторка и кредиторка по срокам, деньги на счетах, неоплаченные счета, проверка закрытия месяца, карточка счёта, акт сверки, остатки, продажи, движение денег, налоги, ОСВ по счёту, проводки документа, хронология для аудита), Управления торговлей (остатки на складах, продажи в штуках с розницей и выручкой, расчёты с клиентами и поставщиками, деньги в кассах и на счетах, списки складов и номенклатуры), справочники и документы. Запись включается отдельно (readOnly=false), в Управлении торговлей запрещена, и всегда работает в режиме предпросмотра — сначала показывает, что будет создано/изменено, и пишет только после подтверждения.",
+  "long_description": "Подключает любой MCP-клиент (Claude, Cursor, VS Code и др.) к базе 1С:Предприятие через стандартный интерфейс OData. Ничего не устанавливается внутри 1С. Конфигурации: Бухгалтерия 3.0 — полностью, Управление торговлей 11 — только чтение (проверено на 11.5), КА 2 и ERP 2 — по тем же регистрам, без проверки на живой базе. По умолчанию только чтение — 83 инструмента и 3 готовых сценария: аналитика Бухгалтерии (дебиторка и кредиторка по срокам, деньги на счетах, неоплаченные счета, проверка закрытия месяца, карточка счёта, акт сверки, остатки, продажи, движение денег, налоги, ОСВ по счёту, проводки документа, хронология для аудита), Управления торговлей (остатки на складах, продажи в штуках с розницей и выручкой, расчёты с клиентами и поставщиками, деньги в кассах и на счетах, списки складов и номенклатуры, цены), справочники и документы. Запись включается отдельно (readOnly=false), в Управлении торговлей — только установка цен, и всегда работает в режиме предпросмотра — сначала показывает, что будет создано/изменено, и пишет только после подтверждения.",
   "author": {
     "name": "evilbruce666",
     "url": "https://github.com/evilbruce666"
@@ -3586,6 +3586,365 @@
         },
         "required": [
           "database",
+          "count",
+          "items",
+          "scan"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "write.pricing.create_price_setting",
+      "title": "Установить цены номенклатуры (УТ 11, КА 2, ERP 2)",
+      "description": "Создаёт документ «Установка цен номенклатуры» по одному виду цен — непроведённым; цены вступают в силу после проведения (write.document.post_document, отдельный предпросмотр). Предпросмотр показывает по каждой позиции текущую цену и новую (prices) и предупреждает: у вида цен есть зависимые виды (наценка на этот вид) — 1С их при записи через OData не пересчитает; у позиции уже есть цена с более поздней датой — новая её не перекроет; цена на тот же момент — отказ. date — момент цены, по умолчанию сейчас; дата без времени — начало дня. Механизм определяется по базе (mechanism — явно). Ценообразование 2.5 на живой базе не проверено. Только Управление торговлей 11 (КА 2 и ERP 2 — по тем же полям, без проверки); в Бухгалтерии — отказ.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
+            "type": "string"
+          },
+          "priceKind": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Вид цен: Ref_Key или точное название"
+          },
+          "lines": {
+            "minItems": 1,
+            "maxItems": 500,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "itemRef": {
+                  "type": "string",
+                  "pattern": "^\\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}?$"
+                },
+                "price": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "Новая цена, не больше двух знаков после запятой"
+                },
+                "characteristicRef": {
+                  "description": "Характеристика, если цены по характеристикам",
+                  "type": "string",
+                  "pattern": "^\\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}?$"
+                }
+              },
+              "required": [
+                "itemRef",
+                "price"
+              ]
+            }
+          },
+          "date": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}:\\d{2})?$",
+            "description": "Момент цены; по умолчанию сейчас (YYYY-MM-DD или YYYY-MM-DDTHH:mm:ss)"
+          },
+          "mechanism": {
+            "description": "Механизм цен: legacy — прежний (табличная часть «Товары»), 2.5 — ценообразование 2.5. Без параметра определяется по последним проведённым документам и записям регистров",
+            "type": "string",
+            "enum": [
+              "legacy",
+              "2.5"
+            ]
+          },
+          "comment": {
+            "description": "Комментарий документа",
+            "type": "string",
+            "maxLength": 500
+          },
+          "responsibleRef": {
+            "description": "Ответственный (Ref_Key пользователя)",
+            "type": "string",
+            "pattern": "^\\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}?$"
+          },
+          "confirm": {
+            "default": false,
+            "description": "false (по умолчанию) — только предпросмотр (dry-run), запись НЕ выполняется. true — выполнить создание. Сначала всегда показывайте dry-run и получайте согласие пользователя; при подтверждении передавайте operationId из результата предпросмотра и те же аргументы. После таймаута повторяйте подтверждение с тем же id, не создавая новый предпросмотр.",
+            "type": "boolean"
+          },
+          "operationId": {
+            "description": "UUID из предпросмотра. Передайте его при confirm=true, чтобы повтор не создал дубликат.",
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "priceKind",
+          "lines"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "dryRun": {
+            "type": "boolean"
+          },
+          "database": {
+            "type": "string"
+          },
+          "writableBase": {
+            "type": "boolean"
+          },
+          "willCreate": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "created": {
+            "type": "boolean"
+          },
+          "operationId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "entitySet": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": {}
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "read.analytics.get_prices",
+      "title": "Цены номенклатуры (УТ 11, КА 2, ERP 2)",
+      "description": "Действующие цены по видам цен на момент (срез последних по регистру цен Управления торговлей). priceKinds — виды цен (Ref_Key или точное название; без параметра — все действующие). Отбор позиций как в get_warehouse_stock: group или groups (с подгруппами), query (название или артикул), items (Ref_Key). asOf — момент (YYYY-MM-DD — на начало дня, YYYY-MM-DDTHH:mm:ss — точно; без параметра — сейчас). Позиции без цены вида в ответ не входят: полный список номенклатуры — read.catalog.list_items. В Бухгалтерии — отказ. count — всего строк; длинный список читайте с offset=nextOffset.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
+            "type": "string"
+          },
+          "priceKinds": {
+            "minItems": 1,
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          "group": {
+            "description": "Группа номенклатуры: Ref_Key, название или путь",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "groups": {
+            "description": "Несколько групп номенклатуры (вместо group)",
+            "minItems": 1,
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          },
+          "query": {
+            "description": "Части слов названия или артикул",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "items": {
+            "minItems": 1,
+            "maxItems": 500,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}?$"
+            }
+          },
+          "asOf": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}:\\d{2})?$",
+            "description": "Момент цен (YYYY-MM-DD или YYYY-MM-DDTHH:mm:ss)"
+          },
+          "mechanism": {
+            "description": "Механизм цен: legacy — прежний (табличная часть «Товары»), 2.5 — ценообразование 2.5. Без параметра определяется по последним проведённым документам и записям регистров",
+            "type": "string",
+            "enum": [
+              "legacy",
+              "2.5"
+            ]
+          },
+          "limit": {
+            "default": 200,
+            "description": "Сколько строк вернуть",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 1000
+          },
+          "offset": {
+            "default": 0,
+            "description": "С какой строки начать (0 — с начала); значение из nextOffset прошлого ответа",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string"
+          },
+          "mechanism": {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "2.5"
+            ]
+          },
+          "asOf": {
+            "type": "string"
+          },
+          "priceKinds": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "ref": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "ref"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "count": {
+            "type": "number"
+          },
+          "note": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "item": {
+                  "type": "string"
+                },
+                "ref": {
+                  "type": "string"
+                },
+                "article": {
+                  "type": "string"
+                },
+                "characteristicRef": {
+                  "type": "string"
+                },
+                "priceKind": {
+                  "type": "string"
+                },
+                "priceKindRef": {
+                  "type": "string"
+                },
+                "price": {
+                  "type": "number"
+                },
+                "since": {
+                  "type": "string"
+                },
+                "recorderRef": {
+                  "type": "string"
+                },
+                "matchedGroupRef": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "item",
+                "ref",
+                "priceKind",
+                "priceKindRef",
+                "price",
+                "since"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "scan": {
+            "type": "object",
+            "properties": {
+              "documentsScanned": {
+                "type": "number"
+              },
+              "rowsScanned": {
+                "type": "number"
+              },
+              "windows": {
+                "type": "number"
+              },
+              "elapsedMs": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "elapsedMs"
+            ],
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "database",
+          "mechanism",
+          "priceKinds",
           "count",
           "items",
           "scan"
@@ -7291,6 +7650,35 @@
           },
           "postingsNote": {
             "type": "string"
+          },
+          "movementsVerified": {
+            "type": "boolean"
+          },
+          "movements": {
+            "type": "object",
+            "properties": {
+              "mechanism": {
+                "type": "string"
+              },
+              "expected": {
+                "type": "number"
+              },
+              "found": {
+                "type": "number"
+              },
+              "mismatches": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "mechanism",
+              "expected",
+              "found"
+            ],
+            "additionalProperties": {}
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",

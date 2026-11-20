@@ -22,6 +22,11 @@ const doc = { entitySet: "Document_СчетНаОплатуПокупателю"
 const ARGS: Record<string, Record<string, unknown>> = {
   ...Object.fromEntries(CREATE_CASES),
   "write.counterparty.create_group": { name: "Synthetic", parentRef: "00000000-0000-0000-0000-000000000000" },
+  "write.pricing.create_price_setting": {
+    priceKind: id,
+    lines: [{ itemRef: id, price: 100 }],
+    mechanism: "legacy",
+  },
   "write.counterparty.set_group": {
     ref: id,
     subjectKind: "counterparty",
@@ -83,12 +88,18 @@ const ARGS: Record<string, Record<string, unknown>> = {
   "write.document.remove_document_line": { ...doc, lineNumber: 1 },
 };
 
-function setup() {
-  const conn = snapshotConnection({
-    READ_ONLY: "false",
-    ODATA_WRITABLE: "true",
-    ODATA_WRITE_JOURNAL_DIR: mkdtempSync(join(tmpdir(), "1c-odata-reconcile-")),
-  });
+/** Инструменты Управления торговлей: в Бухгалтерии они законно отказывают, их журнал проверяется на снимке УТ. */
+const UT_TOOLS = new Set(["write.pricing.create_price_setting"]);
+
+function setup(schema: "bp30" | "ut11" = "bp30") {
+  const conn = snapshotConnection(
+    {
+      READ_ONLY: "false",
+      ODATA_WRITABLE: "true",
+      ODATA_WRITE_JOURNAL_DIR: mkdtempSync(join(tmpdir(), "1c-odata-reconcile-")),
+    },
+    schema,
+  );
   const originalGet = vi.mocked(conn.client.getEntity).getMockImplementation()!;
   vi.mocked(conn.client.getEntity).mockImplementation(async (path) => {
     if (path.startsWith("InformationRegister_СчетаУчетаРасчетовСКонтрагентами("))
@@ -165,7 +176,7 @@ describe("сверка записи после потерянного ответ
   });
 
   it.each(journaled.filter((name) => ARGS[name]))("%s", async (name) => {
-    const { conn, tools } = setup();
+    const { conn, tools } = setup(UT_TOOLS.has(name) ? "ut11" : "bp30");
     const args = ARGS[name]!;
     const preview = await tools[name]!.handler({ ...args, confirm: false }, {});
     expect(preview.isError, preview.content?.[0]?.text).not.toBe(true);

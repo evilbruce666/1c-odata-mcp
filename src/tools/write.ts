@@ -40,6 +40,7 @@ import { currentWriteOperationId, fingerprintRecordFields } from "../odata/write
 import { InputError } from "../errors.js";
 import { ODataError } from "../odata/errors.js";
 import { getDocumentPostings } from "./registers.js";
+import { PRICE_DOC, verifyPriceMovements } from "../odata/pricing.js";
 import { tryPreviewView } from "./preview-view.js";
 
 /** Тип ссылки на номенклатуру в табличной части (полиморфная ссылка 1С). */
@@ -998,7 +999,7 @@ async function resolveDefaultCurrency(conn: Connection): Promise<string | undefi
   }
 }
 
-const confirmField = z
+export const confirmField = z
   .boolean()
   .default(false)
   .describe(
@@ -2068,6 +2069,17 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         ensurePublished(await conn.available(), entitySet);
         const guid = ref.replace(/[{}']/g, "");
         const path = `${entitySet}(guid'${guid}')?$format=json`;
+        // Проведённый документ цен с пометкой продолжал бы действовать: его записи регистра цен остаются.
+        if (mark && entitySet === PRICE_DOC) {
+          const doc = await conn.client.getEntity<ODataEntity>(
+            `${entitySet}(guid'${guid}')?$format=json&$select=Posted`,
+          );
+          if (doc["Posted"] === true)
+            return fail(
+              "Документ цен проведён: с пометкой удаления его цены продолжали бы действовать. Сначала отмените " +
+                "проведение (write.document.post_document с post=false), затем пометьте. Ничего не изменено.",
+            );
+        }
         if (!confirm) {
           return ok({
             dryRun: true,
@@ -2324,9 +2336,17 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
             const missing = await missingContract(conn, entitySet, ref);
             if (missing) return fail(missing);
           }
-          return ok(
-            await guardedDocumentAction(conn, { entitySet, ref, post, repost, expectedDataVersion }, confirm),
+          const result = await guardedDocumentAction(
+            conn,
+            { entitySet, ref, post, repost, expectedDataVersion },
+            confirm,
           );
+          // Документ цен: проверка — по движениям регистра цен, а не только по состоянию документа.
+          const movements =
+            confirm && result["done"] === true
+              ? await verifyPriceMovements(conn, entitySet, ref, post)
+              : undefined;
+          return ok({ ...result, ...movements });
         }
         const guid = ref.replace(/[{}']/g, "");
         const action = post ? "Post" : "Unpost";
@@ -2370,10 +2390,12 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
               (body ? ` Ответ 1С: ${body}` : ""),
           );
         }
+        // Документ цен проводит не проводки, а записи регистра цен: их и сверяем.
+        const movements = await verifyPriceMovements(conn, entitySet, guid, post);
         // Что провёл документ — сразу в ответе: проводки по регистру Хозрасчетный.
         // Сбой чтения проводок не отменяет проведения, только поясняется.
         let postings: Record<string, unknown> = {};
-        if (post) {
+        if (post && !movements) {
           try {
             const p = await getDocumentPostings(conn, entitySet, guid);
             postings = {
@@ -2401,6 +2423,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           ref: guid,
           action,
           ...postings,
+          ...movements,
         });
       }),
   );

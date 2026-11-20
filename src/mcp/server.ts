@@ -18,8 +18,10 @@ import { registerStockTools } from "../tools/stock.js";
 import { registerItemSalesTools } from "../tools/item-sales.js";
 import { registerPartnerSettlementTools } from "../tools/partner-settlements.js";
 import { registerItemTools } from "../tools/items.js";
+import { registerPricingTools } from "../tools/pricing.js";
 import { registerWarehouseTools } from "../tools/warehouses.js";
 import { tradeWithoutAccounting, withoutAccounting } from "../odata/configuration.js";
+import { PRICE_DOC, priceMechanisms } from "../odata/pricing.js";
 import { registerDebtTools } from "../tools/debts.js";
 import { registerMonthCloseTools } from "../tools/month-close.js";
 import { registerCardTools } from "../tools/card.js";
@@ -158,6 +160,7 @@ const PAGE_LISTS: Record<string, PageList> = {
   "read.analytics.get_partner_settlements": { list: "partners", countIsTotal: true },
   "read.catalog.list_warehouses": { list: "items", countIsTotal: true },
   "read.catalog.list_items": { list: "items", countIsTotal: true },
+  "read.analytics.get_prices": { list: "items", countIsTotal: true },
   "read.analytics.get_debtors": { list: "debtors", countIsTotal: true },
   "read.analytics.get_creditors": { list: "creditors", countIsTotal: true },
   "read.analytics.get_unpaid_invoices": { list: "invoices", countIsTotal: true },
@@ -412,6 +415,22 @@ export function requireDatabase(
 const WRITE_CHECKED_ELSEWHERE = new Set(["write.operation.status"]);
 
 /**
+ * Запись, проверенная для торговой базы (Управление торговлей): инструмент и вид объекта. Общие инструменты —
+ * только для документа цен: проведение и пометка любого другого документа УТ по-прежнему отказывают. Положительный
+ * признак — цены в схеме устроены как в УТ (priceMechanisms); сбой чтения схемы — отказ.
+ */
+const TRADE_WRITE: Record<string, (args: Record<string, unknown>) => boolean> = {
+  "write.pricing.create_price_setting": () => true,
+  "write.document.post_document": (a) => a.entitySet === PRICE_DOC,
+  "write.entity.mark_for_deletion": (a) => a.entitySet === PRICE_DOC,
+};
+
+/** Что в торговой базе можно записать: подсказка в отказе. */
+const TRADE_WRITE_HINT =
+  "В Управлении торговлей поддержана установка цен: write.pricing.create_price_setting, затем " +
+  `write.document.post_document и write.entity.mark_for_deletion для ${PRICE_DOC}.`;
+
+/**
  * Запись собирает документы и справочники Бухгалтерии. В базе без регистра бухгалтерии (Управление торговлей, другие
  * небухгалтерские конфигурации) поля и объекты другие, и запись не проверена ни на одной такой базе: отказ до
  * предпросмотра, ничего не отправлено. Признак — только регистр бухгалтерии: по регистрам склада и продаж УТ с
@@ -420,6 +439,7 @@ const WRITE_CHECKED_ELSEWHERE = new Set(["write.operation.status"]);
  */
 function refuseWriteWithoutAccounting(
   ctx: ServerContext,
+  name: string,
   cb: (args: Record<string, unknown>, extra: unknown) => Promise<CallToolResult>,
 ): (args: Record<string, unknown>, extra: unknown) => Promise<CallToolResult> {
   return async (args, extra) => {
@@ -434,9 +454,12 @@ function refuseWriteWithoutAccounting(
       }
       let noAccounting: boolean;
       let trade = false;
+      let tradeAllowed = false;
       try {
         noAccounting = await withoutAccounting(conn);
         if (noAccounting) trade = await tradeWithoutAccounting(conn);
+        if (noAccounting && TRADE_WRITE[name]?.(args))
+          tradeAllowed = (await priceMechanisms(conn)).length > 0;
       } catch (e) {
         // Защита закрывается, а не открывается: при сбое схемы инструмент сам перечитал бы её и записал (ревью:
         // первый $metadata 503 — и PATCH уходил в базу УТ).
@@ -446,16 +469,17 @@ function refuseWriteWithoutAccounting(
           "refused",
         );
       }
+      if (noAccounting && tradeAllowed) return cb(args, extra);
       if (noAccounting) {
         // Регистр из настройки учёта называется как есть: совет «опубликуйте Хозрасчётный» базе со своим регистром
         // ведёт не туда (ревью).
         const configured = conn.cfg.accounting?.register;
         const register = configured ? `«${configured}» (из настройки учёта)` : "«Хозрасчётный»";
         return fail(
-          `Запись поддерживается только для Бухгалтерии: в этой базе не опубликован регистр бухгалтерии ${register}` +
+          `Этот инструмент записи поддерживается только для Бухгалтерии: в этой базе не опубликован регистр бухгалтерии ${register}` +
             `${trade ? " (похоже, это Управление торговлей)" : ""}. Документы и справочники в ней устроены иначе, ` +
             "запись на такой базе не проверена. Ничего не записано. Если это Бухгалтерия, КА или ERP, опубликуйте " +
-            `${register} в составе OData.`,
+            `${register} в составе OData.${trade ? ` ${TRADE_WRITE_HINT}` : ""}`,
           "refused",
         );
       }
@@ -499,7 +523,7 @@ export function createServer(ctx: ServerContext): McpServer {
     const cb =
       WRITE_CHECKED_ELSEWHERE.has(name) || !name.startsWith("write.")
         ? handler
-        : refuseWriteWithoutAccounting(ctx, handler);
+        : refuseWriteWithoutAccounting(ctx, name, handler);
     const appMeta = appMetaFor(name);
     const annotatedConfig = {
       ...config,
@@ -647,6 +671,7 @@ export function createServer(ctx: ServerContext): McpServer {
   registerPartnerSettlementTools(server, ctx);
   registerWarehouseTools(server, ctx);
   registerItemTools(server, ctx);
+  registerPricingTools(server, ctx);
   registerDebtTools(server, ctx);
   registerMonthCloseTools(server, ctx);
   registerCardTools(server, ctx);
