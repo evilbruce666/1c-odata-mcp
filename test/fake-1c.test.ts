@@ -349,7 +349,11 @@ const TRADE_REGISTERS = [
 ];
 
 /** Запись, проверенная для Управления торговлей (TRADE_WRITE в src/mcp/server.ts): её допуск — отдельным тестом ниже. */
-const TRADE_WRITE_TOOLS = new Set(["write.pricing.create_price_setting"]);
+const TRADE_WRITE_TOOLS = new Set([
+  "write.pricing.create_price_setting",
+  "write.counterparty.create_counterparty",
+  "write.counterparty.update_counterparty",
+]);
 
 describe("запись на снимке схемы УТ 11 отказывает до предпросмотра", () => {
   const writes = manifest.tools.filter(

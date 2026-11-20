@@ -43,6 +43,11 @@ import { getDocumentPostings } from "./registers.js";
 import { PRICE_DOC, priceMechanisms, verifyPriceMovements } from "../odata/pricing.js";
 import { tryPreviewView } from "./preview-view.js";
 import { checkDuplicateInn } from "../odata/duplicates.js";
+import {
+  createTradeCounterparty,
+  partnerFieldWithoutCatalog,
+  tradeCounterpartySchema,
+} from "./trade-counterparty.js";
 
 /** Тип ссылки на номенклатуру в табличной части (полиморфная ссылка 1С). */
 const NOMENCLATURE_TYPE = "StandardODATA.Catalog_Номенклатура";
@@ -2045,31 +2050,81 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         kpp: z.string().optional().describe("КПП"),
         fullName: z.string().optional().describe("Полное наименование"),
         legalType: z
-          .enum(["ЮридическоеЛицо", "ФизическоеЛицо"])
+          .enum(["ЮридическоеЛицо", "ФизическоеЛицо", "ИндивидуальныйПредприниматель"])
           .optional()
-          .describe("Юридическое или физическое лицо"),
+          .describe(
+            "Юридическое лицо, физическое лицо или ИП. В Бухгалтерии ИП записывается как физическое лицо. В Управлении " +
+              "торговлей без legalType — юрлицо при ИНН из 10 цифр, иначе отказ с просьбой указать.",
+          ),
         phone: z.string().optional().describe("Телефон (в контактную информацию)"),
         email: z.string().optional().describe("Email (в контактную информацию)"),
         address: z.string().optional().describe("Адрес текстом (в контактную информацию, юр. адрес)"),
         ogrn: z.string().optional().describe("ОГРН (пишется, если в базе настроен доп.реквизит «ОГРН»)"),
+        partnerRef: z
+          .string()
+          .trim()
+          .regex(GUID_RE, "Ref_Key (GUID)")
+          .optional()
+          .describe(
+            "Только Управление торговлей: Ref_Key существующего партнёра (Catalog_Партнеры). Без него создаётся новый " +
+              "партнёр — тогда нужен relations.",
+          ),
+        relations: z
+          .array(z.enum(["client", "supplier", "other"]))
+          .optional()
+          .describe(
+            "Только Управление торговлей, для нового партнёра: client — клиент, supplier — поставщик, other — прочие " +
+              "отношения.",
+          ),
         confirm: confirmField,
       }),
       outputSchema: createResultSchema,
     },
-    ({ database, name, inn, kpp, fullName, legalType, phone, email, address, ogrn, confirm }) =>
+    ({
+      database,
+      name,
+      inn,
+      kpp,
+      fullName,
+      legalType,
+      phone,
+      email,
+      address,
+      ogrn,
+      partnerRef,
+      relations,
+      confirm,
+    }) =>
       guard("write.counterparty.create_counterparty", async () => {
         const conn = ctx.db(database);
         const set = await resolveSet(conn, CATALOGS.counterparties, "Контрагенты");
+        if (await partnerFieldWithoutCatalog(conn, set))
+          return fail(
+            "У контрагента в этой базе есть партнёр, а справочник «Партнеры» (Catalog_Партнеры) не опубликован в " +
+              "OData: контрагент без партнёра в документах не выбирается. Опубликуйте справочник. Ничего не создано.",
+          );
         const duplicate = await checkDuplicateInn(conn, set, inn, kpp);
         if (duplicate.refusal) return fail(duplicate.refusal);
         const { fields, notes } = await counterpartyExtras(conn, { phone, email, address, ogrn });
         if (duplicate.note) notes.push(duplicate.note);
+        if (await tradeCounterpartySchema(conn, set))
+          return createTradeCounterparty(
+            conn,
+            set,
+            { name, inn, kpp, fullName, legalType, partnerRef, relations },
+            fields,
+            confirm,
+            notes,
+          );
+        if (partnerRef || relations?.length)
+          notes.push("partnerRef и relations не применены: в этой базе у контрагента нет партнёра.");
         const payload = clean({
           Description: name,
           ИНН: inn,
           КПП: kpp,
           НаименованиеПолное: fullName,
-          ЮридическоеФизическоеЛицо: legalType,
+          ЮридическоеФизическоеЛицо:
+            legalType === "ИндивидуальныйПредприниматель" ? "ФизическоеЛицо" : legalType,
           ...fields,
         });
         return createOrPreview(conn, set, payload, confirm, notes);

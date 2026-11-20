@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/server";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import type { ServerContext } from "../context.js";
+import type { Connection, ServerContext } from "../context.js";
 import { createResultSchema } from "../schemas/output.js";
 import { fingerprintWriteInput, withWriteOperation } from "../odata/write-operation-context.js";
 import { callAbortError, withToolCall } from "../odata/call-context.js";
@@ -22,6 +22,7 @@ import { registerPricingTools } from "../tools/pricing.js";
 import { registerWarehouseTools } from "../tools/warehouses.js";
 import { tradeWithoutAccounting, withoutAccounting } from "../odata/configuration.js";
 import { PRICE_DOC, priceMechanisms } from "../odata/pricing.js";
+import { tradeCounterpartySchema } from "../tools/trade-counterparty.js";
 import { registerDebtTools } from "../tools/debts.js";
 import { registerMonthCloseTools } from "../tools/month-close.js";
 import { registerCardTools } from "../tools/card.js";
@@ -419,16 +420,27 @@ const WRITE_CHECKED_ELSEWHERE = new Set(["write.operation.status"]);
  * только для документа цен: проведение и пометка любого другого документа УТ по-прежнему отказывают. Положительный
  * признак — цены в схеме устроены как в УТ (priceMechanisms); сбой чтения схемы — отказ.
  */
-const TRADE_WRITE: Record<string, (args: Record<string, unknown>) => boolean> = {
-  "write.pricing.create_price_setting": () => true,
-  "write.document.post_document": (a) => a.entitySet === PRICE_DOC,
-  "write.entity.mark_for_deletion": (a) => a.entitySet === PRICE_DOC,
+interface TradeWrite {
+  /** Вызов из поддержанного в УТ набора (например, документ цен, а не любой документ). */
+  applies: (args: Record<string, unknown>) => boolean;
+  /** Схема базы позволяет: у цен — опубликован механизм цен, у контрагента — партнёры. */
+  ready: (conn: Connection) => Promise<boolean>;
+}
+const prices = async (conn: Connection) => (await priceMechanisms(conn)).length > 0;
+const partners = (conn: Connection) => tradeCounterpartySchema(conn);
+const TRADE_WRITE: Record<string, TradeWrite> = {
+  "write.pricing.create_price_setting": { applies: () => true, ready: prices },
+  "write.document.post_document": { applies: (a) => a.entitySet === PRICE_DOC, ready: prices },
+  "write.entity.mark_for_deletion": { applies: (a) => a.entitySet === PRICE_DOC, ready: prices },
+  "write.counterparty.create_counterparty": { applies: () => true, ready: partners },
+  "write.counterparty.update_counterparty": { applies: () => true, ready: partners },
 };
 
 /** Что в торговой базе можно записать: подсказка в отказе. */
 const TRADE_WRITE_HINT =
-  "В Управлении торговлей поддержана установка цен: write.pricing.create_price_setting, затем " +
-  `write.document.post_document и write.entity.mark_for_deletion для ${PRICE_DOC}.`;
+  "В Управлении торговлей поддержаны установка цен (write.pricing.create_price_setting, затем " +
+  `write.document.post_document и write.entity.mark_for_deletion для ${PRICE_DOC}) и контрагенты с партнёрами ` +
+  "(write.counterparty.create_counterparty, write.counterparty.update_counterparty).";
 
 /**
  * Запись собирает документы и справочники Бухгалтерии. В базе без регистра бухгалтерии (Управление торговлей, другие
@@ -458,8 +470,8 @@ function refuseWriteWithoutAccounting(
       try {
         noAccounting = await withoutAccounting(conn);
         if (noAccounting) trade = await tradeWithoutAccounting(conn);
-        if (noAccounting && TRADE_WRITE[name]?.(args))
-          tradeAllowed = (await priceMechanisms(conn)).length > 0;
+        const tradeWrite = TRADE_WRITE[name];
+        if (noAccounting && tradeWrite?.applies(args)) tradeAllowed = await tradeWrite.ready(conn);
       } catch (e) {
         // Защита закрывается, а не открывается: при сбое схемы инструмент сам перечитал бы её и записал (ревью:
         // первый $metadata 503 — и PATCH уходил в базу УТ).

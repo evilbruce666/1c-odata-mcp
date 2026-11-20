@@ -24,6 +24,7 @@ describe("create tool operationId flow", () => {
       cfg: { name: "default", writable: true },
       behavior: { writeOperationMarker: false },
       available: async () => new Set(CATALOGS.counterparties),
+      getMetadata: async () => ({ entities: new Map() }),
       client: { prepareCreate, create, operationSettled: async () => undefined },
     };
     const server = createServer({
