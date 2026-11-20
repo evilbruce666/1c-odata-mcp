@@ -92,7 +92,7 @@ export class ODataClient {
   /**
    * Гард записи — два явных предохранителя должны быть сняты:
    *  1) глобально READ_ONLY=false (behavior.readOnly === false);
-   *  2) на конкретной базе ODATA_DB_<ИМЯ>_WRITABLE=true (conn.writable).
+   *  2) на конкретной базе ODATA_WRITABLE=true (одна база) или ODATA_DB_<ИМЯ>_WRITABLE=true (conn.writable).
    */
   private assertWritable(method: string): void {
     if (READ_METHODS.has(method)) return;

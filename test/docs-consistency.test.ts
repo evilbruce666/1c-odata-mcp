@@ -252,10 +252,12 @@ describe("ссылки между документами", () => {
       );
     const used = new Set<string>();
     for (const file of sources("src").filter((f) => !f.includes("/scripts/")))
+      // env.X, имена в кавычках и ключи схемы конфигурации («  ODATA_TIMEOUT_MS: z…»): без ключей схемы
+      // удалённый из .env.example ODATA_TIMEOUT_MS не ловился (ревью документации, раунд 2).
       for (const [, name] of read(file).matchAll(
-        /(?:env\.|["'`])((?:ODATA|MCP|TOOLS|LOG)_[A-Z0-9_]+|READ_ONLY)\b/g,
+        /(?:env\.|["'`]|^\s+)((?:ODATA|MCP|TOOLS|LOG)_[A-Z0-9_]+|READ_ONLY)\b/gm,
       ))
-        used.add(name!);
+        if (name !== "MCP_PATH") used.add(name!);
     expect([...used].filter((n) => !env.includes(n)).sort()).toEqual([]);
   });
 
