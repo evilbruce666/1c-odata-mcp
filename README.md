@@ -294,7 +294,7 @@ Claude: (вызывает read.catalog.list_warehouses: розничные ск�
 
 | Инструмент | Что делает |
 |---|---|
-| `write.counterparty.create_counterparty` | Контрагент (+ телефон/email/адрес/ОГРН) |
+| `write.counterparty.create_counterparty` | Контрагент (+ телефон/email/адрес/ОГРН); тот же ИНН уже есть — отказ со ссылкой, другой КПП — обособленное подразделение |
 | `write.counterparty.create_bank_account` / `write.counterparty.create_contact_person` | Расчётный счёт (банк по БИК) / контактное лицо (директор) |
 | `write.catalog.create_nomenclature` | Номенклатура (папка, артикул, признак услуги) |
 | `write.catalog.create_contract` | Договор (вид, номер, валюта, тип цен, руководитель контрагента) |

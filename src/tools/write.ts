@@ -42,6 +42,7 @@ import { ODataError } from "../odata/errors.js";
 import { getDocumentPostings } from "./registers.js";
 import { PRICE_DOC, priceMechanisms, verifyPriceMovements } from "../odata/pricing.js";
 import { tryPreviewView } from "./preview-view.js";
+import { checkDuplicateInn } from "../odata/duplicates.js";
 
 /** Тип ссылки на номенклатуру в табличной части (полиморфная ссылка 1С). */
 const NOMENCLATURE_TYPE = "StandardODATA.Catalog_Номенклатура";
@@ -2033,7 +2034,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       guard("write.counterparty.create_counterparty", async () => {
         const conn = ctx.db(database);
         const set = await resolveSet(conn, CATALOGS.counterparties, "Контрагенты");
+        const duplicate = await checkDuplicateInn(conn, set, inn, kpp);
+        if (duplicate.refusal) return fail(duplicate.refusal);
         const { fields, notes } = await counterpartyExtras(conn, { phone, email, address, ogrn });
+        if (duplicate.note) notes.push(duplicate.note);
         const payload = clean({
           Description: name,
           ИНН: inn,
@@ -2486,6 +2490,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       guard("write.counterparty.update_counterparty", async () => {
         const conn = ctx.db(database);
         const set = await resolveSet(conn, CATALOGS.counterparties, "Справочник «Контрагенты»");
+        const duplicate = await checkDuplicateInn(conn, set, inn, kpp, ref);
+        if (duplicate.refusal) return fail(duplicate.refusal);
         const fields: Record<string, unknown> = clean({
           Description: name,
           ИНН: inn,
@@ -2519,6 +2525,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
             fields["ДополнительныеРеквизиты"] = [{ LineNumber: 1, Свойство_Key: prop, Значение: ogrn }];
           else notes.push("ОГРН не записан: в базе нет доп.реквизита «ОГРН» для контрагентов.");
         }
+        if (duplicate.note) notes.push(duplicate.note);
         if (Object.keys(fields).length === 0) return fail("Не задано ни одного поля для изменения.");
         return patchOrPreview(conn, set, ref, fields, confirm, notes);
       }),
