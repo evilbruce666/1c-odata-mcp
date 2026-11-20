@@ -1486,6 +1486,32 @@ async function createOrPreview(
  * Создание объекта без подстановок конфигурации: метка операции, предпросмотр или POST, ответ. Сборщики, которым
  * договор и счета расчётов Бухгалтерии не нужны (Управление торговлей), вызывают её напрямую.
  */
+/**
+ * Дубль ИНН при правке контрагента — только если пара ИНН+КПП действительно меняется: повторно переданный прежний
+ * ИНН (клиент шлёт все поля) не отказ, даже если у ИНН есть головной контрагент или филиал.
+ */
+async function updatedInnCheck(
+  conn: Connection,
+  set: string,
+  ref: string,
+  inn: string | undefined,
+  kpp: string | undefined,
+) {
+  if (inn === undefined && kpp === undefined) return {};
+  const guid = ref.replace(/[{}']/g, "");
+  const props = new Set(((await conn.getMetadata()).entities.get(set)?.properties ?? []).map((p) => p.name));
+  const keys = ["ИНН", "КПП"].filter((k) => props.has(k));
+  if (!keys.includes("ИНН")) return {};
+  const current = await conn.client.getEntity<ODataEntity>(
+    `${set}(guid'${guid}')${buildQuery({ select: keys })}`,
+  );
+  const now = (k: string) => String(current[k] ?? "").trim();
+  const changed =
+    (inn !== undefined && inn.trim() !== now("ИНН")) || (kpp !== undefined && kpp.trim() !== now("КПП"));
+  if (!changed) return {};
+  return checkDuplicateInn(conn, set, inn ?? now("ИНН"), kpp ?? now("КПП"), guid);
+}
+
 export async function createCore(
   conn: Connection,
   entitySet: string,
@@ -2490,7 +2516,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       guard("write.counterparty.update_counterparty", async () => {
         const conn = ctx.db(database);
         const set = await resolveSet(conn, CATALOGS.counterparties, "Справочник «Контрагенты»");
-        const duplicate = await checkDuplicateInn(conn, set, inn, kpp, ref);
+        const duplicate = await updatedInnCheck(conn, set, ref, inn, kpp);
         if (duplicate.refusal) return fail(duplicate.refusal);
         const fields: Record<string, unknown> = clean({
           Description: name,

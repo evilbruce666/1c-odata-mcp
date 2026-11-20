@@ -27,10 +27,18 @@ function setup(existing: Record<string, unknown>[] = []) {
     {
       data: (q: FakeQuery) => {
         const filter = q.params.get("$filter") ?? "";
-        if (q.base !== "Catalog_Контрагенты" || !filter.includes("ИНН eq")) return undefined;
+        if (q.base !== "Catalog_Контрагенты") return undefined;
+        if (!filter) return rows; // чтение по ключу: подделка найдёт строку по Ref_Key
+        if (!filter.includes("ИНН eq")) return undefined;
         filters.push(filter);
         const inn = /ИНН eq '([^']*)'/.exec(filter)?.[1];
-        return rows.filter((r) => r["ИНН"] === inn && r["DeletionMark"] !== true);
+        const kpps = [...filter.matchAll(/КПП eq '([^']*)'/g)].map((m) => m[1]);
+        return rows.filter(
+          (r) =>
+            r["ИНН"] === inn &&
+            r["DeletionMark"] !== true &&
+            (kpps.length === 0 || kpps.includes(String(r["КПП"] ?? ""))),
+        );
       },
     },
   );
@@ -55,7 +63,7 @@ describe("create_counterparty: дубль по ИНН", () => {
     const r = await s.call({ name: "Новый", inn: INN });
     expect(r.isError).toBe(true);
     expect(r.text).toContain(A);
-    expect(r.text).toContain("Ничего не создано");
+    expect(r.text).toContain("Ничего не записано");
     expect(s.fake.requests.filter((q) => q.method === "POST")).toEqual([]);
     expect(s.filters[0]).toContain("DeletionMark eq false");
     expect(s.fake.violations).toEqual([]);
@@ -118,5 +126,34 @@ describe("create_counterparty: дубль по ИНН", () => {
     expect(r.text).toContain(A);
     expect((await s.call({ ref: B, inn: "7700000002" }, UPDATE)).isError).toBeFalsy();
     expect((await s.call({ ref: B, name: "Только имя" }, UPDATE)).isError).toBeFalsy();
+  });
+
+  it("update_counterparty: прежний ИНН при правке имени — не отказ, хотя у ИНН есть головной и филиал", async () => {
+    const B = "bbbbbbbb-0000-0000-0000-000000000002";
+    const s = setup([
+      { Ref_Key: A, Description: "Головной", ИНН: INN, КПП: "770001001" },
+      { Ref_Key: B, Description: "Филиал", ИНН: INN, КПП: "770002002" },
+    ]);
+    const UPDATE = "write.counterparty.update_counterparty";
+    const same = await s.call({ ref: B, name: "Филиал 2", inn: INN }, UPDATE);
+    expect(same.isError, same.text).toBeFalsy();
+    expect(s.filters).toEqual([]); // пара не менялась — дубли не ищутся
+    // КПП филиала меняют на КПП головного — это уже дубль.
+    const clash = await s.call({ ref: B, kpp: "770001001" }, UPDATE);
+    expect(clash.isError).toBe(true);
+    expect(clash.text).toContain(A);
+  });
+
+  it("точная пара ИНН+КПП находится и за первой страницей филиалов", async () => {
+    const branches = Array.from({ length: 12 }, (_, i) => ({
+      Ref_Key: `cccccccc-0000-0000-0000-${String(i).padStart(12, "0")}`,
+      Description: `Филиал ${i}`,
+      ИНН: INN,
+      КПП: `7700${String(i).padStart(2, "0")}001`,
+    }));
+    const s = setup(branches);
+    const r = await s.call({ name: "Дубль филиала", inn: INN, kpp: "770011001" });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain(branches[11]!.Ref_Key);
   });
 });
