@@ -153,7 +153,42 @@ export async function createTradeCounterparty(
   let createdPartner: string | undefined;
   if (!partnerKey && confirm) {
     const payload = await partnerPayload();
-    const partner = await inPartnerOp(() => conn.client.create<ODataEntity>(PARTNERS, payload));
+    const entry = partnerOp ? await conn.client.operationEntry(partnerOp) : undefined;
+    // Ответ на запись партнёра потерялся (исход неизвестен): Ref_Key назначен при предпросмотре — сверяем простым GET.
+    // Партнёр есть — фиксируем успех подоперации и продолжаем; повтор не создаёт второго (ревью).
+    if (partnerOp && entry?.refKey && (entry.state === "outcome_unknown" || entry.state === "executing")) {
+      const found = await conn.client
+        .getEntity<ODataEntity>(`${PARTNERS}(guid'${entry.refKey}')${buildQuery({ select: ["Ref_Key"] })}`)
+        .catch((e: unknown) => {
+          if (e instanceof ODataError && e.kind === "not_found") return undefined;
+          throw e;
+        });
+      if (!found || String(found["Ref_Key"]).toLowerCase() !== entry.refKey.toLowerCase())
+        return fail(
+          `Запись партнёра не дошла до 1С: партнёра ${entry.refKey} в базе нет. Закройте подоперацию партнёра как ` +
+            `неприменённую (write.operation.status с operationId ${partnerOp}) и повторите подтверждение. Ничего не создано.`,
+        );
+      await conn.client.reconcileOperation(partnerOp, found);
+    }
+    let partner: ODataEntity;
+    try {
+      partner = await inPartnerOp(() => conn.client.create<ODataEntity>(PARTNERS, payload));
+    } catch (e) {
+      const after = partnerOp ? await conn.client.operationEntry(partnerOp) : undefined;
+      const message = e instanceof Error ? e.message : String(e);
+      const where = `Шаг «партнёр» (Catalog_Партнеры${after?.refKey ? `, ref ${after.refKey}` : ""}): ${message}`;
+      if (after?.state === "rejected")
+        return fail(
+          `${where} 1С отклонила партнёра — ничего не создано. Исправьте данные и сделайте новый предпросмотр.`,
+        );
+      throw new ODataError({
+        kind: e instanceof ODataError ? e.kind : "unknown",
+        message:
+          `${where} Контрагент не создан. Повторите подтверждение с тем же operationId — коннектор сверит партнёра ` +
+          "по этой ссылке и не создаст второго.",
+        cause: e,
+      });
+    }
     createdPartner = String(partner["Ref_Key"]);
     partnerKey = createdPartner;
   }

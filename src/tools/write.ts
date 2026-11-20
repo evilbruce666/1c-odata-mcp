@@ -1689,8 +1689,20 @@ function bankSettlementPatchRefusal(entitySet: string, fields: Record<string, un
  * позиции, созданной в 1С, и у созданной коннектором; создание проходит. Причину 1С показывает только в своём
  * интерфейсе. Отказ до записи не ставится: в другой базе изменение может работать.
  */
-function nomenclatureChangeRefused(e: unknown, entitySet: string): string | undefined {
-  if (entitySet !== "Catalog_Номенклатура" || !(e instanceof ODataError) || e.kind !== "server")
+async function nomenclatureChangeRefused(
+  conn: Connection,
+  e: unknown,
+  entitySet: string,
+): Promise<string | undefined> {
+  // Только этот ответ и только в схеме УТ: 502/503/504 и другие 500 (блокировка, сбой) — исход неизвестен или
+  // причина другая, их нельзя выдавать за особенность базы (ревью).
+  if (
+    entitySet !== "Catalog_Номенклатура" ||
+    !(e instanceof ODataError) ||
+    e.status !== 500 ||
+    !e.message.includes("Не удалось записать") ||
+    !(await tradeNomenclatureSchema(conn, entitySet))
+  )
     return undefined;
   return (
     `1С не записала изменение номенклатуры (${e.message}). Ничего не изменено. В Управлении торговлей так ` +
@@ -1729,7 +1741,7 @@ async function patchOrPreview(
   try {
     updated = await conn.client.patch<ODataEntity>(`${entitySet}(guid'${guid}')?$format=json`, fields);
   } catch (e) {
-    const refusal = nomenclatureChangeRefused(e, entitySet);
+    const refusal = await nomenclatureChangeRefused(conn, e, entitySet);
     if (refusal) return fail(refusal);
     throw e;
   }
@@ -2228,7 +2240,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         try {
           updated = await conn.client.patch<ODataEntity>(path, { DeletionMark: mark });
         } catch (e) {
-          const refusal = nomenclatureChangeRefused(e, entitySet);
+          const refusal = await nomenclatureChangeRefused(conn, e, entitySet);
           if (refusal) return fail(refusal);
           throw e;
         }
@@ -2315,7 +2327,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "организация, ВИД договора, номер/дата, валюта/тип цен и (опц.) руководитель/подписант. " +
         "ВАЖНО: вид договора (kind) обязателен и его НЕЛЬЗЯ выбирать самостоятельно — " +
         "уточните у пользователя, т.к. один контрагент может быть и покупателем, и поставщиком. " +
-        "Номер по умолчанию «б/н», дата — сегодня. По умолчанию предпросмотр (dry-run); создание — при confirm=true.",
+        "Номер по умолчанию «б/н», дата — момент предпросмотра. По умолчанию предпросмотр (dry-run); создание — при confirm=true.",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
@@ -2324,7 +2336,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .enum(CONTRACT_KINDS)
           .describe("Вид договора — ОБЯЗАТЕЛЬНО спросить у пользователя, не выбирать самому"),
         number: z.string().optional().describe("Номер договора (по умолчанию «б/н»)"),
-        date: z.string().optional().describe("Дата договора YYYY-MM-DD (по умолчанию сегодня)"),
+        date: z
+          .string()
+          .optional()
+          .describe("Дата договора YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         name: z.string().optional().describe("Наименование договора (по умолчанию «Договор <номер>»)"),
         currency: z
           .string()
@@ -2481,7 +2496,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         organization: organizationField,
         counterpartyRef: z.string().describe("Ref_Key контрагента-покупателя"),
         contractRef: z.string().optional().describe("Ref_Key договора (необязательно)"),
-        date: z.string().optional().describe("Дата документа YYYY-MM-DD (по умолчанию сегодня)"),
+        date: z
+          .string()
+          .optional()
+          .describe("Дата документа YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         sumIncludesVat: z.boolean().default(true).describe("Сумма включает НДС"),
         orgBankAccount: orgBankAccountField,
         // Счёт на оплату проводок не делает — счета учёта в его строках не нужны.
@@ -2703,7 +2721,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "По умолчанию предпросмотр (dry-run); применение — при confirm=true. Указывайте только меняемые поля.",
       inputSchema: z.object({
         database: databaseField,
-        ref: z.string().describe("Ref_Key контрагента"),
+        ref: z.string().trim().regex(GUID_RE, "Ref_Key (GUID)").describe("Ref_Key контрагента"),
         name: z.string().optional().describe("Новое наименование (Description)"),
         inn: z.string().optional().describe("ИНН"),
         kpp: z.string().optional().describe("КПП"),
@@ -2770,7 +2788,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "По умолчанию предпросмотр (dry-run); применение — при confirm=true. Указывайте только меняемые поля.",
       inputSchema: z.object({
         database: databaseField,
-        ref: z.string().describe("Ref_Key номенклатуры"),
+        ref: z.string().trim().regex(GUID_RE, "Ref_Key (GUID)").describe("Ref_Key номенклатуры"),
         name: z.string().optional().describe("Новое наименование (Description)"),
         fullName: z.string().optional().describe("Полное наименование"),
         article: z.string().optional().describe("Артикул"),
@@ -2795,7 +2813,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     counterpartyRef: z.string().describe("Ref_Key контрагента"),
     contractRef: z.string().optional().describe("Ref_Key договора (необязательно)"),
     warehouse: z.string().optional().describe("Название, код или Ref_Key склада (если в базе несколько)"),
-    date: z.string().optional().describe("Дата документа YYYY-MM-DD (по умолчанию сегодня)"),
+    date: z.string().optional().describe("Дата документа YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
     sumIncludesVat: z.boolean().default(true).describe("Сумма включает НДС"),
   };
 
@@ -2897,7 +2915,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .describe("Ref_Key банковского счёта поставщика (БанковскийСчетКонтрагента)"),
         incomingNumber: z.string().optional().describe("Номер входящего счёта поставщика"),
         incomingDate: z.string().optional().describe("Дата входящего счёта YYYY-MM-DD"),
-        date: z.string().optional().describe("Дата документа YYYY-MM-DD (по умолчанию сегодня)"),
+        date: z
+          .string()
+          .optional()
+          .describe("Дата документа YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         comment: z.string().optional().describe("Комментарий к документу"),
         sumIncludesVat: z.boolean().default(true).describe("Сумма включает НДС"),
         lines: z.array(purchaseLine).min(1).describe("Позиции счёта (товары и услуги в одной таблице)"),
@@ -2977,7 +2998,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
             "Номер документа — задайте явно (напр. чтобы совпасть с номером банковской платёжки). " +
               "1С автонумерует новые документы только если Number не передан вовсе — но здесь он обязателен.",
           ),
-        date: z.string().optional().describe("Дата документа YYYY-MM-DD (по умолчанию сегодня)"),
+        date: z
+          .string()
+          .optional()
+          .describe("Дата документа YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         purposeText: z.string().describe("Назначение платежа (НазначениеПлатежа)"),
         recipientText: z.string().describe("Текст получателя — как печатается в платёжке (ТекстПолучателя)"),
         recipientInn: z.string().optional().describe("ИНН получателя"),
@@ -3293,7 +3317,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         organization: organizationField,
         fromWarehouse: z.string().describe("Склад-отправитель: название, код или Ref_Key"),
         toWarehouse: z.string().describe("Склад-получатель: название, код или Ref_Key"),
-        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
+        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         lines: whLines,
         confirm: confirmField,
       }),
@@ -3342,7 +3366,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         organization: organizationField,
         warehouse: z.string().optional().describe("Название, код или Ref_Key склада (если несколько)"),
         inventoryRef: z.string().optional().describe("Ref_Key инвентаризации-основания (необязательно)"),
-        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
+        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         lines: whLines,
         confirm: confirmField,
       }),
@@ -3390,7 +3414,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         organization: organizationField,
         warehouse: z.string().optional().describe("Название, код или Ref_Key склада (если несколько)"),
         inventoryRef: z.string().optional().describe("Ref_Key инвентаризации-основания (необязательно)"),
-        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
+        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         lines: whLines,
         confirm: confirmField,
       }),
@@ -3438,7 +3462,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         database: databaseField,
         organization: organizationField,
         warehouse: z.string().optional().describe("Название, код или Ref_Key склада (если несколько)"),
-        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
+        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         lines: z
           .array(
             z.object({
@@ -3554,7 +3578,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "со ВСЕМИ реквизитами — содержание строк, счета учёта, банковский счёт, ответственный, " +
         "адрес доставки, доп. условия. Это главный способ выставить ежемесячно повторяющийся " +
         "документ: инструменты create_* собирают документ из полей схемы и всё остальное теряют. " +
-        "Копия создаётся НЕПРОВЕДЁННОЙ, с новым номером (1С нумерует сама) и датой (по умолчанию сегодня). " +
+        "Копия создаётся НЕПРОВЕДЁННОЙ, с новым номером (1С нумерует сама) и датой (по умолчанию — момент предпросмотра). " +
         "Правки: date — дата; fields — реквизиты шапки техническими именами (как в update_entity); " +
         "lines — правки строк по номеру (напр. количество и содержание). Сумма документа " +
         "пересчитывается по строкам, если не задана явно в fields. Счета расчётов — как в исходном документе; если в fields сменён договор — по настройке нового договора. По умолчанию dry-run; запись — при confirm=true.",
@@ -3562,7 +3586,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         database: databaseField,
         entitySet: z.string().describe("Имя документа, напр. Document_СчетНаОплатуПокупателю"),
         ref: z.string().describe("Ref_Key документа-образца (GUID)"),
-        date: z.string().optional().describe("Дата копии YYYY-MM-DD (по умолчанию сегодня)"),
+        date: z.string().optional().describe("Дата копии YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         fields: z
           .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))
           .optional()
@@ -3701,7 +3725,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         organization: organizationField,
         counterpartyRef: z.string().describe("Ref_Key покупателя"),
         contractRef: z.string().optional().describe("Ref_Key договора"),
-        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
+        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         operationKind: z
           .string()
           .trim()
@@ -3785,7 +3809,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .describe(
             "Ref_Key номенклатурной группы (ОБЯЗАТЕЛЬНО, субконто счёта доходов 90.01 — не угадывается)",
           ),
-        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
+        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         sumIncludesVat: z.boolean().default(true).describe("Сумма включает НДС"),
         incomeAccount: incomeAccountField.describe(
           "Счёт доходов для ВСЕХ строк (напр. «90.01.2»); счёт в строке важнее",
@@ -3884,7 +3908,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           ),
         amount: z.number().positive().describe("Сумма оплаты"),
         orgBankAccount: orgBankAccountField,
-        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
+        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         confirm: confirmField,
       }),
       outputSchema: createResultSchema,
@@ -4007,7 +4031,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         purposeText: z.string().optional().describe("Назначение платежа (текст)"),
         cashflowItemRef: z.string().optional().describe("Ref_Key статьи ДДС"),
         orgBankAccount: orgBankAccountField,
-        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
+        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         comment: z.string().optional().describe("Комментарий"),
         confirm: confirmField,
       }),
@@ -4065,7 +4089,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     contractRef: z.string().optional().describe("Ref_Key договора"),
     basis: z.string().optional().describe("Основание (текст)"),
     cashflowItemRef: z.string().optional().describe("Ref_Key статьи ДДС"),
-    date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию сегодня)"),
+    date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
     comment: z.string().optional().describe("Комментарий"),
     confirm: confirmField,
   };
@@ -4166,7 +4190,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
             "Имя набора документа-основания, если это не «Реализация…» (напр. Document_ОтчетКомитентуОПродажах)",
           ),
         operationCode: z.string().optional().describe("Код вида операции (по умолчанию 01)"),
-        date: z.string().optional().describe("Дата и дата выставления YYYY-MM-DD (по умолчанию сегодня)"),
+        date: z
+          .string()
+          .optional()
+          .describe("Дата и дата выставления YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         confirm: confirmField,
       }),
       outputSchema: createResultSchema,
@@ -4230,7 +4257,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .describe("Имя набора документа-основания, если это не «Поступление…»"),
         incomingDate: z.string().optional().describe("Дата входящего счёта-фактуры продавца YYYY-MM-DD"),
         operationCode: z.string().optional().describe("Код вида операции (по умолчанию 01)"),
-        date: z.string().optional().describe("Дата регистрации YYYY-MM-DD (по умолчанию сегодня)"),
+        date: z
+          .string()
+          .optional()
+          .describe("Дата регистрации YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         confirm: confirmField,
       }),
       outputSchema: createResultSchema,
@@ -4451,7 +4481,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .string()
           .default("Catalog_Контрагенты")
           .describe("Справочник (по умолчанию Catalog_Контрагенты)"),
-        ref: z.string().describe("Ref_Key перемещаемого элемента"),
+        ref: z.string().trim().regex(GUID_RE, "Ref_Key (GUID)").describe("Ref_Key перемещаемого элемента"),
         folder: z.string().describe("Папка назначения — имя или Ref_Key"),
         confirm: confirmField,
       }),

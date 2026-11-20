@@ -26,6 +26,8 @@ function setup(
     partners?: Record<string, unknown>[];
     counterparties?: Record<string, unknown>[];
     rejectCounterparty?: number;
+    /** Ответ на POST партнёра теряется: "after" — 1С записала, "before" — запрос не дошёл. */
+    losePartner?: "after" | "before";
   } = {},
 ) {
   const posts: Post[] = [];
@@ -49,6 +51,7 @@ function setup(
     },
   );
   let rejects = o.rejectCounterparty ?? 0;
+  let lose = o.losePartner;
   const inner = globalThis.fetch;
   vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
     const url = decodeURIComponent(
@@ -56,7 +59,17 @@ function setup(
     );
     if ((init?.method ?? "GET").toUpperCase() === "POST") {
       const set = /odata\/standard\.odata\/([^?(]+)/.exec(url)?.[1] ?? "";
-      posts.push({ set, body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if (set === "Catalog_Партнеры" && lose) {
+        const mode = lose;
+        lose = undefined;
+        if (mode === "after") {
+          posts.push({ set, body });
+          partners.push({ Ref_Key: body["Ref_Key"], Description: body["Description"], DeletionMark: false });
+        }
+        throw new TypeError("fetch failed");
+      }
+      posts.push({ set, body });
       if (set === "Catalog_Контрагенты" && rejects > 0) {
         rejects--;
         return new Response(
@@ -355,4 +368,46 @@ describe("create_counterparty в Управлении торговлей", () =>
       vi.useRealTimers();
     }
   });
+
+  it("ответ на запись партнёра потерян, 1С его записала: повтор с тем же operationId — без второго партнёра", async () => {
+    const s = setup({ losePartner: "after" });
+    const preview = await s.call(base);
+    const args = { ...base, confirm: true, operationId: preview.sc["operationId"] };
+    const first = await s.call(args);
+    expect(first.isError).toBe(true);
+    const ref = (preview.sc["partner"] as { ref: string }).ref;
+    expect(first.text).toContain(ref);
+    expect(first.text).toContain("тем же operationId");
+    const again = await s.call(args);
+    expect(again.isError, again.text.slice(0, 300)).toBeFalsy();
+    expect(s.posts.filter((p) => p.set === "Catalog_Партнеры")).toHaveLength(1);
+    expect(s.posts.at(-1)).toMatchObject({ set: "Catalog_Контрагенты", body: { Партнер_Key: ref } });
+  });
+
+  it("запись партнёра не дошла до 1С: повтор говорит, как закрыть подоперацию, и ничего не пишет", async () => {
+    const s = setup({ losePartner: "before" });
+    const preview = await s.call(base);
+    const args = { ...base, confirm: true, operationId: preview.sc["operationId"] };
+    expect((await s.call(args)).isError).toBe(true);
+    const again = await s.call(args);
+    expect(again.isError).toBe(true);
+    expect(again.text).toContain("не дошла");
+    expect(again.text).toContain("write.operation.status");
+    expect(s.posts).toEqual([]);
+  });
+
+  it.each([
+    ["write.counterparty.update_counterparty", { name: "X" }],
+    ["write.catalog.update_nomenclature", { name: "X" }],
+    ["write.entity.move_to_folder", { entitySet: "Catalog_Номенклатура", folder: P }],
+  ] as const)(
+    "%s: ref с «/../» — отказ схемы, ничего не отправлено (ревью: обход защиты)",
+    async (name, args) => {
+      const s = setup();
+      const ref = `${P})/../Catalog_Организации(guid'${P}')?x=`;
+      const r = await s.call({ ...args, ref, confirm: true }, name);
+      expect(r.isError).toBe(true);
+      expect(s.fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
+    },
+  );
 });

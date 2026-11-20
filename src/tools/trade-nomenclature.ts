@@ -193,7 +193,13 @@ export async function createTradeNomenclature(
       "В Управлении торговлей у номенклатуры обязателен вид (kind — название или Ref_Key из справочника «Виды " +
         "номенклатуры»): от него зависят тип, серии, характеристики и учёт. Ничего не создано.",
     );
-  const kindRow = await one(conn, KINDS, input.kind, "Вид номенклатуры", [...FROM_KIND, "IsFolder"]);
+  // Только поля, опубликованные и у вида, и у позиции: в другой версии УТ части может не быть (иначе 400 на $select).
+  const meta = await conn.getMetadata();
+  const propsOf = (e: string) => new Set(meta.entities.get(e)?.properties.map((p) => p.name));
+  const kindProps = propsOf(KINDS);
+  const itemProps = propsOf(set);
+  const copied = FROM_KIND.filter((f) => kindProps.has(f) && itemProps.has(f));
+  const kindRow = await one(conn, KINDS, input.kind, "Вид номенклатуры", [...copied, "IsFolder"]);
   if (typeof kindRow === "string") return fail(kindRow);
   if (kindRow["IsFolder"] === true)
     return fail(
@@ -207,13 +213,18 @@ export async function createTradeNomenclature(
   const unitNotes: string[] = [];
   const unit = await resolveUnit(conn, set, input.unit ?? "796", unitNotes);
   if (typeof unit === "string") return fail(unit);
+  if (!(await conn.available()).has(RATES))
+    return fail(
+      "Справочник «Ставки НДС» (Catalog_СтавкиНДС) не опубликован в OData: ставку для номенклатуры не выбрать. " +
+        "Опубликуйте его. Ничего не создано.",
+    );
   const day = await previewDay(conn);
   const rate = input.vatRate
     ? await one(conn, RATES, input.vatRate, "Ставка НДС")
     : await mainVatRate(conn, day);
   if (typeof rate === "string") return fail(rate);
 
-  const fromKind = Object.fromEntries(FROM_KIND.map((f) => [f, kindRow[f]]).filter(([, v]) => !isEmpty(v)));
+  const fromKind = Object.fromEntries(copied.map((f) => [f, kindRow[f]]).filter(([, v]) => !isEmpty(v)));
   const payload = {
     Description: input.name,
     НаименованиеПолное: input.fullName ?? input.name,

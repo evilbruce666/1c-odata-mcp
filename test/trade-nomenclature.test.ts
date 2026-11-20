@@ -293,4 +293,31 @@ describe("create_nomenclature в Управлении торговлей", () =>
     expect(other.isError).toBe(true);
     expect(other.text).not.toContain("Измените позицию в 1С");
   });
+
+  it.each([
+    ["504 в УТ — исход неизвестен", "ut11", 504, "Gateway Timeout"],
+    ["500 другого текста в УТ", "ut11", 500, "Объект заблокирован"],
+    ["502 с тем же текстом в УТ", "ut11", 502, 'Не удалось записать "X"!'],
+    ["500 «Не удалось записать» в Бухгалтерии", "bp30", 500, 'Не удалось записать "X"!'],
+  ] as const)("%s — без объяснения про УТ (ревью)", async (_, schema, status, text) => {
+    const s = setup(schema);
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      if ((init?.method ?? "GET").toUpperCase() === "PATCH")
+        return new Response(
+          JSON.stringify({ "odata.error": { code: "-1", message: { lang: "ru", value: text } } }),
+          {
+            status,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      return inner(input, init);
+    });
+    const r = await s.call(
+      { entitySet: "Catalog_Номенклатура", ref: GOODS, mark: true, confirm: true },
+      "write.entity.mark_for_deletion",
+    );
+    expect(r.isError).toBe(true);
+    expect(r.text).not.toContain("Измените позицию в 1С");
+  });
 });

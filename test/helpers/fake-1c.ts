@@ -381,7 +381,8 @@ export function fake1C(env: Record<string, string> = {}, options: FakeOptions = 
     // Объект по ключу: одна запись или 404, как в 1С, а не вся коллекция данных теста.
     const ownKey =
       own && tail === "" ? /^[^(]+\(guid'([0-9a-f-]{36})'\)$/i.exec(path)?.[1]?.toLowerCase() : undefined;
-    if (own && ownKey && own.some((r) => "Ref_Key" in r)) {
+    // Пустой список данных теста на чтение по ключу — тоже 404: настоящая 1С не отвечает коллекцией.
+    if (own && ownKey && (own.length === 0 || own.some((r) => "Ref_Key" in r))) {
       const row = own.find((r) => String(r["Ref_Key"]).toLowerCase() === ownKey);
       return row
         ? json(200, row)
