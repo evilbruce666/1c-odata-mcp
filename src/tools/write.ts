@@ -2201,7 +2201,21 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
             note: "Предпросмотр. Чтобы применить пометку, повторите с confirm=true.",
           });
         }
-        const updated = await conn.client.patch<ODataEntity>(path, { DeletionMark: mark });
+        let updated: ODataEntity;
+        try {
+          updated = await conn.client.patch<ODataEntity>(path, { DeletionMark: mark });
+        } catch (e) {
+          // Управление торговлей 11.5 (копия рабочей базы, 20.11.2026): пометку любой номенклатуры через OData 1С
+          // отвергает ответом 500 «Не удалось записать …» без причины — и созданной в 1С, и созданной коннектором;
+          // обычная запись той же позиции проходит. Причину 1С показывает только в своём интерфейсе.
+          if (mark && entitySet === "Catalog_Номенклатура" && e instanceof ODataError && e.kind === "server")
+            return fail(
+              `1С не поставила пометку удаления (${e.message}). Ничего не изменено. В Управлении торговлей так ` +
+                "отказывает пометка номенклатуры через OData — любой позиции, не только созданной коннектором; " +
+                "причину 1С показывает в своём интерфейсе. Пометьте позицию в 1С.",
+            );
+          throw e;
+        }
         return ok({
           updated: true,
           database: conn.cfg.name,

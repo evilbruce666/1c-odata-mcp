@@ -253,4 +253,36 @@ describe("create_nomenclature в Управлении торговлей", () =>
     const explicit = await setup().call({ name: "ZZ-TEST", kind: "Товары", unit: PCS2 });
     expect(explicit.sc["payload"]).toMatchObject({ ЕдиницаИзмерения_Key: PCS2 });
   });
+
+  it("пометка номенклатуры: 1С отвечает 500 (как на живой УТ) — понятный отказ с советом; другой 500 — как был", async () => {
+    const s = setup();
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      if ((init?.method ?? "GET").toUpperCase() === "PATCH")
+        return new Response(
+          JSON.stringify({
+            "odata.error": {
+              code: "-1",
+              message: { lang: "ru", value: 'Не удалось записать "X (Номенклатура)"!' },
+            },
+          }),
+          { status: 500, headers: { "content-type": "application/json" } },
+        );
+      return inner(input, init);
+    });
+    const MARK = "write.entity.mark_for_deletion";
+    const r = await s.call(
+      { entitySet: "Catalog_Номенклатура", ref: GOODS, mark: true, confirm: true },
+      MARK,
+    );
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("Пометьте позицию в 1С");
+    expect(r.text).toContain("Не удалось записать");
+    const other = await s.call(
+      { entitySet: "Catalog_Контрагенты", ref: GOODS, mark: true, confirm: true },
+      MARK,
+    );
+    expect(other.isError).toBe(true);
+    expect(other.text).not.toContain("Пометьте позицию в 1С");
+  });
 });
