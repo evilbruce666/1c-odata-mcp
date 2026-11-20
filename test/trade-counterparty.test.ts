@@ -39,6 +39,12 @@ function setup(
       schema: o.schema ?? "ut11",
       data: (q: FakeQuery) => {
         if (q.base === "Catalog_Партнеры" && !q.params.get("$filter")) return partners;
+        // Тёзки партнёра: отбор по наименованию — как в 1С.
+        const byName = /Description eq '((?:[^']|'')*)'/
+          .exec(q.params.get("$filter") ?? "")?.[1]
+          ?.replace(/''/g, "'");
+        if (q.base === "Catalog_Партнеры" && byName !== undefined)
+          return partners.filter((p) => p["Description"] === byName && p["DeletionMark"] !== true);
         // Дублей по ИНН нет.
         if (q.base === "Catalog_Контрагенты" && (q.params.get("$filter") ?? "").includes("ИНН eq")) return [];
         if (q.base === "Catalog_Контрагенты" && !q.params.get("$filter") && o.counterparties)
@@ -334,4 +340,13 @@ describe("create_counterparty в Управлении торговлей", () =>
       expect(s.fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
     },
   );
+
+  it("create_partner: партнёр с тем же названием есть — предупреждение со ссылкой, запись не блокируется", async () => {
+    const s = setup({ partners: [{ Ref_Key: P, Description: "ZZ-TEST тёзка", DeletionMark: false }] });
+    const r = await s.call({ name: "ZZ-TEST тёзка", relations: ["client"] }, PARTNER);
+    expect(r.isError, r.text.slice(0, 300)).toBeFalsy();
+    expect(JSON.stringify(r.sc["notes"])).toContain(P);
+    const other = await s.call({ name: "ZZ-TEST другой", relations: ["client"] }, PARTNER);
+    expect(JSON.stringify(other.sc["notes"])).not.toContain("уже есть");
+  });
 });

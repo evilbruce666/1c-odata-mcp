@@ -3,7 +3,7 @@ import type { Connection } from "../context.js";
 import type { ODataEntity } from "../types/odata.js";
 import { ODataError } from "../odata/errors.js";
 import { EMPTY_REF } from "../odata/pricing.js";
-import { buildQuery } from "../odata/query.js";
+import { and, buildQuery, cmp, odataString } from "../odata/query.js";
 import { currentWriteOperationId } from "../odata/write-operation-context.js";
 import { fail } from "./_shared.js";
 import { createCore } from "./write.js";
@@ -145,6 +145,24 @@ export async function createPartner(
       "Справочник «Партнеры» (Catalog_Партнеры) не опубликован в OData: партнёры есть в Управлении торговлей, КА и " +
         "ERP. Ничего не создано.",
     );
+  // Партнёр с тем же названием уже есть — предупреждение, не отказ: тёзки бывают. Ловит и повтор после потерянного
+  // ответа, если вместо write.operation.status сделали новый предпросмотр (ревью).
+  const name = input.name.trim();
+  const { value: same } = await conn.client.getCollection<ODataEntity>(
+    `${PARTNERS}${buildQuery({
+      filter: and(cmp("Description", "eq", odataString(name)), "DeletionMark eq false"),
+      select: ["Ref_Key", "Description"],
+      top: 5,
+    })}`,
+  );
+  const namesakes = same.filter((r) => String(r["Description"] ?? "").trim() === name);
+  const notes = namesakes.length
+    ? [
+        `Партнёр «${name}» уже есть: ${namesakes.map((r) => String(r["Ref_Key"])).join(", ")}. Если это он — не создавайте ` +
+          "второго: контрагента заведите к нему (create_counterparty с partnerRef). Если только что было подтверждение с " +
+          "потерянным ответом — сначала write.operation.status с его operationId.",
+      ]
+    : [];
   const relations = new Set(input.relations);
   const payload = {
     Description: input.name,
@@ -160,7 +178,10 @@ export async function createPartner(
     PARTNERS,
     payload,
     confirm,
-    ["Контрагента (юрлицо) к партнёру — write.counterparty.create_counterparty с partnerRef = ref партнёра."],
+    [
+      ...notes,
+      "Контрагента (юрлицо) к партнёру — write.counterparty.create_counterparty с partnerRef = ref партнёра.",
+    ],
     () => undefined,
   );
 }
