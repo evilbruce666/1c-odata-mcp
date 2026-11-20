@@ -70,6 +70,7 @@ const ITEMS = Array.from({ length: 110 }, (_, n) => n + 1).map((i) => ({
 }));
 
 interface Rec {
+  Active?: boolean;
   Period: string;
   Номенклатура_Key: string;
   Характеристика_Key: string;
@@ -94,12 +95,17 @@ interface Options {
   keepAfterUnpost?: boolean;
   /** Чтение набора записей регистра падает. */
   failMovements?: boolean;
+  /** В наборе записей есть неактивная запись (Active=false) — 1С её не учитывает. */
+  inactiveMovement?: boolean;
+  /** В прежнем регистре цен нет записей (для выбора механизма). */
+  legacyEmpty?: boolean;
   /** Табличная часть последних проведённых документов: legacy или 2.5. */
   recentRows?: "Товары" | "Товары2_5" | "both";
   schema?: FakeSchema;
 }
 
 function setup(o: Options = {}) {
+  const bp = o.schema === "bp30";
   const docs = new Map<string, { body: Record<string, unknown>; posted: boolean; version: number }>();
   const base: Rec[] = [
     rec(I(1), K_BASE, 100, "2026-11-01T00:00:01"),
@@ -115,16 +121,28 @@ function setup(o: Options = {}) {
     const rows = ((d.body["Товары"] as Record<string, unknown>[]) ?? []).map((r) => ({
       Period: String(d.body["Date"]),
       Номенклатура_Key: String(r["Номенклатура_Key"]),
-      Характеристика_Key: String(r["Характеристика_Key"]),
-      ВидЦены_Key: String(r["ВидЦены_Key"]),
+      Характеристика_Key: String(r["Характеристика_Key"] ?? EMPTY),
+      // Бухгалтерия: тип цен — в шапке документа.
+      ВидЦены_Key: String(bp ? d.body["ТипЦен_Key"] : r["ВидЦены_Key"]),
       Цена: Number(r["Цена"]) + (o.corruptPost ? 1 : 0),
       Recorder: ref,
     }));
-    return o.extraMovement ? [...rows, { ...rows[0]!, Номенклатура_Key: I(3) }] : rows;
+    return [
+      ...rows,
+      ...(o.extraMovement ? [{ ...rows[0]!, Номенклатура_Key: I(3) }] : []),
+      ...(o.inactiveMovement && rows.length ? [{ ...rows[0]!, Номенклатура_Key: I(4), Active: false }] : []),
+    ];
   };
   const records = () => [...base, ...[...docs.keys()].flatMap(movementsOf)];
+  // Запись регистра в ответе 1С: в Бухгалтерии — тип цен и без характеристики.
+  const out = (r: Rec) => {
+    if (!bp) return r;
+    const { ВидЦены_Key, Характеристика_Key: _c, ...rest } = r;
+    return { ...rest, ТипЦен_Key: ВидЦены_Key };
+  };
   const guids = (text: string) =>
-    [...text.matchAll(/guid'([0-9a-f-]{36})'/gi)].map((m) => m[1]!.toLowerCase());
+    // В Condition среза апострофы удвоены: guid''…''.
+    [...text.matchAll(/guid'{1,2}([0-9a-f-]{36})'/gi)].map((m) => m[1]!.toLowerCase());
 
   const fake = fake1C(
     {
@@ -136,7 +154,7 @@ function setup(o: Options = {}) {
       schema: o.schema ?? "ut11",
       data: (q: FakeQuery) => {
         const filter = q.params.get("$filter") ?? "";
-        if (q.base === "Catalog_ВидыЦен") return KINDS;
+        if (q.base === "Catalog_ВидыЦен" || q.base === "Catalog_ТипыЦенНоменклатуры") return KINDS;
         if (q.base === "Catalog_Номенклатура") {
           if (filter.includes("IsFolder eq true"))
             return [{ Ref_Key: G, Description: "Группа", Parent_Key: EMPTY, IsFolder: true }];
@@ -208,9 +226,18 @@ function setup(o: Options = {}) {
         return json(404, {
           "odata.error": { code: "9", message: { lang: "ru", value: "Экземпляр сущности не найден" } },
         });
-      return json(200, { Recorder: ref, Recorder_Type: DOC_TYPE, RecordSet: set });
+      return json(200, { Recorder: ref, Recorder_Type: DOC_TYPE, RecordSet: set.map(out) });
     }
-    if (path.startsWith("InformationRegister_ЦеныНоменклатуры25")) return json(200, { value: [] });
+    if (path.startsWith("InformationRegister_ЦеныНоменклатуры25"))
+      return json(200, {
+        value: o.legacyEmpty && path.includes("$top=1") ? [{ Period: "2026-11-01T00:00:00" }] : [],
+      });
+    if (
+      o.legacyEmpty &&
+      path.startsWith("InformationRegister_ЦеныНоменклатуры_RecordType?") &&
+      path.includes("$top=1")
+    )
+      return json(200, { value: [] });
     if (path.startsWith("InformationRegister_ЦеныНоменклатуры_RecordType")) {
       const all = guids(path);
       const kinds = new Set(all.filter((g) => KINDS.some((k) => k.Ref_Key === g)));
@@ -225,11 +252,17 @@ function setup(o: Options = {}) {
           .sort((a, b) => a.Period.localeCompare(b.Period)))
           last.set(`${r.Номенклатура_Key}|${r.Характеристика_Key}|${r.ВидЦены_Key}`, r);
         const skip = Number(/\$skip=(\d+)/.exec(path)?.[1] ?? 0);
-        return json(200, { value: skip ? [] : [...last.values()] });
+        return json(200, { value: skip ? [] : [...last.values()].map(out) });
       }
       const after = /Period ge datetime'([^']+)'/.exec(path)?.[1] ?? "";
       const skip = Number(/\$skip=(\d+)/.exec(path)?.[1] ?? 0);
-      return json(200, { value: skip ? [] : records().filter((r) => pick(r) && r.Period >= after) });
+      return json(200, {
+        value: skip
+          ? []
+          : records()
+              .filter((r) => pick(r) && r.Period >= after)
+              .map(out),
+      });
     }
     return inner(input, init);
   });
@@ -452,11 +485,39 @@ describe("механизм цен и чтение", () => {
     expect(r.structuredContent["count"]).toBe(3);
   });
 
-  it("в Бухгалтерии чтение цен отказывает с причиной", async () => {
+  it("Бухгалтерия: цены по типам цен — тот же инструмент, тип цен в шапке, проведение сверяется", async () => {
     const s = setup({ schema: "bp30" });
-    const r = await s.call("read.analytics.get_prices", {});
+    const { preview, created, ref, posted } = await createAndPost(s);
+    expect(preview.structuredContent["mechanism"]).toBe("bp");
+    const payload = preview.structuredContent["payload"] as Record<string, unknown>;
+    expect(payload).toMatchObject({ Date: AT, ТипЦен_Key: K_BASE });
+    expect(payload).not.toHaveProperty("ВидыЦен");
+    expect(payload).not.toHaveProperty("Статус");
+    expect(created.isError, created.text).toBeFalsy();
+    const row = (s.docs.get(ref.toLowerCase())!.body["Товары"] as Record<string, unknown>[])[0]!;
+    expect(Object.keys(row).sort()).toEqual(["LineNumber", "Валюта_Key", "Номенклатура_Key", "Цена"]);
+    expect(posted.structuredContent).toMatchObject({ done: true, verified: true, movementsVerified: true });
+    const prices = await s.call("read.analytics.get_prices", {
+      priceKinds: ["Закупочная"],
+      asOf: "2026-11-21",
+    });
+    expect(prices.structuredContent["mechanism"]).toBe("bp");
+    expect(
+      (prices.structuredContent["items"] as Record<string, unknown>[]).find((x) => x["ref"] === I(1)),
+    ).toMatchObject({
+      price: 120,
+    });
+  });
+
+  it("Бухгалтерия: характеристики в строках — отказ, их там нет", async () => {
+    const s = setup({ schema: "bp30" });
+    const r = await s.call(SET, {
+      priceKind: "Закупочная",
+      lines: [{ itemRef: I(1), price: 1, characteristicRef: uuid("c", 9) }],
+      date: AT,
+    });
     expect(r.isError).toBe(true);
-    expect(r.text).toContain("Управления торговлей");
+    expect(r.text).toContain("без характеристик");
   });
 });
 
@@ -536,17 +597,17 @@ describe("находки ревью и живой проверки", () => {
     expect(done.structuredContent).toMatchObject({ done: true, verified: false, movementsVerified: false });
   });
 
-  it("предпросмотр на 100 строк укладывается в норму ответа и несёт operationId; 101 строка — отказ", async () => {
+  it("предпросмотр на 80 строк укладывается в норму ответа и несёт operationId; 81 строка — отказ", async () => {
     const s = setup();
-    const many = ITEMS.slice(0, 100).map((i) => ({ itemRef: i.Ref_Key, price: 99.99 }));
+    const many = ITEMS.slice(0, 80).map((i) => ({ itemRef: i.Ref_Key, price: 99.99 }));
     const r = await s.call(SET, { priceKind: "Розничная", lines: many, date: AT });
     expect(r.isError, r.text.slice(0, 300)).toBeFalsy();
     expect(r.text.length).toBeLessThan(45_000);
     expect(r.text).toContain('"operationId"');
-    expect(r.structuredContent["prices"]).toHaveLength(100);
+    expect(r.structuredContent["prices"]).toHaveLength(80);
     const over = await s.call(SET, {
       priceKind: "Розничная",
-      lines: ITEMS.slice(0, 101).map((i) => ({ itemRef: i.Ref_Key, price: 1 })),
+      lines: ITEMS.slice(0, 81).map((i) => ({ itemRef: i.Ref_Key, price: 1 })),
       date: AT,
     });
     expect(over.isError).toBe(true);
@@ -574,9 +635,9 @@ describe("находки ревью и живой проверки", () => {
   );
 });
 
-describe("Бухгалтерия: документ с тем же именем помечается как раньше", () => {
-  it("проведённую «Установку цен» Бухгалтерии можно пометить на удаление — проверка только для УТ", async () => {
-    const ref = "11111111-1111-4111-8111-111111111111";
+describe("пометка удаления документа цен в Бухгалтерии", () => {
+  const ref = "11111111-1111-4111-8111-111111111111";
+  const mark = async (withPriceSchema: boolean) => {
     const fake = fake1C(
       { READ_ONLY: "false", ODATA_WRITABLE: "true" },
       {
@@ -586,10 +647,14 @@ describe("Бухгалтерия: документ с тем же именем �
             : undefined,
       },
     );
-    const available = await fake.conn.available();
-    vi.spyOn(fake.conn, "available").mockResolvedValue(
-      new Set([...available, "Document_УстановкаЦенНоменклатуры"]),
-    );
+    if (!withPriceSchema) {
+      // Регистр цен не опубликован: устройство цен не подтверждено — пометка как раньше.
+      const meta = await fake.conn.getMetadata();
+      const entities = new Map(
+        [...meta.entities].filter(([k]) => !k.startsWith("InformationRegister_ЦеныНоменклатуры")),
+      );
+      vi.spyOn(fake.conn, "getMetadata").mockResolvedValue({ ...meta, entities });
+    }
     const tools = (
       createServer(fake.ctx) as unknown as {
         _registeredTools: Record<
@@ -609,6 +674,52 @@ describe("Бухгалтерия: документ с тем же именем �
       t.inputSchema.parse({ entitySet: "Document_УстановкаЦенНоменклатуры", ref }),
       {},
     );
-    expect(r.isError, (r.content ?? []).map((c) => c.text).join("")).toBeFalsy();
+    return { r, text: (r.content ?? []).map((c) => c.text).join("") };
+  };
+
+  it("схема цен опубликована: проведённый документ не помечается — его цены продолжали бы действовать", async () => {
+    const { r, text } = await mark(true);
+    expect(r.isError).toBe(true);
+    expect(text).toContain("Сначала отмените проведение");
+  });
+
+  it("схемы цен нет: помечается как раньше (предпросмотр)", async () => {
+    const { r, text } = await mark(false);
+    expect(r.isError, text).toBeFalsy();
+  });
+});
+
+describe("пробелы тестов из ревью", () => {
+  it("неактивная запись регистра (Active=false) не считается лишней", async () => {
+    const s = setup({ inactiveMovement: true });
+    const { posted } = await createAndPost(s);
+    expect(posted.structuredContent).toMatchObject({
+      verified: true,
+      movementsVerified: true,
+      movements: { found: 2 },
+    });
+  });
+
+  it("обе табличные части заполнены — механизм по регистру с записями (здесь 2.5)", async () => {
+    const s = setup({ recentRows: "both", legacyEmpty: true });
+    const r = await s.call(SET, { priceKind: "Закупочная", lines, date: AT });
+    expect(r.structuredContent["mechanism"]).toBe("2.5");
+  });
+
+  it("страницы get_prices: продолжение с другими видами цен не берёт чужое чтение", async () => {
+    const s = setup();
+    const first = await s.call("read.analytics.get_prices", {
+      priceKinds: ["Закупочная"],
+      asOf: "2026-11-15",
+      limit: 1,
+    });
+    expect(first.structuredContent["count"]).toBe(2);
+    const other = await s.call("read.analytics.get_prices", {
+      priceKinds: ["Розничная"],
+      asOf: "2026-11-15",
+      limit: 1,
+      offset: 1,
+    });
+    expect(other.structuredContent["count"]).toBe(1);
   });
 });

@@ -10,32 +10,53 @@ import { buildQuery, cmp, odataGuid, or } from "./query.js";
 import { refOf } from "./settlements-aging.js";
 
 /**
- * Цены номенклатуры Управления торговлей (УТ 11, КА 2, ERP 2): документ «Установка цен номенклатуры» и регистр цен.
- * Два механизма: прежний (табличная часть «Товары», регистр «Цены номенклатуры») и ценообразование 2.5 («Товары2_5»,
- * регистр «Цены номенклатуры 2.5»). Признаки — положительные: нужные поля есть в схеме. Бухгалтерия устроена иначе
- * (типы цен, а не виды) и здесь не поддерживается.
+ * Цены номенклатуры: документ «Установка цен номенклатуры» и регистр цен — один факт, три устройства.
+ * - Управление торговлей 11 (КА 2, ERP 2): прежний механизм (табличная часть «Товары», регистр «Цены номенклатуры»,
+ *   виды цен) и ценообразование 2.5 («Товары2_5», регистр «Цены номенклатуры 2.5»);
+ * - Бухгалтерия 3.0: тип цен в шапке документа, регистр «Цены номенклатуры» по типам цен, характеристик нет.
+ * Признаки — положительные: все поля механизма есть в схеме.
  */
 export const PRICE_DOC = "Document_УстановкаЦенНоменклатуры";
-export const PRICE_KINDS = "Catalog_ВидыЦен";
 const PRICE_DOC_TYPE = `StandardODATA.${PRICE_DOC}`;
 
-export type PriceMechanism = "legacy" | "2.5";
+export type PriceMechanism = "legacy" | "2.5" | "bp";
 
 interface MechanismSchema {
+  /** Справочник видов (УТ) или типов (Бухгалтерия) цен. */
+  kinds: "Catalog_ВидыЦен" | "Catalog_ТипыЦенНоменклатуры";
+  /** Поле вида цен в строке документа и в регистре. */
+  kindKey: "ВидЦены_Key" | "ТипЦен_Key";
+  /** Вид цен в шапке документа, а не в строке (Бухгалтерия). */
+  headerKind?: "ТипЦен_Key";
+  /** Документ как в Управлении торговлей: статус, табличная часть видов цен, «цена изменена вручную». */
+  trade: boolean;
+  /** Обязательные поля шапки, строки и записи регистра. */
+  header: readonly string[];
+  row: readonly string[];
+  record: readonly string[];
   /** Табличная часть документа. */
   rows: "Товары" | "Товары2_5";
   /** Регистр: набор записей по регистратору. */
   register: string;
   /** Записи регистра: срез последних и отбор по периоду. */
   records: string;
-  /** Поле характеристики в строке и в регистре. */
-  characteristic: "Характеристика_Key" | "ХарактеристикаЦО_Key";
-  /** Пустые ссылки, обязательные в ключе записи 2.5. */
+  /** Поле характеристики в строке и в регистре (в Бухгалтерии характеристик нет). */
+  characteristic?: "Характеристика_Key" | "ХарактеристикаЦО_Key";
+  /** Пустые ссылки, обязательные в строке. */
   emptyKeys: readonly string[];
 }
 
+const UT_HEADER = ["Date", "Статус", "Согласован", "ВидыЦен"];
+const UT_ROW = ["Номенклатура_Key", "ВидЦены_Key", "Цена", "ЦенаИзмененаВручную", "Валюта_Key"];
+
 export const MECHANISMS: Record<PriceMechanism, MechanismSchema> = {
   legacy: {
+    kinds: "Catalog_ВидыЦен",
+    kindKey: "ВидЦены_Key",
+    trade: true,
+    header: [...UT_HEADER, "Товары"],
+    row: [...UT_ROW, "Характеристика_Key"],
+    record: ["Period", "Номенклатура_Key", "ВидЦены_Key", "Цена", "Характеристика_Key"],
     rows: "Товары",
     register: "InformationRegister_ЦеныНоменклатуры",
     records: "InformationRegister_ЦеныНоменклатуры_RecordType",
@@ -43,17 +64,34 @@ export const MECHANISMS: Record<PriceMechanism, MechanismSchema> = {
     emptyKeys: ["Упаковка_Key"],
   },
   "2.5": {
+    kinds: "Catalog_ВидыЦен",
+    kindKey: "ВидЦены_Key",
+    trade: true,
+    header: [...UT_HEADER, "Товары2_5"],
+    row: [...UT_ROW, "ХарактеристикаЦО_Key"],
+    record: ["Period", "Номенклатура_Key", "ВидЦены_Key", "Цена", "ХарактеристикаЦО_Key"],
     rows: "Товары2_5",
     register: "InformationRegister_ЦеныНоменклатуры25",
     records: "InformationRegister_ЦеныНоменклатуры25_RecordType",
     characteristic: "ХарактеристикаЦО_Key",
     emptyKeys: ["СерияЦО_Key", "УпаковкаЦО_Key", "Упаковка_Key"],
   },
+  bp: {
+    kinds: "Catalog_ТипыЦенНоменклатуры",
+    kindKey: "ТипЦен_Key",
+    headerKind: "ТипЦен_Key",
+    trade: false,
+    header: ["Date", "ТипЦен_Key", "Товары"],
+    row: ["Номенклатура_Key", "Цена", "Валюта_Key"],
+    record: ["Period", "Номенклатура_Key", "ТипЦен_Key", "Цена"],
+    rows: "Товары",
+    register: "InformationRegister_ЦеныНоменклатуры",
+    records: "InformationRegister_ЦеныНоменклатуры_RecordType",
+    emptyKeys: [],
+  },
 };
 
 const EMPTY = "00000000-0000-0000-0000-000000000000";
-const HEADER = ["Date", "Статус", "Согласован", "ВидыЦен"];
-const ROW = ["Номенклатура_Key", "ВидЦены_Key", "Цена", "ЦенаИзмененаВручную", "Валюта_Key"];
 const KIND_FIELDS = ["Ref_Key", "Description", "ВалютаЦены_Key"];
 
 /** Механизмы, которые поддерживает схема этой базы: документ, вид цен и регистр — со всеми нужными полями. */
@@ -61,36 +99,37 @@ export async function priceMechanisms(conn: Connection): Promise<PriceMechanism[
   const meta = await conn.getMetadata();
   const props = (set: string) => new Set(meta.entities.get(set)?.properties.map((p) => p.name) ?? []);
   const doc = props(PRICE_DOC);
-  const kinds = props(PRICE_KINDS);
-  if (!HEADER.every((f) => doc.has(f)) || !KIND_FIELDS.every((f) => kinds.has(f))) return [];
   return (Object.keys(MECHANISMS) as PriceMechanism[]).filter((m) => {
     const s = MECHANISMS[m];
     const row = props(`${PRICE_DOC}_${s.rows}`);
     const rec = props(s.records);
+    const kinds = props(s.kinds);
     return (
-      doc.has(s.rows) &&
+      s.header.every((f) => doc.has(f)) &&
+      KIND_FIELDS.every((f) => kinds.has(f)) &&
       meta.entities.has(s.register) &&
-      [...ROW, s.characteristic].every((f) => row.has(f)) &&
-      ["Period", "Номенклатура_Key", "ВидЦены_Key", "Цена", s.characteristic].every((f) => rec.has(f))
+      s.row.every((f) => row.has(f)) &&
+      s.record.every((f) => rec.has(f))
     );
   });
 }
 
-/** Отказ, если цены этой базы не устроены как в Управлении торговлей. */
+/** Отказ, если цены этой базы не устроены ни одним из известных способов. */
 export async function requirePriceSchema(conn: Connection): Promise<PriceMechanism[]> {
   const found = await priceMechanisms(conn);
   if (found.length) return found;
   throw new InputError(
-    "Цены поддерживаются для Управления торговлей 11 (КА 2, ERP 2 — без проверки): в этой базе не опубликованы " +
-      `${PRICE_DOC}, ${PRICE_KINDS} и регистр цен с нужными полями. В Бухгалтерии цены задаются типами цен, ` +
-      "этот вариант пока не поддерживается.",
+    `Цены не поддерживаются в этой базе: в составе OData нет ${PRICE_DOC}, справочника видов цен (Catalog_ВидыЦен — ` +
+      "Управление торговлей, КА, ERP) или типов цен (Catalog_ТипыЦенНоменклатуры — Бухгалтерия) и регистра " +
+      "InformationRegister_ЦеныНоменклатуры с нужными полями. Добавьте их в состав OData.",
   );
 }
 
 /**
- * Механизм цен базы. Первый признак — какую табличную часть заполняют последние проведённые документы: после
- * перехода на 2.5 прежний регистр остаётся непустым, и записи в обоих регистрах — обычное дело. Второй — в каком
- * регистре есть записи. Не ясно — отказ с просьбой указать mechanism: ошибка в выборе дала бы документ без движений.
+ * Механизм цен базы. В Бухгалтерии он один. В УТ первый признак — какую табличную часть заполняют последние
+ * проведённые документы: после перехода на 2.5 прежний регистр остаётся непустым, и записи в обоих регистрах —
+ * обычное дело. Второй — в каком регистре есть записи. Не ясно — отказ с просьбой указать mechanism: ошибка в выборе
+ * дала бы документ без движений.
  */
 export async function detectMechanism(conn: Connection, explicit?: PriceMechanism): Promise<PriceMechanism> {
   const found = await requirePriceSchema(conn);
@@ -150,12 +189,11 @@ export interface PriceKind {
   influencing: string[];
 }
 
-/** Все виды цен (их немного): название, валюта, способ задания и от каких видов цена зависит. */
-export function readPriceKinds(conn: Connection): Promise<PriceKind[]> {
-  return cached(conn, "price-kinds", async () => {
-    const props = new Set(
-      (await conn.getMetadata()).entities.get(PRICE_KINDS)?.properties.map((p) => p.name),
-    );
+/** Все виды (типы) цен — их немного: название, валюта, способ задания и от каких видов цена зависит. */
+export function readPriceKinds(conn: Connection, mech: PriceMechanism): Promise<PriceKind[]> {
+  const set = MECHANISMS[mech].kinds;
+  return cached(conn, `price-kinds:${set}`, async () => {
+    const props = new Set((await conn.getMetadata()).entities.get(set)?.properties.map((p) => p.name));
     const optional = [
       "DeletionMark",
       "IsFolder",
@@ -167,7 +205,7 @@ export function readPriceKinds(conn: Connection): Promise<PriceKind[]> {
     ].filter((f) => props.has(f));
     const { rows } = await fetchAllForAggregation(
       conn,
-      PRICE_KINDS,
+      set,
       { select: [...KIND_FIELDS, ...optional] },
       "виды цен",
       5000,
@@ -236,10 +274,11 @@ export interface PriceRecord {
 const toRecord =
   (mech: PriceMechanism) =>
   (r: ODataEntity): PriceRecord | undefined => {
+    const s = MECHANISMS[mech];
     const itemRef = refOf(r["Номенклатура_Key"]);
-    const kindRef = refOf(r["ВидЦены_Key"]);
+    const kindRef = refOf(r[s.kindKey]);
     if (!itemRef || !kindRef) return undefined;
-    const characteristicRef = refOf(r[MECHANISMS[mech].characteristic]);
+    const characteristicRef = s.characteristic ? refOf(r[s.characteristic]) : undefined;
     const recorderRef = refOf(r["Recorder"]);
     return {
       itemRef,
@@ -266,8 +305,8 @@ export async function slicePrices(
   mech: PriceMechanism,
   { kindRefs, itemRefs, at }: { kindRefs: readonly string[]; itemRefs?: readonly string[]; at?: string },
 ): Promise<PriceRecord[]> {
-  const { records } = MECHANISMS[mech];
-  const kinds = or(...kindRefs.map((k) => cmp("ВидЦены_Key", "eq", odataGuid(k))));
+  const { records, kindKey } = MECHANISMS[mech];
+  const kinds = or(...kindRefs.map((k) => cmp(kindKey, "eq", odataGuid(k))));
   const groups: Array<string[] | undefined> = itemRefs ? chunk([...new Set(itemRefs)], BATCH) : [undefined];
   const out: PriceRecord[] = [];
   for (const items of groups) {
@@ -289,17 +328,17 @@ export async function slicePrices(
   return out;
 }
 
-/** Цены этих позиций и вида цен с периодом позже момента: новая цена с ранней датой их не перекроет. */
+/** Цены этих позиций и вида цен с периодом не раньше момента: новая цена с ранней датой их не перекроет. */
 export async function laterPrices(
   conn: Connection,
   mech: PriceMechanism,
   { kindRef, itemRefs, after }: { kindRef: string; itemRefs: readonly string[]; after: string },
 ): Promise<PriceRecord[]> {
-  const { records } = MECHANISMS[mech];
+  const { records, kindKey } = MECHANISMS[mech];
   const out: PriceRecord[] = [];
   for (const items of chunk([...new Set(itemRefs)], BATCH)) {
     const filter = [
-      cmp("ВидЦены_Key", "eq", odataGuid(kindRef)),
+      cmp(kindKey, "eq", odataGuid(kindRef)),
       cmp("Period", "ge", `datetime'${after}'`),
       `(${or(...items.map((i) => cmp("Номенклатура_Key", "eq", odataGuid(i))))})`,
     ].join(" and ");
@@ -312,7 +351,7 @@ export async function laterPrices(
   return out;
 }
 
-/** Движения документа по регистру цен: набор записей по регистратору. */
+/** Движения документа по регистру цен: набор записей по регистратору, только активные. */
 export async function priceMovements(
   conn: Connection,
   mech: PriceMechanism,
@@ -343,7 +382,7 @@ export interface PriceLine {
   price: number;
 }
 
-/** Строки документа цен в его табличной части. */
+/** Строки документа цен; вид цен — из строки (УТ) или из шапки (Бухгалтерия). */
 export async function priceDocumentLines(
   conn: Connection,
   mech: PriceMechanism,
@@ -352,13 +391,14 @@ export async function priceDocumentLines(
   const s = MECHANISMS[mech];
   const guid = docRef.replace(/[{}']/g, "");
   const doc = await conn.client.getEntity<ODataEntity>(
-    `${PRICE_DOC}(${odataGuid(guid)})${buildQuery({ select: ["Posted", s.rows] })}`,
+    `${PRICE_DOC}(${odataGuid(guid)})${buildQuery({ select: ["Posted", s.rows, ...(s.headerKind ? [s.headerKind] : [])] })}`,
   );
+  const headerKind = s.headerKind ? refOf(doc[s.headerKind]) : undefined;
   const lines = ((doc[s.rows] as ODataEntity[] | undefined) ?? []).flatMap((r) => {
     const itemRef = refOf(r["Номенклатура_Key"]);
-    const kindRef = refOf(r["ВидЦены_Key"]);
+    const kindRef = headerKind ?? refOf(r[s.kindKey]);
     if (!itemRef || !kindRef) return [];
-    const characteristicRef = refOf(r[s.characteristic]);
+    const characteristicRef = s.characteristic ? refOf(r[s.characteristic]) : undefined;
     return [
       {
         itemRef,
@@ -411,7 +451,7 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
 
 /**
  * Проверка проведения документа цен: движения регистра совпадают со строками документа до копейки, после отмены
- * проведения записей нет. undefined — это не документ цен Управления торговлей (проверяют другие). Проведённый
+ * проведения записей нет. undefined — это не документ цен известного устройства (проверяют другие). Проведённый
  * документ с расхождением — не успех и не «ничего не сделано»: verified=false и следующий шаг.
  */
 export async function verifyPriceMovements(
@@ -426,7 +466,7 @@ export async function verifyPriceMovements(
   const guid = ref.replace(/[{}']/g, "");
   try {
     const doc = await conn.client.getEntity<ODataEntity>(
-      `${PRICE_DOC}(${odataGuid(guid)})${buildQuery({ select: found.map((m) => MECHANISMS[m].rows) })}`,
+      `${PRICE_DOC}(${odataGuid(guid)})${buildQuery({ select: [...new Set(found.map((m) => MECHANISMS[m].rows))] })}`,
     );
     const mech = found.find((m) => (doc[MECHANISMS[m].rows] as unknown[] | undefined)?.length) ?? found[0]!;
     const { lines } = await priceDocumentLines(conn, mech, guid);

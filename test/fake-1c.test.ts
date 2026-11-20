@@ -414,10 +414,15 @@ describe("запись цен в УТ: допуск только для доку
     expect([...allowed.fake.requests, ...other.fake.requests].filter((q) => q.method !== "GET")).toEqual([]);
   });
 
-  it("в Бухгалтерии установка цен отказывает: цены там — типы цен", async () => {
-    const { r, text } = await call("write.pricing.create_price_setting", price, "bp30");
-    expect(r.isError).toBe(true);
-    expect(text).toContain("Управления торговлей");
+  it("в Бухгалтерии установка цен — по типам цен (bp): предпросмотр, ничего не записано", async () => {
+    const { r, text, fake } = await call(
+      "write.pricing.create_price_setting",
+      { priceKind: id, lines: [{ itemRef: id, price: 100 }] },
+      "bp30",
+    );
+    expect(r.isError, text.slice(0, 300)).toBeFalsy();
+    expect(text).toContain('"mechanism":"bp"');
+    expect(fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
   });
 
   it("сбой чтения схемы при проверке цен — отказ, а не допуск", async () => {

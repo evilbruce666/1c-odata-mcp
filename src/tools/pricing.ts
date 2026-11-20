@@ -34,15 +34,16 @@ const GUID = /^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0
 const MOMENT_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2})?$/;
 /**
  * Строк в документе. Предпросмотр — одна строка ответа на позицию: на 500 строках он выходил за норму ответа, и клиент
- * терял operationId (ревью). В ночных документах базы — до 32 строк; больше — несколькими документами.
+ * терял operationId (ревью); 100 строк с названиями по 100 символов и более поздними ценами — около 44,5 тыс. из 45.
+ * В ночных документах базы — до 32 строк; больше — несколькими документами.
  */
-const MAX_LINES = 100;
+const MAX_LINES = 80;
 
 const mechanismField = z
-  .enum(["legacy", "2.5"])
+  .enum(["legacy", "2.5", "bp"])
   .optional()
   .describe(
-    "Механизм цен: legacy — прежний (табличная часть «Товары»), 2.5 — ценообразование 2.5. Без параметра " +
+    "Механизм цен: legacy — прежний УТ (табличная часть «Товары»), 2.5 — ценообразование 2.5, bp — Бухгалтерия (типы цен). Без параметра " +
       "определяется по последним проведённым документам и записям регистров",
   );
 
@@ -76,16 +77,17 @@ export function registerPricingTools(server: McpServer, ctx: ServerContext): voi
   server.registerTool(
     "write.pricing.create_price_setting",
     {
-      title: "Установить цены номенклатуры (УТ 11, КА 2, ERP 2)",
+      title: "Установить цены номенклатуры",
       description:
         "Создаёт документ «Установка цен номенклатуры» по одному виду цен — непроведённым; цены вступают в силу после " +
         "проведения (write.document.post_document, отдельный предпросмотр). Предпросмотр показывает по каждой позиции " +
         "текущую цену и новую (prices) и предупреждает: у вида цен есть зависимые виды (наценка на этот вид) — 1С их " +
         "при записи через OData не пересчитает; у позиции уже есть цена с более поздней датой — новая её не перекроет; " +
         "цена на тот же момент — отказ. date — момент цены, по умолчанию сейчас (по часам компьютера с коннектором); дата " +
-        "без времени — начало дня. До 100 строк на документ. " +
-        "Механизм определяется по базе (mechanism — явно). Ценообразование 2.5 на живой базе не проверено. Только " +
-        "Управление торговлей 11 (КА 2 и ERP 2 — по тем же полям, без проверки); в Бухгалтерии — отказ.",
+        "без времени — начало дня. До 80 строк на документ. " +
+        "Механизм определяется по базе (mechanism — явно): Управление торговлей 11 — прежний (legacy) или " +
+        "ценообразование 2.5 (на живой базе не проверено); Бухгалтерия 3.0 — по типам цен (bp, вид цен — тип цен " +
+        "номенклатуры). КА 2 и ERP 2 — по тем же полям, что УТ, без проверки.",
       inputSchema: z.object({
         database: databaseField,
         priceKind: z.string().trim().min(1).max(200).describe("Вид цен: Ref_Key или точное название"),
@@ -126,7 +128,9 @@ export function registerPricingTools(server: McpServer, ctx: ServerContext): voi
         const conn = ctx.db(database);
         const mech = await detectMechanism(conn, mechanism);
         const s = MECHANISMS[mech];
-        const kinds = await readPriceKinds(conn);
+        const kinds = await readPriceKinds(conn, mech);
+        if (!s.characteristic && lines.some((l) => l.characteristicRef))
+          throw new InputError("В этой базе цены задаются без характеристик: уберите characteristicRef.");
         const kind = resolvePriceKind(priceKind, kinds);
         if (kind.deleted) throw new InputError(`Вид цен «${kind.name}» помечен на удаление.`);
         // Статусы вида цен в УТ: «Действует», «НеДействует» или пусто. Отказ — только на явном «НеДействует».
@@ -221,21 +225,25 @@ export function registerPricingTools(server: McpServer, ctx: ServerContext): voi
             "Ценообразование 2.5: заполнение документа на живой базе не проверено, проверьте его в 1С.",
           );
 
+        // УТ: статус, строка вида цен, вид цен и «цена изменена вручную» в строке — как в живых документах.
+        // Бухгалтерия: тип цен в шапке, в строке — номенклатура, цена и валюта.
         const payload: Record<string, unknown> = {
           Date: at,
-          Статус: "Согласован",
-          Согласован: true,
+          ...(s.trade ? { Статус: "Согласован", Согласован: true } : {}),
+          ...(s.headerKind ? { [s.headerKind]: kind.ref } : {}),
           ...(comment ? { Комментарий: comment } : {}),
           ...(responsibleRef ? { Ответственный_Key: clean(responsibleRef) } : {}),
-          ВидыЦен: [{ LineNumber: 1, ВидЦены_Key: kind.ref }],
+          ...(s.trade ? { ВидыЦен: [{ LineNumber: 1, ВидЦены_Key: kind.ref }] } : {}),
           [s.rows]: lines.map((l, i) => ({
             LineNumber: i + 1,
             Номенклатура_Key: clean(l.itemRef),
-            [s.characteristic]: l.characteristicRef ? clean(l.characteristicRef) : EMPTY_REF,
+            ...(s.characteristic
+              ? { [s.characteristic]: l.characteristicRef ? clean(l.characteristicRef) : EMPTY_REF }
+              : {}),
             ...Object.fromEntries(s.emptyKeys.map((k) => [k, EMPTY_REF])),
-            ВидЦены_Key: kind.ref,
+            ...(s.headerKind ? {} : { [s.kindKey]: kind.ref }),
             Цена: l.price,
-            ЦенаИзмененаВручную: true,
+            ...(s.trade ? { ЦенаИзмененаВручную: true } : {}),
             Валюта_Key: kind.currencyRef,
           })),
         };
@@ -267,13 +275,13 @@ export function registerPricingTools(server: McpServer, ctx: ServerContext): voi
   server.registerTool(
     "read.analytics.get_prices",
     {
-      title: "Цены номенклатуры (УТ 11, КА 2, ERP 2)",
+      title: "Цены номенклатуры",
       description:
-        "Действующие цены по видам цен на момент (срез последних по регистру цен Управления торговлей). priceKinds — " +
+        "Действующие цены по видам цен на момент (срез последних по регистру цен; в Бухгалтерии — по типам цен). priceKinds — " +
         "виды цен (Ref_Key или точное название; без параметра — все действующие). Отбор позиций как в " +
         "get_warehouse_stock: group или groups (с подгруппами), query (название или артикул), items (Ref_Key). " +
         "asOf — момент (YYYY-MM-DD — на начало дня, YYYY-MM-DDTHH:mm:ss — точно; без параметра — сейчас). Позиции " +
-        "без цены вида в ответ не входят: полный список номенклатуры — read.catalog.list_items. В Бухгалтерии — отказ. " +
+        "без цены вида в ответ не входят: полный список номенклатуры — read.catalog.list_items. " +
         "count — всего строк; длинный список читайте с offset=nextOffset.",
       inputSchema: z.object({
         database: databaseField,
@@ -308,7 +316,7 @@ export function registerPricingTools(server: McpServer, ctx: ServerContext): voi
         const t0 = Date.now();
         const conn = ctx.db(database);
         const mech = await detectMechanism(conn, mechanism);
-        const allKinds = await readPriceKinds(conn);
+        const allKinds = await readPriceKinds(conn, mech);
         const kinds: PriceKind[] = priceKinds
           ? [...new Map(priceKinds.map((q) => resolvePriceKind(q, allKinds)).map((k) => [k.ref, k])).values()]
           : allKinds.filter((k) => !k.folder && !k.deleted && k.status !== "НеДействует");

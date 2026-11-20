@@ -513,7 +513,7 @@ export const listWarehousesResultSchema = z
 export const getPricesResultSchema = z
   .object({
     database: z.string(),
-    mechanism: z.enum(["legacy", "2.5"]),
+    mechanism: z.enum(["legacy", "2.5", "bp"]),
     asOf: z.string().optional(),
     priceKinds: z.array(z.object({ name: z.string(), ref: z.string() }).passthrough()),
     count: z.number(),
