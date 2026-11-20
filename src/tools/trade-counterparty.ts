@@ -63,7 +63,7 @@ export function derivedOperationId(operationId: string, part: string): string {
 }
 
 /** Дата регистрации партнёра — день предпросмотра (из журнала), чтобы подтверждение совпало с ним байт в байт. */
-function dayOf(iso: string | undefined): string {
+export function dayOf(iso: string | undefined): string {
   const d = iso ? new Date(iso) : new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T00:00:00`;
@@ -199,4 +199,34 @@ export async function createTradeCounterparty(
     structuredContent,
     content: [{ type: "text", text: JSON.stringify(structuredContent, null, 2) }],
   };
+}
+
+/** День предпросмотра этой операции: при подтверждении — из журнала, в предпросмотре — сегодня. */
+export async function previewDay(conn: Connection): Promise<string> {
+  const operationId = currentWriteOperationId();
+  const entry = operationId ? await conn.client.operationEntry(operationId) : undefined;
+  return dayOf(entry?.createdAt);
+}
+
+/** Партнёр по ссылке на контрагента или на самого партнёра (в УТ контактные лица принадлежат партнёру). */
+export async function partnerOf(conn: Connection, ref: string): Promise<string | undefined> {
+  const guid = ref.replace(/[{}']/g, "");
+  try {
+    const c = await conn.client.getEntity<ODataEntity>(
+      `Catalog_Контрагенты(guid'${guid}')${buildQuery({ select: ["Партнер_Key"] })}`,
+    );
+    const key = String(c["Партнер_Key"] ?? "");
+    if (key && key !== EMPTY_REF) return key;
+  } catch (e) {
+    if (!(e instanceof ODataError && e.kind === "not_found")) throw e;
+  }
+  try {
+    await conn.client.getEntity<ODataEntity>(
+      `${PARTNERS}(guid'${guid}')${buildQuery({ select: ["Ref_Key"] })}`,
+    );
+    return guid;
+  } catch (e) {
+    if (e instanceof ODataError && e.kind === "not_found") return undefined;
+    throw e;
+  }
 }

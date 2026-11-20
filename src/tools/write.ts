@@ -46,6 +46,8 @@ import { checkDuplicateInn } from "../odata/duplicates.js";
 import {
   createTradeCounterparty,
   partnerFieldWithoutCatalog,
+  partnerOf,
+  previewDay,
   tradeCounterpartySchema,
 } from "./trade-counterparty.js";
 
@@ -1488,10 +1490,6 @@ async function createOrPreview(
 }
 
 /**
- * Создание объекта без подстановок конфигурации: метка операции, предпросмотр или POST, ответ. Сборщики, которым
- * договор и счета расчётов Бухгалтерии не нужны (Управление торговлей), вызывают её напрямую.
- */
-/**
  * Дубль ИНН при правке контрагента — только если пара ИНН+КПП действительно меняется: повторно переданный прежний
  * ИНН (клиент шлёт все поля) не отказ, даже если у ИНН есть головной контрагент или филиал.
  */
@@ -1517,6 +1515,10 @@ async function updatedInnCheck(
   return checkDuplicateInn(conn, set, inn ?? now("ИНН"), kpp ?? now("КПП"), guid);
 }
 
+/**
+ * Создание объекта без подстановок конфигурации: метка операции, предпросмотр или POST, ответ. Сборщики, которым
+ * договор и счета расчётов Бухгалтерии не нужны (Управление торговлей), вызывают её напрямую.
+ */
 export async function createCore(
   conn: Connection,
   entitySet: string,
@@ -1570,6 +1572,10 @@ export async function createCore(
     description: created["Description"],
     ...createdExtra,
   });
+}
+
+async function hasField(conn: Connection, set: string, field: string): Promise<boolean> {
+  return !!(await conn.getMetadata()).entities.get(set)?.properties.some((p) => p.name === field);
 }
 
 /** Скалярные поля шапки из fields, опубликованные у объекта, с их типами из $metadata. */
@@ -4151,7 +4157,17 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, ownerRef, accountNumber, bik, currency, label, makeMain, confirm }) =>
       guard("write.counterparty.create_bank_account", async () => {
         const conn = ctx.db(database);
-        const set = await requireEntity(conn, CATALOGS.bankAccounts, "Справочник «Банковские счета»");
+        const set = await requireEntity(
+          conn,
+          [...CATALOGS.bankAccounts, "Catalog_БанковскиеСчетаКонтрагентов"],
+          "Справочник «Банковские счета»",
+        );
+        const counterparties = await resolveSet(conn, CATALOGS.counterparties, "Контрагенты");
+        if (makeMain && !(await hasField(conn, counterparties, "ОсновнойБанковскийСчет_Key")))
+          return fail(
+            "В этой базе у контрагента нет основного банковского счёта (так в Управлении торговлей): создайте счёт " +
+              "без makeMain. Ничего не создано.",
+          );
         const bank = await resolveBankByBik(conn, bik);
         const cur = currency
           ? await resolveCatalogItem(conn, CATALOGS.currencies, "Справочник «Валюты»", currency)
@@ -4169,13 +4185,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           set,
           payload,
           confirm,
-          makeMain
-            ? {
-                ownerSet: await resolveSet(conn, CATALOGS.counterparties, "Контрагенты"),
-                ownerRef,
-                field: "ОсновнойБанковскийСчет_Key",
-              }
-            : undefined,
+          makeMain ? { ownerSet: counterparties, ownerRef, field: "ОсновнойБанковскийСчет_Key" } : undefined,
         );
       }),
   );
@@ -4202,6 +4212,34 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, ownerRef, name, lastName, firstName, position, makeMain, confirm }) =>
       guard("write.counterparty.create_contact_person", async () => {
         const conn = ctx.db(database);
+        if (await tradeCounterpartySchema(conn)) {
+          // Управление торговлей: контактное лицо принадлежит партнёру; основного контактного лица у контрагента нет.
+          if (makeMain)
+            return fail(
+              "В Управлении торговлей у контрагента нет основного контактного лица: создайте без makeMain. " +
+                "Ничего не создано.",
+            );
+          const partner = await partnerOf(conn, ownerRef);
+          if (!partner)
+            return fail(`Контрагент или партнёр ${ownerRef} не найден в этой базе. Ничего не создано.`);
+          const notes =
+            lastName || firstName
+              ? ["lastName и firstName не записаны: в УТ у контактного лица только ФИО."]
+              : [];
+          return createCore(
+            conn,
+            "Catalog_КонтактныеЛицаПартнеров",
+            clean({
+              Description: name,
+              Owner_Key: partner,
+              ДолжностьПоВизитке: position,
+              ДатаРегистрацииСвязи: await previewDay(conn),
+            }),
+            confirm,
+            notes,
+            () => undefined,
+          );
+        }
         const set = await requireEntity(conn, ["Catalog_КонтактныеЛица"], "Справочник «Контактные лица»");
         const payload = clean({
           Description: name,

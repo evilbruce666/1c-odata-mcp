@@ -11,7 +11,8 @@ import { InputError } from "../errors.js";
  */
 
 export const KI_KINDS = ["Catalog_ВидыКонтактнойИнформации"] as const;
-const BANKS = ["Catalog_Банки"] as const;
+/** Банки: «Банки» Бухгалтерии, «Классификатор банков» Управления торговлей (Code — БИК). */
+const BANKS = ["Catalog_Банки", "Catalog_КлассификаторБанков"] as const;
 const ADD_PROPS = ["ChartOfCharacteristicTypes_ДополнительныеРеквизитыИСведения"] as const;
 
 export interface ContactKind {
@@ -86,7 +87,7 @@ export async function resolveBankByBik(
     3,
   );
   const first = rows[0];
-  if (!first) throw new InputError(`Банк с БИК ${bik} не найден в справочнике «Банки».`);
+  if (!first) throw new InputError(`Банк с БИК ${bik} не найден в справочнике ${set}.`);
   return { ref: String(first["Ref_Key"]), name: String(first["Description"] ?? "") };
 }
 

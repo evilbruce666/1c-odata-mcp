@@ -440,13 +440,15 @@ const TRADE_WRITE: Record<string, TradeWrite> = {
   },
   "write.counterparty.create_counterparty": { applies: () => true, ready: partners },
   "write.counterparty.update_counterparty": { applies: () => true, ready: partners },
+  "write.counterparty.create_bank_account": { applies: () => true, ready: partners },
+  "write.counterparty.create_contact_person": { applies: () => true, ready: partners },
 };
 
 /** Что в торговой базе можно записать: подсказка в отказе. */
 const TRADE_WRITE_HINT =
   "В Управлении торговлей поддержаны установка цен (write.pricing.create_price_setting, затем " +
   `write.document.post_document и write.entity.mark_for_deletion для ${PRICE_DOC}) и контрагенты с партнёрами ` +
-  "(write.counterparty.create_counterparty, write.counterparty.update_counterparty).";
+  "(write.counterparty.create_counterparty, update_counterparty, create_bank_account, create_contact_person).";
 
 /**
  * Запись собирает документы и справочники Бухгалтерии. В базе без регистра бухгалтерии (Управление торговлей, другие

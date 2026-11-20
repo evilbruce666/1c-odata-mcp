@@ -354,6 +354,8 @@ const TRADE_WRITE_TOOLS = new Set([
   "write.pricing.create_price_setting",
   "write.counterparty.create_counterparty",
   "write.counterparty.update_counterparty",
+  "write.counterparty.create_bank_account",
+  "write.counterparty.create_contact_person",
 ]);
 
 describe("запись на снимке схемы УТ 11 отказывает до предпросмотра", () => {

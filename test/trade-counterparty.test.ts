@@ -21,7 +21,12 @@ interface Post {
 }
 
 function setup(
-  o: { schema?: FakeSchema; partners?: Record<string, unknown>[]; rejectCounterparty?: number } = {},
+  o: {
+    schema?: FakeSchema;
+    partners?: Record<string, unknown>[];
+    counterparties?: Record<string, unknown>[];
+    rejectCounterparty?: number;
+  } = {},
 ) {
   const posts: Post[] = [];
   const partners = [...(o.partners ?? [])];
@@ -37,6 +42,8 @@ function setup(
         if (q.base === "Catalog_Партнеры" && !q.params.get("$filter")) return partners;
         // Дублей по ИНН нет.
         if (q.base === "Catalog_Контрагенты" && (q.params.get("$filter") ?? "").includes("ИНН eq")) return [];
+        if (q.base === "Catalog_Контрагенты" && !q.params.get("$filter") && o.counterparties)
+          return o.counterparties;
         return undefined;
       },
     },
@@ -265,4 +272,87 @@ describe("create_counterparty в Управлении торговлей", () =>
       expect(s.fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
     },
   );
+
+  const C = "dddddddd-0000-0000-0000-00000000000d";
+  const bank = { ownerRef: C, accountNumber: "40702810000000000001", bik: "044525225" };
+
+  it("create_bank_account в УТ: счёт контрагента, банк из классификатора; одна запись", async () => {
+    const s = setup();
+    const preview = await s.call(bank, "write.counterparty.create_bank_account");
+    expect(preview.isError, preview.text.slice(0, 300)).toBeFalsy();
+    expect(preview.sc["willCreate"]).toBe("Catalog_БанковскиеСчетаКонтрагентов");
+    expect(preview.sc["payload"]).toMatchObject({
+      Owner: C,
+      Owner_Type: "StandardODATA.Catalog_Контрагенты",
+      НомерСчета: bank.accountNumber,
+    });
+    expect(s.fake.requests.some((q) => q.resource.startsWith("Catalog_КлассификаторБанков"))).toBe(true);
+    const done = await s.call(
+      { ...bank, confirm: true, operationId: preview.sc["operationId"] },
+      "write.counterparty.create_bank_account",
+    );
+    expect(done.isError, done.text.slice(0, 300)).toBeFalsy();
+    expect(s.posts.map((p) => p.set)).toEqual(["Catalog_БанковскиеСчетаКонтрагентов"]);
+    expect(s.fake.violations).toEqual([]);
+  });
+
+  it("create_bank_account в УТ с makeMain — отказ: основного счёта у контрагента УТ нет", async () => {
+    const s = setup();
+    const r = await s.call({ ...bank, makeMain: true }, "write.counterparty.create_bank_account");
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("makeMain");
+    expect(s.posts).toEqual([]);
+  });
+
+  it("create_contact_person в УТ: владелец — партнёр контрагента; дата связи — день предпросмотра", async () => {
+    const s = setup({ counterparties: [{ Ref_Key: C, Партнер_Key: P }] });
+    const args = { ownerRef: C, name: "ZZ-TEST Иванов Иван", position: "Директор" };
+    const preview = await s.call(args, "write.counterparty.create_contact_person");
+    expect(preview.isError, preview.text.slice(0, 300)).toBeFalsy();
+    expect(preview.sc["willCreate"]).toBe("Catalog_КонтактныеЛицаПартнеров");
+    expect(preview.sc["payload"]).toMatchObject({ Owner_Key: P, ДолжностьПоВизитке: "Директор" });
+    const done = await s.call(
+      { ...args, confirm: true, operationId: preview.sc["operationId"] },
+      "write.counterparty.create_contact_person",
+    );
+    expect(done.isError, done.text.slice(0, 300)).toBeFalsy();
+    expect(s.posts.map((p) => p.set)).toEqual(["Catalog_КонтактныеЛицаПартнеров"]);
+    expect(s.posts[0]!.body["ДатаРегистрацииСвязи"]).toBe(
+      (preview.sc["payload"] as Record<string, unknown>)["ДатаРегистрацииСвязи"],
+    );
+    expect(s.fake.violations).toEqual([]);
+  });
+
+  it("create_contact_person в УТ: ссылка на партнёра тоже подходит; неизвестная — отказ; makeMain — отказ", async () => {
+    const s = setup({
+      counterparties: [{ Ref_Key: "eeeeeeee-0000-0000-0000-00000000000e", Партнер_Key: P }],
+      partners: [{ Ref_Key: P, Description: "Партнёр" }],
+    });
+    const CP = "write.counterparty.create_contact_person";
+    const byPartner = await s.call({ ownerRef: P, name: "ZZ-TEST" }, CP);
+    expect(byPartner.isError, byPartner.text.slice(0, 300)).toBeFalsy();
+    expect(byPartner.sc["payload"]).toMatchObject({ Owner_Key: P });
+    const unknown = await s.call({ ownerRef: "ffffffff-0000-0000-0000-00000000000f", name: "ZZ-TEST" }, CP);
+    expect(unknown.isError).toBe(true);
+    expect(unknown.text).toContain("не найден");
+    expect((await s.call({ ownerRef: P, name: "ZZ-TEST", makeMain: true }, CP)).isError).toBe(true);
+    expect(s.posts).toEqual([]);
+  });
+
+  it("create_contact_person в УТ: подтверждение после полуночи совпадает с предпросмотром", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date(2026, 10, 20, 23, 59, 58));
+      const s = setup({ counterparties: [{ Ref_Key: C, Партнер_Key: P }] });
+      const args = { ownerRef: C, name: "ZZ-TEST Петров" };
+      const CP = "write.counterparty.create_contact_person";
+      const preview = await s.call(args, CP);
+      vi.setSystemTime(new Date(2026, 10, 21, 0, 0, 5));
+      const done = await s.call({ ...args, confirm: true, operationId: preview.sc["operationId"] }, CP);
+      expect(done.isError, done.text.slice(0, 300)).toBeFalsy();
+      expect(s.posts[0]!.body["ДатаРегистрацииСвязи"]).toBe("2026-11-20T00:00:00");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
