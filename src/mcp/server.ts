@@ -23,6 +23,7 @@ import { registerWarehouseTools } from "../tools/warehouses.js";
 import { tradeWithoutAccounting, withoutAccounting } from "../odata/configuration.js";
 import { PRICE_DOC, priceMechanisms } from "../odata/pricing.js";
 import { PARTNERS, tradeCounterpartySchema } from "../tools/trade-counterparty.js";
+import { tradeNomenclatureSchema } from "../tools/trade-nomenclature.js";
 import { registerDebtTools } from "../tools/debts.js";
 import { registerMonthCloseTools } from "../tools/month-close.js";
 import { registerCardTools } from "../tools/card.js";
@@ -435,16 +436,24 @@ const TRADE_CATALOGS = new Set([
   "Catalog_ДоговорыКонтрагентов",
   "Catalog_СоглашенияСКлиентами",
   "Catalog_СоглашенияСПоставщиками",
+  "Catalog_Номенклатура",
 ]);
 const prices = async (conn: Connection) => (await priceMechanisms(conn)).length > 0;
 const partners = (conn: Connection) => tradeCounterpartySchema(conn);
+const NOMENCLATURE = "Catalog_Номенклатура";
+const nomenclature = (conn: Connection) => tradeNomenclatureSchema(conn, NOMENCLATURE);
 const TRADE_WRITE: Record<string, TradeWrite> = {
   "write.pricing.create_price_setting": { applies: () => true, ready: prices },
   "write.document.post_document": { applies: (a) => a.entitySet === PRICE_DOC, ready: prices },
   // Пометка — и для справочников, которые в УТ создаются (ошибочно созданного контрагента и партнёра убрать).
   "write.entity.mark_for_deletion": {
     applies: (a) => a.entitySet === PRICE_DOC || TRADE_CATALOGS.has(String(a.entitySet)),
-    ready: (conn, a) => (a.entitySet === PRICE_DOC ? prices(conn) : partners(conn)),
+    ready: (conn, a) =>
+      a.entitySet === PRICE_DOC
+        ? prices(conn)
+        : a.entitySet === NOMENCLATURE
+          ? nomenclature(conn)
+          : partners(conn),
   },
   "write.counterparty.create_counterparty": { applies: () => true, ready: partners },
   "write.counterparty.update_counterparty": { applies: () => true, ready: partners },
@@ -452,6 +461,11 @@ const TRADE_WRITE: Record<string, TradeWrite> = {
   "write.counterparty.create_contact_person": { applies: () => true, ready: partners },
   "write.catalog.create_contract": { applies: () => true, ready: partners },
   "write.catalog.create_agreement": { applies: () => true, ready: partners },
+  "write.catalog.create_nomenclature": { applies: () => true, ready: nomenclature },
+  "write.catalog.update_nomenclature": { applies: () => true, ready: nomenclature },
+  // Папки — только номенклатуры: у контрагентов УТ иерархии нет (решение владельца — отказ).
+  "write.entity.create_folder": { applies: (a) => a.entitySet === NOMENCLATURE, ready: nomenclature },
+  "write.entity.move_to_folder": { applies: (a) => a.entitySet === NOMENCLATURE, ready: nomenclature },
 };
 
 /** Что в торговой базе можно записать: подсказка в отказе. */
@@ -459,7 +473,8 @@ const TRADE_WRITE_HINT =
   "В Управлении торговлей поддержаны установка цен (write.pricing.create_price_setting, затем " +
   `write.document.post_document и write.entity.mark_for_deletion для ${PRICE_DOC}) и контрагенты с партнёрами ` +
   "(write.counterparty.create_counterparty, update_counterparty, create_bank_account, create_contact_person), " +
-  "договоры и соглашения (write.catalog.create_contract, create_agreement).";
+  "договоры и соглашения (write.catalog.create_contract, create_agreement), номенклатура и её папки " +
+  "(create_nomenclature, update_nomenclature, write.entity.create_folder и move_to_folder для Catalog_Номенклатура).";
 
 /**
  * Запись собирает документы и справочники Бухгалтерии. В базе без регистра бухгалтерии (Управление торговлей, другие

@@ -76,7 +76,7 @@ const OVERRIDES: Record<string, Record<string, unknown>> = {
   "read.schema.describe_entity": { entitySet: "Catalog_Контрагенты" },
   "write.document.post_document": { entitySet: "Document_РеализацияТоваровУслуг", ref: id },
   // Справочник, который запись в УТ не создаёт: пометка контрагентов и партнёров в УТ разрешена (TRADE_WRITE).
-  "write.entity.mark_for_deletion": { entitySet: "Catalog_Номенклатура", ref: id },
+  "write.entity.mark_for_deletion": { entitySet: "Catalog_Склады", ref: id },
   "write.entity.update_entity": {
     entitySet: "Catalog_Контрагенты",
     ref: id,
@@ -360,6 +360,8 @@ const TRADE_WRITE_TOOLS = new Set([
   "write.counterparty.create_contact_person",
   "write.catalog.create_contract",
   "write.catalog.create_agreement",
+  "write.catalog.create_nomenclature",
+  "write.catalog.update_nomenclature",
 ]);
 
 describe("запись на снимке схемы УТ 11 отказывает до предпросмотра", () => {

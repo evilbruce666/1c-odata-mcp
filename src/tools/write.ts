@@ -51,6 +51,7 @@ import {
   tradeCounterpartySchema,
 } from "./trade-counterparty.js";
 import { createAgreement, createTradeContract } from "./trade-contracts.js";
+import { createTradeNomenclature, tradeNomenclatureSchema } from "./trade-nomenclature.js";
 
 /** Тип ссылки на номенклатуру в табличной части (полиморфная ссылка 1С). */
 const NOMENCLATURE_TYPE = "StandardODATA.Catalog_Номенклатура";
@@ -2217,15 +2218,41 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .boolean()
           .default(false)
           .describe("true — услуга (Услуга=true, вид «Услуга»), false — товар"),
+        kind: z
+          .string()
+          .optional()
+          .describe(
+            "Управление торговлей, обязательно: вид номенклатуры — название или Ref_Key. От вида зависят тип, " +
+              "серии, характеристики, упаковки; НЕ выбирайте сами — уточните у пользователя.",
+          ),
+        unit: z
+          .string()
+          .optional()
+          .describe(
+            "Управление торговлей: единица измерения — название, код ОКЕИ или Ref_Key (по умолчанию «шт»)",
+          ),
+        vatRate: z
+          .string()
+          .optional()
+          .describe(
+            "Управление торговлей: ставка НДС — название («22%», «Без НДС») или Ref_Key (по умолчанию основная действующая)",
+          ),
         confirm: confirmField,
       }),
       outputSchema: createResultSchema,
     },
-    ({ database, name, fullName, article, folder, isService, confirm }) =>
+    ({ database, name, fullName, article, folder, isService, kind, unit, vatRate, confirm }) =>
       guard("write.catalog.create_nomenclature", async () => {
         const conn = ctx.db(database);
         const set = await resolveSet(conn, CATALOGS.nomenclature, "Номенклатура");
         const parentRef = await folderRefOf(conn, set, folder);
+        if (await tradeNomenclatureSchema(conn, set))
+          return createTradeNomenclature(
+            conn,
+            set,
+            { name, fullName, article, parentRef, isService, kind, unit, vatRate },
+            confirm,
+          );
         const payload = clean({
           Description: name,
           НаименованиеПолное: fullName,

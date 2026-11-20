@@ -256,7 +256,7 @@ describe("create_counterparty в Управлении торговлей", () =>
   });
 
   it.each(["Catalog_Контрагенты", "Catalog_Партнеры"])(
-    "mark_for_deletion в УТ: %s — проходит защиту (предпросмотр); другой справочник — отказ",
+    "mark_for_deletion в УТ: %s — проходит защиту (предпросмотр); склады — отказ",
     async (entitySet) => {
       const s = setup();
       const ref = "cccccccc-0000-0000-0000-00000000000c";
@@ -264,7 +264,7 @@ describe("create_counterparty в Управлении торговлей", () =>
       expect(r.isError, r.text.slice(0, 300)).toBeFalsy();
       expect(r.sc["dryRun"]).toBe(true);
       const other = await s.call(
-        { entitySet: "Catalog_Номенклатура", ref, mark: true },
+        { entitySet: "Catalog_Склады", ref, mark: true },
         "write.entity.mark_for_deletion",
       );
       expect(other.isError).toBe(true);
