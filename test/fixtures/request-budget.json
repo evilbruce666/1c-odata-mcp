@@ -41,6 +41,7 @@
   "read.system.list_organizations": 1,
   "write.accounting.set_contract_settlement_settings": 6,
   "write.accounting.set_settlement_settings": 6,
+  "write.catalog.create_agreement": 0,
   "write.catalog.create_contract": 2,
   "write.catalog.create_nomenclature": 0,
   "write.catalog.update_nomenclature": 2,

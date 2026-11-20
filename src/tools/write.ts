@@ -50,6 +50,7 @@ import {
   previewDay,
   tradeCounterpartySchema,
 } from "./trade-counterparty.js";
+import { createAgreement, createTradeContract } from "./trade-contracts.js";
 
 /** Тип ссылки на номенклатуру в табличной части (полиморфная ссылка 1С). */
 const NOMENCLATURE_TYPE = "StandardODATA.Catalog_Номенклатура";
@@ -135,6 +136,11 @@ async function resolveOrg(
 ): Promise<{ key: string; name: string }> {
   const o = await resolveOrgOrDefault(conn, organization);
   return { key: o.ref, name: o.name };
+}
+
+/** Ref_Key организации (по названию или единственной в базе) — для сборщиков Управления торговлей. */
+export async function resolveOrgRef(conn: Connection, organization: string | undefined): Promise<string> {
+  return (await resolveOrg(conn, organization)).key;
 }
 
 /** Сколько совпадений по части названия читать, чтобы назвать варианты в отказе. */
@@ -261,7 +267,7 @@ async function resolveWarehouse(conn: Connection, rawName: string | undefined): 
  * Резолвит элемент справочника по точному коду или части наименования.
  * Публикацию проверяет (requireEntity). Бросает Error, если не найдено.
  */
-async function resolveCatalogItem(
+export async function resolveCatalogItem(
   conn: Connection,
   candidates: readonly string[],
   label: string,
@@ -2267,6 +2273,12 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .string()
           .optional()
           .describe("Должность руководителя контрагента (напр. «Генеральный директор»)"),
+        settlementOrder: z
+          .enum(["contracts", "invoices", "orders"])
+          .optional()
+          .describe(
+            "Только Управление торговлей: порядок расчётов — по договорам (по умолчанию), по накладным, по заказам.",
+          ),
         confirm: confirmField,
       }),
       outputSchema: createResultSchema,
@@ -2283,11 +2295,33 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       priceType,
       headName,
       headPosition,
+      settlementOrder,
       confirm,
     }) =>
       guard("write.catalog.create_contract", async () => {
         const conn = ctx.db(database);
         const set = await resolveSet(conn, CATALOGS.contracts, "Договоры контрагентов");
+        if (await tradeCounterpartySchema(conn))
+          return createTradeContract(
+            conn,
+            set,
+            {
+              organization,
+              counterpartyRef,
+              kind,
+              number,
+              date,
+              name,
+              currency,
+              settlementOrder,
+              ignored: [
+                ...(priceType ? ["priceType"] : []),
+                ...(headName ? ["headName"] : []),
+                ...(headPosition ? ["headPosition"] : []),
+              ],
+            },
+            confirm,
+          );
         const org = await resolveOrg(conn, organization);
 
         let cur: { ref: string; code?: string } | undefined;
@@ -2321,6 +2355,46 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         });
         return createOrPreview(conn, set, payload, confirm);
       }),
+  );
+
+  server.registerTool(
+    "write.catalog.create_agreement",
+    {
+      title: "Создать соглашение (УТ)",
+      description:
+        "Соглашение с клиентом или поставщиком — условия продаж и закупок в Управлении торговлей, КА и ERP (в " +
+        "Бухгалтерии соглашений нет). Партнёр берётся из контрагента. Сторону (side) НЕ выбирайте сами — уточните у " +
+        "пользователя. По умолчанию предпросмотр (dry-run); создание — при confirm=true.",
+      inputSchema: z.object({
+        database: databaseField,
+        organization: organizationField,
+        side: z
+          .enum(["client", "supplier"])
+          .describe("С клиентом или с поставщиком — спросить у пользователя"),
+        counterpartyRef: z.string().trim().regex(GUID_RE, "Ref_Key (GUID)").describe("Ref_Key контрагента"),
+        name: z.string().min(1).describe("Наименование соглашения"),
+        number: z.string().optional().describe("Номер (необязательно)"),
+        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию — день предпросмотра)"),
+        currency: z.string().optional().describe("Валюта — код или название (по умолчанию рубль)"),
+        priceKindRef: z
+          .string()
+          .trim()
+          .regex(GUID_RE, "Ref_Key (GUID)")
+          .optional()
+          .describe("Только с клиентом: Ref_Key вида цен продажи (цены в документах — по нему)"),
+        pricesIncludeVat: z.boolean().optional().describe("Цена включает НДС (по умолчанию нет)"),
+        useContracts: z
+          .boolean()
+          .optional()
+          .describe("Расчёты по договорам контрагентов (по умолчанию да — так почти у всех соглашений)"),
+        confirm: confirmField,
+      }),
+      outputSchema: createResultSchema,
+    },
+    (args) =>
+      guard("write.catalog.create_agreement", async () =>
+        createAgreement(ctx.db(args.database), args, args.confirm),
+      ),
   );
 
   server.registerTool(

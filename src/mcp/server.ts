@@ -427,7 +427,15 @@ interface TradeWrite {
   ready: (conn: Connection, args: Record<string, unknown>) => Promise<boolean>;
 }
 /** Справочники, которые запись в УТ создаёт. */
-const TRADE_CATALOGS = new Set(["Catalog_Контрагенты", PARTNERS]);
+const TRADE_CATALOGS = new Set([
+  "Catalog_Контрагенты",
+  PARTNERS,
+  "Catalog_БанковскиеСчетаКонтрагентов",
+  "Catalog_КонтактныеЛицаПартнеров",
+  "Catalog_ДоговорыКонтрагентов",
+  "Catalog_СоглашенияСКлиентами",
+  "Catalog_СоглашенияСПоставщиками",
+]);
 const prices = async (conn: Connection) => (await priceMechanisms(conn)).length > 0;
 const partners = (conn: Connection) => tradeCounterpartySchema(conn);
 const TRADE_WRITE: Record<string, TradeWrite> = {
@@ -442,13 +450,16 @@ const TRADE_WRITE: Record<string, TradeWrite> = {
   "write.counterparty.update_counterparty": { applies: () => true, ready: partners },
   "write.counterparty.create_bank_account": { applies: () => true, ready: partners },
   "write.counterparty.create_contact_person": { applies: () => true, ready: partners },
+  "write.catalog.create_contract": { applies: () => true, ready: partners },
+  "write.catalog.create_agreement": { applies: () => true, ready: partners },
 };
 
 /** Что в торговой базе можно записать: подсказка в отказе. */
 const TRADE_WRITE_HINT =
   "В Управлении торговлей поддержаны установка цен (write.pricing.create_price_setting, затем " +
   `write.document.post_document и write.entity.mark_for_deletion для ${PRICE_DOC}) и контрагенты с партнёрами ` +
-  "(write.counterparty.create_counterparty, update_counterparty, create_bank_account, create_contact_person).";
+  "(write.counterparty.create_counterparty, update_counterparty, create_bank_account, create_contact_person), " +
+  "договоры и соглашения (write.catalog.create_contract, create_agreement).";
 
 /**
  * Запись собирает документы и справочники Бухгалтерии. В базе без регистра бухгалтерии (Управление торговлей, другие

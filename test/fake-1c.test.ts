@@ -186,6 +186,8 @@ const MAX_RESPONSE_CHARS = 50_000;
 const EXPECTED_ERRORS: Record<string, string> = {
   // В синтетике сумма документа 0 — выравнивать не по чему; схема чтения документа проверяется.
   "write.document.align_bank_payment_amounts": "Сумма документа не заполнена",
+  // Соглашения есть только в УТ, КА и ERP: на снимке Бухгалтерии — отказ с объяснением.
+  "write.catalog.create_agreement": "соглашения есть в Управлении торговлей",
 };
 
 afterEach(() => {
@@ -356,6 +358,8 @@ const TRADE_WRITE_TOOLS = new Set([
   "write.counterparty.update_counterparty",
   "write.counterparty.create_bank_account",
   "write.counterparty.create_contact_person",
+  "write.catalog.create_contract",
+  "write.catalog.create_agreement",
 ]);
 
 describe("запись на снимке схемы УТ 11 отказывает до предпросмотра", () => {
