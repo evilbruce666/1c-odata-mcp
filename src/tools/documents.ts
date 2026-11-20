@@ -52,6 +52,12 @@ type Kind = keyof typeof KINDS;
 const KIND_NAMES = Object.keys(KINDS) as [Kind, ...Kind[]];
 /** Виды только по явному kind: поиск по всем видам без них стоит прежнее число запросов (норма держится тестом). */
 const ONLY_EXPLICIT: ReadonlySet<Kind> = new Set<Kind>(["prices", "orders", "payment_requests"]);
+/** Документы Управления торговлей внутри общих видов — тоже только по явному kind (та же норма запросов). */
+const ONLY_EXPLICIT_NAMES: ReadonlySet<string> = new Set([
+  "Document_ОприходованиеИзлишковТоваров",
+  "Document_СписаниеНедостачТоваров",
+  "Document_ПересчетТоваров",
+]);
 
 function toSummary(r: ODataEntity, set: string): DocumentSummary {
   const incoming = typeof r[INCOMING_NUMBER] === "string" ? r[INCOMING_NUMBER].trim() : "";
@@ -364,7 +370,9 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
           : ((Object.entries(KINDS) as Array<[Kind, readonly (keyof typeof DOCUMENTS)[]]>)
               .filter(([k]) => !ONLY_EXPLICIT.has(k))
               .flatMap(([, v]) => v) as Array<keyof typeof DOCUMENTS>);
-        const sets = [...new Set(keys.map((k) => resolveEntity(DOCUMENTS[k], available)))].filter(
+        const names = (k: keyof typeof DOCUMENTS) =>
+          kind ? DOCUMENTS[k] : DOCUMENTS[k].filter((n) => !ONLY_EXPLICIT_NAMES.has(n));
+        const sets = [...new Set(keys.map((k) => resolveEntity(names(k), available)))].filter(
           (s): s is string => !!s,
         );
         if (sets.length === 0)

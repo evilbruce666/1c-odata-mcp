@@ -235,4 +235,12 @@ describe("запись берёт только документы Бухгалт
       expect(readFileSync(file, "utf8"), file).not.toMatch(/(?<![A-Z_])DOCUMENTS\./);
     }
   });
+  // Ревью: проверка выше верна по построению и не ловит забытое имя УТ в TRADE_DOCUMENT_NAMES — без него в КА/ERP
+  // create_surplus/writeoff/inventory предлагали документ УТ с полями Бухгалтерии. Здесь — явные списки.
+  it("складская запись — только документы Бухгалтерии", async () => {
+    const { WRITE_DOCUMENTS } = await import("../src/config/mapping.js");
+    expect(WRITE_DOCUMENTS.surplus).toEqual(["Document_ОприходованиеТоваров"]);
+    expect(WRITE_DOCUMENTS.writeoff).toEqual(["Document_СписаниеТоваров"]);
+    expect(WRITE_DOCUMENTS.inventory).toEqual(["Document_ИнвентаризацияТоваровНаСкладе"]);
+  });
 });

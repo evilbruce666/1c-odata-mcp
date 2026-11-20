@@ -2071,7 +2071,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const guid = ref.replace(/[{}']/g, "");
         const path = `${entitySet}(guid'${guid}')?$format=json`;
         // Проведённый документ цен с пометкой продолжал бы действовать: его записи регистра цен остаются.
-        // Только для документа цен Управления торговлей: в Бухгалтерии документ с тем же именем устроен иначе (ревью).
+        // Только там, где опубликована схема цен (УТ или Бухгалтерия): без регистра цен проверять нечего.
         if (mark && entitySet === PRICE_DOC && (await priceMechanisms(conn)).length) {
           const doc = await conn.client.getEntity<ODataEntity>(
             `${entitySet}(guid'${guid}')?$format=json&$select=Posted`,
