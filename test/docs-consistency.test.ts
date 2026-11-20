@@ -2,11 +2,12 @@ import { bundleManifest } from "../src/mcp/bundle-manifest.js";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { parseConfig } from "../src/config/env.js";
 import { ServerContext } from "../src/context.js";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, normalize } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createServer } from "../src/mcp/server.js";
 import { PROMPTS, renderPrompt } from "../src/mcp/prompts.js";
+import { renderToolsReference } from "../src/mcp/tools-reference.js";
 
 /**
  * Тексты, которые при релизе расходились с кодом: число инструментов в README / package.json /
@@ -144,8 +145,13 @@ describe("документация совпадает с кодом", () => {
     expect(tail.match(/^#{2,} .*/gm), "подразделы после «Лицензии»").toEqual(["## Лицензия"]);
   });
 
-  it("каждый инструмент упомянут в README полным именем", () => {
-    expect(names.filter((n) => !readme.includes(`\`${n}\``))).toEqual([]);
+  it("каждый инструмент упомянут в обзоре docs/TOOLS.md полным именем", () => {
+    const tools = read("docs/TOOLS.md");
+    expect(names.filter((n) => !tools.includes(`\`${n}\``))).toEqual([]);
+  });
+
+  it("справочник параметров docs/TOOLS-REFERENCE.md собран из manifest.json (npm run manifest)", () => {
+    expect(read("docs/TOOLS-REFERENCE.md")).toBe(renderToolsReference(manifest.tools as never));
   });
 
   it("сценарии (prompts): manifest.json совпадает с кодом, каждый описан в README", () => {
@@ -200,6 +206,7 @@ const anchorsOf = (md: string) =>
 describe("ссылки между документами", () => {
   const files = [
     "README.md",
+    "README.en.md",
     "CONTRIBUTING.md",
     "SECURITY.md",
     ...readdirSync("docs")
@@ -219,5 +226,22 @@ describe("ссылки между документами", () => {
       }
     }
     expect(broken).toEqual([]);
+  });
+
+  it("каждая относительная ссылка ведёт на существующий файл", () => {
+    const missing: string[] = [];
+    for (const file of files) {
+      const text = read(file).replace(/```[\s\S]*?```/g, "");
+      for (const [, target] of text.matchAll(/\]\(([^)#\s]+)(?:#[^)\s]*)?\)/g)) {
+        if (/^(https?:|mailto:)/.test(target!)) continue;
+        if (!existsSync(normalize(join(dirname(file), decodeURIComponent(target!)))))
+          missing.push(`${file} → ${target}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  it("README короткий: подробности — в docs/, README — вход и карта", () => {
+    expect(read("README.md").split("\n").length).toBeLessThanOrEqual(250);
   });
 });

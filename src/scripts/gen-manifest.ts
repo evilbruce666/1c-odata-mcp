@@ -3,12 +3,14 @@
  * MCP-клиент (имя, заголовок, описание, inputSchema, outputSchema, аннотации), — и
  * синхронизирует версию с package.json. Реальная база не нужна: сервер поднимается с
  * фиктивным подключением в режиме только-чтения, tools/list к 1С не обращается.
+ * Заодно собирает справочник параметров docs/TOOLS-REFERENCE.md.
  * Запуск: npm run manifest (после него — npm test: тест согласованности сверит тексты).
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { Client } from "@modelcontextprotocol/client";
 import { PROMPTS } from "../mcp/prompts.js";
+import { renderToolsReference } from "../mcp/tools-reference.js";
 
 async function main(): Promise<void> {
   const env: Record<string, string> = {};
@@ -47,6 +49,7 @@ async function main(): Promise<void> {
   }));
   manifest["prompts_generated"] = false;
   writeFileSync("manifest.json", `${JSON.stringify(manifest, null, 2)}\n`);
+  writeFileSync("docs/TOOLS-REFERENCE.md", renderToolsReference(manifest["tools"] as never));
   process.stdout.write(
     `manifest.json: ${tools.length} инструментов, ${PROMPTS.length} сценария, версия ${pkg.version}\n`,
   );
