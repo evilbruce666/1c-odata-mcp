@@ -8,6 +8,7 @@ import { operationKind as configuredOperationKind, type AccountDefault } from ".
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
+import { writableHint } from "../config/env.js";
 import { ok, fail, guard, databaseField, organizationField } from "./_shared.js";
 import { CATALOGS, WRITE_DOCUMENTS, resolveEntity } from "../config/mapping.js";
 import { resolveOrgOrDefault } from "../odata/orgs.js";
@@ -1565,7 +1566,7 @@ export async function createCore(
       ...extra,
       note: conn.cfg.writable
         ? "Предпросмотр. Чтобы создать запись, повторите вызов с confirm=true."
-        : `Предпросмотр. ВНИМАНИЕ: запись в базу "${conn.cfg.name}" сейчас запрещена — включите ODATA_DB_${conn.cfg.name.toUpperCase()}_WRITABLE=true (и READ_ONLY=false).`,
+        : `Предпросмотр. ВНИМАНИЕ: запись в базу "${conn.cfg.name}" сейчас запрещена — включите ${writableHint(conn.cfg)} (и READ_ONLY=false).`,
     });
   }
   let created: ODataEntity;
@@ -1735,7 +1736,7 @@ async function patchOrPreview(
       ...extra,
       note: conn.cfg.writable
         ? "Предпросмотр изменения. Чтобы применить, повторите с confirm=true."
-        : `Предпросмотр. ВНИМАНИЕ: запись в базу "${conn.cfg.name}" запрещена — включите ODATA_DB_${conn.cfg.name.toUpperCase()}_WRITABLE=true (и READ_ONLY=false).`,
+        : `Предпросмотр. ВНИМАНИЕ: запись в базу "${conn.cfg.name}" запрещена — включите ${writableHint(conn.cfg)} (и READ_ONLY=false).`,
     });
   }
   let updated: ODataEntity;

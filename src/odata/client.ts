@@ -1,4 +1,4 @@
-import type { Behavior, ConnectionConfig } from "../config/env.js";
+import { writableHint, type Behavior, type ConnectionConfig } from "../config/env.js";
 import { logger } from "../logger.js";
 import { ODataError, fromHttpStatus } from "./errors.js";
 import type { ODataCollection, ODataEntity } from "../types/odata.js";
@@ -105,7 +105,7 @@ export class ODataClient {
     if (!this.conn.writable) {
       throw new ODataError({
         kind: "bad_request",
-        message: `Запись в базу "${this.conn.name}" запрещена: задайте ODATA_DB_${this.conn.name.toUpperCase()}_WRITABLE=true в .env`,
+        message: `Запись в базу "${this.conn.name}" запрещена: задайте ${writableHint(this.conn)} (в .env или в блоке env конфига MCP-клиента)`,
       });
     }
   }

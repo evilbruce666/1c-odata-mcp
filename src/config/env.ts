@@ -24,6 +24,8 @@ export interface ConnectionConfig {
   password: string;
   /** Разрешена ли запись в эту базу (POST/PATCH). По умолчанию false. */
   writable: boolean;
+  /** Переменная, которой включается запись в эту базу: ODATA_WRITABLE (одна база) или ODATA_DB_<ИМЯ>_WRITABLE. */
+  writableEnv?: string;
   accounting?: AccountingConfig;
   /** Явное значение только для этой базы; иначе используется общая настройка. */
   regulatedCurrencyCode?: string;
@@ -162,6 +164,7 @@ const ConnSchema = z.object({
   username: z.string().min(1, "обязателен"),
   password: z.string().min(1, "обязателен"),
   writable: z.preprocess((v) => v === true || v === "true", z.boolean()).default(false),
+  writableEnv: z.string().optional(),
 });
 
 type Env = Record<string, string | undefined>;
@@ -182,6 +185,7 @@ function collectRawConnections(env: Env): Array<Record<string, unknown>> {
       username: env[`ODATA_DB_${tag}_USERNAME`],
       password: env[`ODATA_DB_${tag}_PASSWORD`],
       writable: env[`ODATA_DB_${tag}_WRITABLE`],
+      writableEnv: `ODATA_DB_${tag}_WRITABLE`,
       regulatedCurrencyCode: env[`ODATA_DB_${tag}_REGULATED_CURRENCY_CODE`],
       accounting: nonblank(env[`ODATA_DB_${tag}_ACCOUNTING_CONFIG`]) ?? nonblank(env.ODATA_ACCOUNTING_CONFIG),
     });
@@ -196,6 +200,7 @@ function collectRawConnections(env: Env): Array<Record<string, unknown>> {
       username: env.ODATA_USERNAME,
       password: env.ODATA_PASSWORD,
       writable: env.ODATA_WRITABLE,
+      writableEnv: "ODATA_WRITABLE",
       accounting: nonblank(env.ODATA_ACCOUNTING_CONFIG),
     });
   }
@@ -364,4 +369,9 @@ export function parseConfig(env: Env): RuntimeConfig {
       ),
     },
   };
+}
+
+/** Как включить запись в базу — для подсказок в отказах и предпросмотре (ревью документации: одна база — ODATA_WRITABLE). */
+export function writableHint(cfg: Pick<ConnectionConfig, "name" | "writableEnv">): string {
+  return `${cfg.writableEnv ?? `ODATA_DB_${cfg.name.toUpperCase()}_WRITABLE`}=true`;
 }

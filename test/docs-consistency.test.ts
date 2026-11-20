@@ -137,6 +137,9 @@ describe("документация совпадает с кодом", () => {
     expect(readme).toContain(`У всех ${names.length} ${genitive}`);
     expect(pkg.description).toContain(`${names.length} tools`);
     expect(manifest.long_description).toContain(`${names.length} ${toolsWord(names.length)}`);
+    // Объём описаний для профиля инструментов — там же, где число: CONNECTING и .env.example (аудит: отставали).
+    expect(read("docs/CONNECTING.md")).toContain(`всех ${names.length} ${genitive}`);
+    expect(read(".env.example")).toContain(`всех ${names.length} —`);
   });
 
   it("README заканчивается «Лицензией»: новые разделы — в тело README или в docs/", () => {
@@ -239,6 +242,21 @@ describe("ссылки между документами", () => {
       }
     }
     expect(missing).toEqual([]);
+  });
+
+  it("каждая переменная окружения, которую читает код, описана в .env.example (справочник настроек)", () => {
+    const env = read(".env.example");
+    const sources = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? sources(join(dir, e.name)) : e.name.endsWith(".ts") ? [join(dir, e.name)] : [],
+      );
+    const used = new Set<string>();
+    for (const file of sources("src").filter((f) => !f.includes("/scripts/")))
+      for (const [, name] of read(file).matchAll(
+        /(?:env\.|["'`])((?:ODATA|MCP|TOOLS|LOG)_[A-Z0-9_]+|READ_ONLY)\b/g,
+      ))
+        used.add(name!);
+    expect([...used].filter((n) => !env.includes(n)).sort()).toEqual([]);
   });
 
   it("README короткий: подробности — в docs/, README — вход и карта", () => {

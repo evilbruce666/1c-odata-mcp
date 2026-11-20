@@ -17,7 +17,7 @@ standard OData interface. Ask your 1C database in plain language; nothing is ins
 - **Other and customised configurations** — documents, catalogs and the schema.
 
 **Safety.** Read-only by default. Writing requires two independent switches (`READ_ONLY=false` and a per-database
-`ODATA_DB_<NAME>_WRITABLE=true`), always shows a preview first and needs a confirmation with the same `operationId`;
+`ODATA_WRITABLE=true` for a single database or `ODATA_DB_<NAME>_WRITABLE=true` for each of several), always shows a preview first and needs a confirmation with the same `operationId`;
 a retry after a network error does not create a duplicate. No hard deletes — only the 1C deletion mark. The server is a
 local process that talks only to your 1C; with a local model your data never leaves your network.
 
