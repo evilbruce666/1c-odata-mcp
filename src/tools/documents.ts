@@ -44,9 +44,14 @@ const KINDS = {
   cash: ["cashIn", "cashOut", "cardPayment"],
   vat_invoices: ["issuedInvoice", "receivedInvoice"],
   warehouse: ["returnFromCustomer", "returnToSupplier", "transfer", "surplus", "writeoff", "inventory"],
+  prices: ["priceSetting"],
+  orders: ["customerOrder", "supplierOrder"],
+  payment_requests: ["paymentRequest"],
 } as const satisfies Record<string, ReadonlyArray<keyof typeof DOCUMENTS>>;
 type Kind = keyof typeof KINDS;
 const KIND_NAMES = Object.keys(KINDS) as [Kind, ...Kind[]];
+/** Виды только по явному kind: поиск по всем видам без них стоит прежнее число запросов (норма держится тестом). */
+const ONLY_EXPLICIT: ReadonlySet<Kind> = new Set<Kind>(["prices", "orders", "payment_requests"]);
 
 function toSummary(r: ODataEntity, set: string): DocumentSummary {
   const incoming = typeof r[INCOMING_NUMBER] === "string" ? r[INCOMING_NUMBER].trim() : "";
@@ -277,7 +282,9 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
           .describe(
             "Вид документа: sales — реализации и акты, customer_invoices — счета покупателям, purchases — " +
               "поступления, supplier_invoices — счета поставщиков, bank — банк (поступления, списания, " +
-              "платёжки), cash — касса и оплаты платёжной картой (ПКО, РКО, ОплатаПлатежнойКартой), vat_invoices — счета-фактуры, warehouse — складские",
+              "платёжки), cash — касса и оплаты платёжной картой (ПКО, РКО, ОплатаПлатежнойКартой), vat_invoices — счета-фактуры, warehouse — складские (в УТ — и оприходование излишков, " +
+              "списание недостач, пересчёт), prices — установки цен, orders — заказы клиентов и поставщикам, " +
+              "payment_requests — заявки на расходование денег",
           ),
         number: z.string().optional().describe("Номер документа: «33», «№ 0000-000033», входящий «ГК-22537»"),
         from: z.string().optional().describe("Дата начала (YYYY-MM-DD)"),
@@ -352,7 +359,11 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
           });
         }
 
-        const keys = kind ? KINDS[kind] : (Object.values(KINDS).flat() as Array<keyof typeof DOCUMENTS>);
+        const keys = kind
+          ? KINDS[kind]
+          : ((Object.entries(KINDS) as Array<[Kind, readonly (keyof typeof DOCUMENTS)[]]>)
+              .filter(([k]) => !ONLY_EXPLICIT.has(k))
+              .flatMap(([, v]) => v) as Array<keyof typeof DOCUMENTS>);
         const sets = [...new Set(keys.map((k) => resolveEntity(DOCUMENTS[k], available)))].filter(
           (s): s is string => !!s,
         );

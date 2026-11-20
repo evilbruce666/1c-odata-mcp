@@ -52,9 +52,14 @@ export const DOCUMENTS = {
   returnFromCustomer: ["Document_ВозвратТоваровОтПокупателя", "Document_ВозвратТоваровОтКлиента"],
   returnToSupplier: ["Document_ВозвратТоваровПоставщику"],
   transfer: ["Document_ПеремещениеТоваров"],
-  surplus: ["Document_ОприходованиеТоваров"],
-  writeoff: ["Document_СписаниеТоваров"],
-  inventory: ["Document_ИнвентаризацияТоваровНаСкладе"],
+  surplus: ["Document_ОприходованиеТоваров", "Document_ОприходованиеИзлишковТоваров"],
+  writeoff: ["Document_СписаниеТоваров", "Document_СписаниеНедостачТоваров"],
+  inventory: ["Document_ИнвентаризацияТоваровНаСкладе", "Document_ПересчетТоваров"],
+  // Цены, заказы и заявки на расходование — для поиска; запись цен — свой инструмент (write.pricing).
+  priceSetting: ["Document_УстановкаЦенНоменклатуры"],
+  customerOrder: ["Document_ЗаказКлиента", "Document_ЗаказПокупателя"],
+  supplierOrder: ["Document_ЗаказПоставщику"],
+  paymentRequest: ["Document_ЗаявкаНаРасходованиеДенежныхСредств"],
 } as const;
 
 /**
@@ -68,6 +73,9 @@ export const TRADE_DOCUMENT_NAMES: ReadonlySet<string> = new Set([
   "Document_ПоступлениеБезналичныхДенежныхСредств",
   "Document_СписаниеБезналичныхДенежныхСредств",
   "Document_ВозвратТоваровОтКлиента",
+  "Document_ОприходованиеИзлишковТоваров",
+  "Document_СписаниеНедостачТоваров",
+  "Document_ПересчетТоваров",
 ]);
 
 export const WRITE_DOCUMENTS = Object.fromEntries(

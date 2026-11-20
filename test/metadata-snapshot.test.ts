@@ -22,8 +22,17 @@ const operationKinds = new Set(
   [...bp30Enums()].filter(([name]) => name.startsWith("ВидыОпераций")).flatMap(([, v]) => [...v]),
 );
 
-/** Не опубликованы в базе, с которой снят снимок; инструменты без них отвечают понятной ошибкой. */
-const NOT_IN_SNAPSHOT = new Set(["stock", "responsiblePersons"]);
+/**
+ * Не опубликованы в базе, с которой снят снимок; инструменты без них отвечают понятной ошибкой. Заказы клиентов и
+ * поставщикам, заявки на расходование — документы Управления торговлей (в Бухгалтерии их нет).
+ */
+const NOT_IN_SNAPSHOT = new Set([
+  "stock",
+  "responsiblePersons",
+  "customerOrder",
+  "supplierOrder",
+  "paymentRequest",
+]);
 
 describe("снимок схемы БП 3.0", () => {
   it("каждый объект из mapping.ts есть в снимке (хотя бы один из вариантов имени)", () => {

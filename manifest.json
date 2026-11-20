@@ -977,7 +977,7 @@
             "type": "string"
           },
           "kind": {
-            "description": "Вид документа: sales — реализации и акты, customer_invoices — счета покупателям, purchases — поступления, supplier_invoices — счета поставщиков, bank — банк (поступления, списания, платёжки), cash — касса и оплаты платёжной картой (ПКО, РКО, ОплатаПлатежнойКартой), vat_invoices — счета-фактуры, warehouse — складские",
+            "description": "Вид документа: sales — реализации и акты, customer_invoices — счета покупателям, purchases — поступления, supplier_invoices — счета поставщиков, bank — банк (поступления, списания, платёжки), cash — касса и оплаты платёжной картой (ПКО, РКО, ОплатаПлатежнойКартой), vat_invoices — счета-фактуры, warehouse — складские (в УТ — и оприходование излишков, списание недостач, пересчёт), prices — установки цен, orders — заказы клиентов и поставщикам, payment_requests — заявки на расходование денег",
             "type": "string",
             "enum": [
               "sales",
@@ -987,7 +987,10 @@
               "bank",
               "cash",
               "vat_invoices",
-              "warehouse"
+              "warehouse",
+              "prices",
+              "orders",
+              "payment_requests"
             ]
           },
           "number": {
