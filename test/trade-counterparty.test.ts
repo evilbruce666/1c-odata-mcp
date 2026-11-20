@@ -7,9 +7,9 @@ import { createServer } from "../src/mcp/server.js";
 import { fake1C, type FakeQuery, type FakeSchema } from "./helpers/fake-1c.js";
 
 /**
- * Контрагент Управления торговлей = партнёр + контрагент. Критерий: подтверждение создаёт ровно то, что показал
- * предпросмотр (партнёр, затем контрагент с его Ref_Key); повтор не создаёт второго; если 1С отказала контрагенту
- * после партнёра, повтор с partnerRef не создаёт второго партнёра. Значения перечислений — с живой УТ 11.5.
+ * Контрагент Управления торговлей принадлежит партнёру: два инструмента — create_partner, затем create_counterparty
+ * с partnerRef; каждый вызов — один объект своей операцией журнала. Критерий: подтверждение пишет ровно то, что показал
+ * предпросмотр; повтор с тем же operationId не пишет ничего. Значения перечислений — с живой УТ 11.5.
  */
 
 const P = "aaaaaaaa-0000-0000-0000-00000000000a";
@@ -25,9 +25,6 @@ function setup(
     schema?: FakeSchema;
     partners?: Record<string, unknown>[];
     counterparties?: Record<string, unknown>[];
-    rejectCounterparty?: number;
-    /** Ответ на POST партнёра теряется: "after" — 1С записала, "before" — запрос не дошёл. */
-    losePartner?: "after" | "before";
   } = {},
 ) {
   const posts: Post[] = [];
@@ -50,8 +47,6 @@ function setup(
       },
     },
   );
-  let rejects = o.rejectCounterparty ?? 0;
-  let lose = o.losePartner;
   const inner = globalThis.fetch;
   vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
     const url = decodeURIComponent(
@@ -59,26 +54,7 @@ function setup(
     );
     if ((init?.method ?? "GET").toUpperCase() === "POST") {
       const set = /odata\/standard\.odata\/([^?(]+)/.exec(url)?.[1] ?? "";
-      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      if (set === "Catalog_Партнеры" && lose) {
-        const mode = lose;
-        lose = undefined;
-        if (mode === "after") {
-          posts.push({ set, body });
-          partners.push({ Ref_Key: body["Ref_Key"], Description: body["Description"], DeletionMark: false });
-        }
-        throw new TypeError("fetch failed");
-      }
-      posts.push({ set, body });
-      if (set === "Catalog_Контрагенты" && rejects > 0) {
-        rejects--;
-        return new Response(
-          JSON.stringify({
-            "odata.error": { code: "-1", message: { lang: "ru", value: "Synthetic rejection" } },
-          }),
-          { status: 400, headers: { "content-type": "application/json" } },
-        );
-      }
+      posts.push({ set, body: JSON.parse(String(init?.body)) as Record<string, unknown> });
     }
     return inner(input, init);
   });
@@ -97,90 +73,39 @@ function setup(
   return { call, posts, fake, partners };
 }
 
-const base = { name: "ZZ-TEST Ромашка", inn: "7700000001", relations: ["client"] };
-
-async function confirmed(s: ReturnType<typeof setup>, args: Record<string, unknown>) {
-  const preview = await s.call(args);
-  expect(preview.isError, preview.text.slice(0, 400)).toBeFalsy();
-  const done = await s.call({ ...args, confirm: true, operationId: preview.sc["operationId"] });
-  return { preview, done };
-}
+const base = { name: "ZZ-TEST Ромашка", inn: "7700000001", partnerRef: P };
+const PARTNER = "write.counterparty.create_partner";
+const withPartner = () => ({
+  partners: [{ Ref_Key: P, Description: "ZZ-TEST партнёр", DeletionMark: false }],
+});
 
 describe("create_counterparty в Управлении торговлей", () => {
-  it("предпросмотр: партнёр и контрагент, Партнер_Key — Ref_Key будущего партнёра; записей нет", async () => {
-    const s = setup();
-    const r = await s.call(base);
-    expect(r.isError, r.text.slice(0, 400)).toBeFalsy();
-    const partner = r.sc["partner"] as { willCreate: string; ref: string; payload: Record<string, unknown> };
-    expect(partner.willCreate).toBe("Catalog_Партнеры");
-    expect(partner.payload).toMatchObject({
-      Description: base.name,
-      ЮрФизЛицо: "Компания",
-      Клиент: true,
-      Поставщик: false,
-      ПрочиеОтношения: false,
-    });
-    expect(String(partner.payload["ДатаРегистрации"])).toMatch(/^\d{4}-\d\d-\d\dT00:00:00$/);
-    expect(partner.ref).toMatch(/^[0-9a-f-]{36}$/);
-    expect(partner.ref).not.toBe("00000000-0000-0000-0000-000000000000");
-    expect(r.sc["payload"]).toMatchObject({
-      Партнер_Key: partner.ref,
+  it("контрагент к партнёру: одна запись, тело — как в предпросмотре; повтор с тем же operationId — ни одной", async () => {
+    const s = setup(withPartner());
+    const preview = await s.call(base);
+    expect(preview.isError, preview.text.slice(0, 400)).toBeFalsy();
+    expect(preview.sc["payload"]).toMatchObject({
+      Партнер_Key: P,
       ЮрФизЛицо: "ЮрЛицо",
       ЮридическоеФизическоеЛицо: "ЮридическоеЛицо",
       ИНН: base.inn,
     });
-    expect(s.posts).toEqual([]);
-    expect(s.fake.violations).toEqual([]);
-  });
-
-  it("подтверждение: две записи — партнёр, затем контрагент с его Ref_Key; совпадают с предпросмотром", async () => {
-    const s = setup();
-    const { preview, done } = await confirmed(s, base);
-    expect(done.isError, done.text.slice(0, 400)).toBeFalsy();
-    expect(s.posts.map((p) => p.set)).toEqual(["Catalog_Партнеры", "Catalog_Контрагенты"]);
-    const partner = preview.sc["partner"] as { ref: string; payload: Record<string, unknown> };
-    expect(s.posts[0]!.body).toMatchObject({ Ref_Key: partner.ref, ...partner.payload });
-    expect(s.posts[1]!.body).toMatchObject({ Партнер_Key: partner.ref });
-    expect(done.sc).toMatchObject({ created: true, partnerRef: partner.ref, partnerCreated: true });
-    expect(s.fake.violations).toEqual([]);
-  });
-
-  it("повтор подтверждения с тем же operationId — ни одной новой записи", async () => {
-    const s = setup();
-    const preview = await s.call(base);
     const args = { ...base, confirm: true, operationId: preview.sc["operationId"] };
-    const first = await s.call(args);
-    const again = await s.call(args);
-    expect(first.isError, first.text).toBeFalsy();
-    expect(again.sc).toMatchObject({ replayed: true, ref: first.sc["ref"] });
-    expect(s.posts).toHaveLength(2);
-  });
-
-  it("1С отказала контрагенту после партнёра: ссылка на партнёра; повтор с partnerRef — без второго партнёра", async () => {
-    const s = setup({ rejectCounterparty: 1 });
-    const { done } = await confirmed(s, base);
-    expect(done.isError).toBe(true);
-    const partnerRef = /partnerRef=([0-9a-f-]{36})/.exec(done.text)?.[1];
-    expect(partnerRef, done.text).toBeTruthy();
-    // Партнёр теперь есть в 1С.
-    s.partners.push({ Ref_Key: partnerRef, Description: base.name, DeletionMark: false });
-    const retry = await confirmed(s, { ...base, relations: undefined, partnerRef });
-    expect(retry.done.isError, retry.done.text.slice(0, 300)).toBeFalsy();
-    expect(s.posts.filter((p) => p.set === "Catalog_Партнеры")).toHaveLength(1);
-    expect(s.posts.at(-1)).toMatchObject({ set: "Catalog_Контрагенты", body: { Партнер_Key: partnerRef } });
-  });
-
-  it("partnerRef существующего партнёра — одна запись, relations не нужны", async () => {
-    const s = setup({ partners: [{ Ref_Key: P, Description: "Есть", DeletionMark: false }] });
-    const { preview, done } = await confirmed(s, {
-      name: "ZZ-TEST Второе юрлицо",
-      inn: "7700000002",
-      partnerRef: P,
-    });
-    expect(preview.sc["partner"]).toBeUndefined();
+    const done = await s.call(args);
     expect(done.isError, done.text.slice(0, 300)).toBeFalsy();
+    const again = await s.call(args);
+    expect(again.sc).toMatchObject({ replayed: true, ref: done.sc["ref"] });
     expect(s.posts.map((p) => p.set)).toEqual(["Catalog_Контрагенты"]);
-    expect(s.posts[0]!.body).toMatchObject({ Партнер_Key: P });
+    expect(s.posts[0]!.body).toMatchObject(preview.sc["payload"] as Record<string, unknown>);
+    expect(s.fake.violations).toEqual([]);
+  });
+
+  it("без partnerRef — отказ с подсказкой про create_partner, записей нет", async () => {
+    const s = setup();
+    const r = await s.call({ name: "ZZ-TEST", inn: "7700000001" });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("create_partner");
+    expect(s.posts).toEqual([]);
   });
 
   it.each([
@@ -198,57 +123,83 @@ describe("create_counterparty в Управлении торговлей", () =>
     expect(s.posts).toEqual([]);
   });
 
-  it("без relations и partnerRef — отказ с подсказкой", async () => {
-    const r = await setup().call({ name: "ZZ-TEST", inn: "7700000001" });
-    expect(r.isError).toBe(true);
-    expect(r.text).toContain("relations");
-  });
-
   it("ИНН из 12 цифр без legalType — отказ; ИП и частное лицо — свои значения перечислений", async () => {
-    const s = setup();
+    const s = setup(withPartner());
     expect((await s.call({ ...base, inn: "770000000012" })).isError).toBe(true);
     const ip = await s.call({ ...base, inn: "770000000012", legalType: "ИндивидуальныйПредприниматель" });
     expect(ip.sc["payload"]).toMatchObject({
       ЮрФизЛицо: "ИндивидуальныйПредприниматель",
       ЮридическоеФизическоеЛицо: "ФизическоеЛицо",
     });
-    expect((ip.sc["partner"] as { payload: object }).payload).toMatchObject({ ЮрФизЛицо: "Компания" });
-    const person = await s.call({
-      ...base,
-      inn: undefined,
-      legalType: "ФизическоеЛицо",
-      relations: ["supplier"],
-    });
+    const person = await s.call({ ...base, inn: undefined, legalType: "ФизическоеЛицо" });
     expect(person.sc["payload"]).toMatchObject({
       ЮрФизЛицо: "ФизЛицо",
       ЮридическоеФизическоеЛицо: "ФизическоеЛицо",
     });
-    expect((person.sc["partner"] as { payload: object }).payload).toMatchObject({
-      ЮрФизЛицо: "ЧастноеЛицо",
-      Клиент: false,
-      Поставщик: true,
-    });
     expect(s.fake.violations).toEqual([]);
   });
 
-  it("в Бухгалтерии — как раньше: без партнёра, ИП — физическое лицо", async () => {
+  it("в Бухгалтерии — как раньше: без партнёра, ИП — физическое лицо; partnerRef — в notes", async () => {
     const s = setup({ schema: "bp30" });
     const r = await s.call({ ...base, legalType: "ИндивидуальныйПредприниматель" });
     expect(r.isError, r.text.slice(0, 300)).toBeFalsy();
-    expect(r.sc["partner"]).toBeUndefined();
     expect(r.sc["payload"]).toMatchObject({ ЮридическоеФизическоеЛицо: "ФизическоеЛицо" });
     expect(r.sc["payload"]).not.toHaveProperty("Партнер_Key");
-    expect(JSON.stringify(r.sc["notes"])).toContain("partnerRef и relations не применены");
+    expect(JSON.stringify(r.sc["notes"])).toContain("partnerRef не применён");
   });
 
-  it("подтверждение после полуночи: дата регистрации — день предпросмотра, запись совпадает с ним", async () => {
+  it("create_partner: компания-клиент, одна запись как в предпросмотре; повтор — ни одной", async () => {
+    const s = setup();
+    const args = { name: "ZZ-TEST партнёр", relations: ["client"] };
+    const preview = await s.call(args, PARTNER);
+    expect(preview.isError, preview.text.slice(0, 300)).toBeFalsy();
+    expect(preview.sc["willCreate"]).toBe("Catalog_Партнеры");
+    expect(preview.sc["payload"]).toMatchObject({
+      Description: "ZZ-TEST партнёр",
+      ЮрФизЛицо: "Компания",
+      Клиент: true,
+      Поставщик: false,
+      ПрочиеОтношения: false,
+    });
+    expect(String((preview.sc["payload"] as Record<string, unknown>)["ДатаРегистрации"])).toMatch(
+      /T00:00:00$/,
+    );
+    const confirmArgs = { ...args, confirm: true, operationId: preview.sc["operationId"] };
+    const done = await s.call(confirmArgs, PARTNER);
+    expect(done.isError, done.text.slice(0, 300)).toBeFalsy();
+    expect((await s.call(confirmArgs, PARTNER)).sc).toMatchObject({ replayed: true, ref: done.sc["ref"] });
+    expect(s.posts.map((p) => p.set)).toEqual(["Catalog_Партнеры"]);
+    expect(s.posts[0]!.body).toMatchObject(preview.sc["payload"] as Record<string, unknown>);
+    expect(s.fake.violations).toEqual([]);
+  });
+
+  it("create_partner: частное лицо-поставщик; без relations — отказ схемы; в Бухгалтерии — отказ", async () => {
+    const s = setup();
+    const r = await s.call(
+      { name: "ZZ-TEST", privatePerson: true, relations: ["supplier", "other"] },
+      PARTNER,
+    );
+    expect(r.sc["payload"]).toMatchObject({
+      ЮрФизЛицо: "ЧастноеЛицо",
+      Клиент: false,
+      Поставщик: true,
+      ПрочиеОтношения: true,
+    });
+    expect((await s.call({ name: "ZZ-TEST", relations: [] }, PARTNER)).isError).toBe(true);
+    const bp = await setup({ schema: "bp30" }).call({ name: "ZZ-TEST", relations: ["client"] }, PARTNER);
+    expect(bp.isError).toBe(true);
+    expect(s.posts).toEqual([]);
+  });
+
+  it("create_partner: подтверждение после полуночи — дата регистрации дня предпросмотра", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       vi.setSystemTime(new Date(2026, 10, 20, 23, 59, 58));
       const s = setup();
-      const preview = await s.call(base);
+      const args = { name: "ZZ-TEST", relations: ["client"] };
+      const preview = await s.call(args, PARTNER);
       vi.setSystemTime(new Date(2026, 10, 21, 0, 0, 5));
-      const done = await s.call({ ...base, confirm: true, operationId: preview.sc["operationId"] });
+      const done = await s.call({ ...args, confirm: true, operationId: preview.sc["operationId"] }, PARTNER);
       expect(done.isError, done.text.slice(0, 300)).toBeFalsy();
       expect(s.posts[0]!.body["ДатаРегистрации"]).toBe("2026-11-20T00:00:00");
     } finally {
@@ -367,33 +318,6 @@ describe("create_counterparty в Управлении торговлей", () =>
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("ответ на запись партнёра потерян, 1С его записала: повтор с тем же operationId — без второго партнёра", async () => {
-    const s = setup({ losePartner: "after" });
-    const preview = await s.call(base);
-    const args = { ...base, confirm: true, operationId: preview.sc["operationId"] };
-    const first = await s.call(args);
-    expect(first.isError).toBe(true);
-    const ref = (preview.sc["partner"] as { ref: string }).ref;
-    expect(first.text).toContain(ref);
-    expect(first.text).toContain("тем же operationId");
-    const again = await s.call(args);
-    expect(again.isError, again.text.slice(0, 300)).toBeFalsy();
-    expect(s.posts.filter((p) => p.set === "Catalog_Партнеры")).toHaveLength(1);
-    expect(s.posts.at(-1)).toMatchObject({ set: "Catalog_Контрагенты", body: { Партнер_Key: ref } });
-  });
-
-  it("запись партнёра не дошла до 1С: повтор говорит, как закрыть подоперацию, и ничего не пишет", async () => {
-    const s = setup({ losePartner: "before" });
-    const preview = await s.call(base);
-    const args = { ...base, confirm: true, operationId: preview.sc["operationId"] };
-    expect((await s.call(args)).isError).toBe(true);
-    const again = await s.call(args);
-    expect(again.isError).toBe(true);
-    expect(again.text).toContain("не дошла");
-    expect(again.text).toContain("write.operation.status");
-    expect(s.posts).toEqual([]);
   });
 
   it.each([

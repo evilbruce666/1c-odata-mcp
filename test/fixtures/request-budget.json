@@ -49,6 +49,7 @@
   "write.counterparty.create_contact_person": 1,
   "write.counterparty.create_counterparty": 0,
   "write.counterparty.create_group": 0,
+  "write.counterparty.create_partner": 0,
   "write.counterparty.set_group": 1,
   "write.counterparty.update_counterparty": 4,
   "write.document.add_document_line": 10,

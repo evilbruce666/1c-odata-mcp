@@ -44,6 +44,7 @@ import { PRICE_DOC, priceMechanisms, verifyPriceMovements } from "../odata/prici
 import { tryPreviewView } from "./preview-view.js";
 import { checkDuplicateInn } from "../odata/duplicates.js";
 import {
+  createPartner,
   createTradeCounterparty,
   partnerFieldWithoutCatalog,
   partnerOf,
@@ -2126,35 +2127,14 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .regex(GUID_RE, "Ref_Key (GUID)")
           .optional()
           .describe(
-            "Только Управление торговлей: Ref_Key существующего партнёра (Catalog_Партнеры). Без него создаётся новый " +
-              "партнёр — тогда нужен relations.",
-          ),
-        relations: z
-          .array(z.enum(["client", "supplier", "other"]))
-          .optional()
-          .describe(
-            "Только Управление торговлей, для нового партнёра: client — клиент, supplier — поставщик, other — прочие " +
-              "отношения.",
+            "Управление торговлей, обязательно: Ref_Key партнёра (Catalog_Партнеры), которому принадлежит контрагент. " +
+              "Нового партнёра сначала создайте write.counterparty.create_partner.",
           ),
         confirm: confirmField,
       }),
       outputSchema: createResultSchema,
     },
-    ({
-      database,
-      name,
-      inn,
-      kpp,
-      fullName,
-      legalType,
-      phone,
-      email,
-      address,
-      ogrn,
-      partnerRef,
-      relations,
-      confirm,
-    }) =>
+    ({ database, name, inn, kpp, fullName, legalType, phone, email, address, ogrn, partnerRef, confirm }) =>
       guard("write.counterparty.create_counterparty", async () => {
         const conn = ctx.db(database);
         const set = await resolveSet(conn, CATALOGS.counterparties, "Контрагенты");
@@ -2171,13 +2151,12 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           return createTradeCounterparty(
             conn,
             set,
-            { name, inn, kpp, fullName, legalType, partnerRef, relations },
+            { name, inn, kpp, fullName, legalType, partnerRef },
             fields,
             confirm,
             notes,
           );
-        if (partnerRef || relations?.length)
-          notes.push("partnerRef и relations не применены: в этой базе у контрагента нет партнёра.");
+        if (partnerRef) notes.push("partnerRef не применён: в этой базе у контрагента нет партнёра.");
         const payload = clean({
           Description: name,
           ИНН: inn,
@@ -2189,6 +2168,37 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         });
         return createOrPreview(conn, set, payload, confirm, notes);
       }),
+  );
+
+  server.registerTool(
+    "write.counterparty.create_partner",
+    {
+      title: "Создать партнёра (УТ)",
+      description:
+        "Партнёр — бизнес-сущность Управления торговлей, КА и ERP, которой принадлежат контрагенты (юрлица), договоры, " +
+        "соглашения и контактные лица; в Бухгалтерии партнёров нет. Отношения (relations) НЕ выбирайте сами — уточните " +
+        "у пользователя. После создания заведите юрлицо: write.counterparty.create_counterparty с partnerRef. По " +
+        "умолчанию предпросмотр (dry-run); создание — при confirm=true.",
+      inputSchema: z.object({
+        database: databaseField,
+        name: z.string().min(1).describe("Наименование партнёра"),
+        fullName: z.string().optional().describe("Полное наименование (по умолчанию — наименование)"),
+        privatePerson: z
+          .boolean()
+          .default(false)
+          .describe("true — частное лицо (физлицо без ИП), false — компания (юрлицо или ИП)"),
+        relations: z
+          .array(z.enum(["client", "supplier", "other"]))
+          .min(1)
+          .describe("Отношения: client — клиент, supplier — поставщик, other — прочие"),
+        confirm: confirmField,
+      }),
+      outputSchema: createResultSchema,
+    },
+    ({ database, name, fullName, privatePerson, relations, confirm }) =>
+      guard("write.counterparty.create_partner", async () =>
+        createPartner(ctx.db(database), { name, fullName, privatePerson, relations }, confirm),
+      ),
   );
 
   server.registerTool(

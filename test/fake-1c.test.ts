@@ -77,6 +77,7 @@ const OVERRIDES: Record<string, Record<string, unknown>> = {
   "write.document.post_document": { entitySet: "Document_РеализацияТоваровУслуг", ref: id },
   // Справочник, который запись в УТ не создаёт: пометка контрагентов и партнёров в УТ разрешена (TRADE_WRITE).
   "write.entity.mark_for_deletion": { entitySet: "Catalog_Склады", ref: id },
+  "write.counterparty.create_partner": { relations: ["client"] },
   "write.entity.update_entity": {
     entitySet: "Catalog_Контрагенты",
     ref: id,
@@ -188,6 +189,7 @@ const EXPECTED_ERRORS: Record<string, string> = {
   "write.document.align_bank_payment_amounts": "Сумма документа не заполнена",
   // Соглашения есть только в УТ, КА и ERP: на снимке Бухгалтерии — отказ с объяснением.
   "write.catalog.create_agreement": "соглашения есть в Управлении торговлей",
+  "write.counterparty.create_partner": "партнёры есть в Управлении торговлей",
 };
 
 afterEach(() => {
@@ -355,6 +357,7 @@ const TRADE_REGISTERS = [
 const TRADE_WRITE_TOOLS = new Set([
   "write.pricing.create_price_setting",
   "write.counterparty.create_counterparty",
+  "write.counterparty.create_partner",
   "write.counterparty.update_counterparty",
   "write.counterparty.create_bank_account",
   "write.counterparty.create_contact_person",

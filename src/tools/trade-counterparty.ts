@@ -1,22 +1,17 @@
-import { createHash } from "node:crypto";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import type { Connection } from "../context.js";
 import type { ODataEntity } from "../types/odata.js";
 import { ODataError } from "../odata/errors.js";
 import { EMPTY_REF } from "../odata/pricing.js";
 import { buildQuery } from "../odata/query.js";
-import {
-  currentWriteOperationId,
-  currentWriteRequestHash,
-  withWriteOperation,
-} from "../odata/write-operation-context.js";
+import { currentWriteOperationId } from "../odata/write-operation-context.js";
 import { fail } from "./_shared.js";
 import { createCore } from "./write.js";
 
 /**
  * Контрагент Управления торговлей: юрлицо (Catalog_Контрагенты) всегда принадлежит партнёру (Catalog_Партнеры) —
  * бизнес-сущности, у которой отношения «клиент / поставщик / прочие». Без партнёра контрагента в УТ не выбрать ни в
- * одном документе. Поэтому create_counterparty в УТ создаёт оба объекта или берёт готового партнёра (partnerRef).
+ * одном документе. Поэтому в УТ два шага: create_partner, затем create_counterparty с partnerRef.
  */
 
 export const PARTNERS = "Catalog_Партнеры";
@@ -46,21 +41,14 @@ export type Relation = "client" | "supplier" | "other";
  * 20.11.2026): ЮрФизЛицо — ЮрЛицо / ФизЛицо / ИндивидуальныйПредприниматель; ЮридическоеФизическоеЛицо — ЮридическоеЛицо
  * (юрлица) / ФизическоеЛицо (физлица и ИП); партнёр — Компания, а у частного лица — ЧастноеЛицо.
  */
-const LEGAL: Record<LegalType, { kind: string; legal: string; partner: string }> = {
-  ЮридическоеЛицо: { kind: "ЮрЛицо", legal: "ЮридическоеЛицо", partner: "Компания" },
+const LEGAL: Record<LegalType, { kind: string; legal: string }> = {
+  ЮридическоеЛицо: { kind: "ЮрЛицо", legal: "ЮридическоеЛицо" },
   ИндивидуальныйПредприниматель: {
     kind: "ИндивидуальныйПредприниматель",
     legal: "ФизическоеЛицо",
-    partner: "Компания",
   },
-  ФизическоеЛицо: { kind: "ФизЛицо", legal: "ФизическоеЛицо", partner: "ЧастноеЛицо" },
+  ФизическоеЛицо: { kind: "ФизЛицо", legal: "ФизическоеЛицо" },
 };
-
-/** Подоперация журнала для партнёра: детерминированный UUID от operationId контрагента. */
-export function derivedOperationId(operationId: string, part: string): string {
-  const h = createHash("sha256").update(`${operationId}:${part}`).digest("hex");
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
-}
 
 /** Дата регистрации партнёра — день предпросмотра (из журнала), чтобы подтверждение совпало с ним байт в байт. */
 export function dayOf(iso: string | undefined): string {
@@ -76,9 +64,13 @@ export interface TradeCounterpartyInput {
   fullName?: string | undefined;
   legalType?: LegalType | undefined;
   partnerRef?: string | undefined;
-  relations?: Relation[] | undefined;
 }
 
+/**
+ * Контрагент УТ — к существующему партнёру (partnerRef). Один вызов — один объект: партнёра создаёт
+ * write.counterparty.create_partner своей операцией. Составная запись двух объектов одним подтверждением давала
+ * второго партнёра при потерянном ответе (два раунда ревью) — механизм убран.
+ */
 export async function createTradeCounterparty(
   conn: Connection,
   set: string,
@@ -87,6 +79,12 @@ export async function createTradeCounterparty(
   confirm: boolean,
   notes: string[],
 ): Promise<CallToolResult> {
+  const partnerRef = input.partnerRef?.replace(/[{}']/g, "");
+  if (!partnerRef)
+    return fail(
+      "В Управлении торговлей контрагент принадлежит партнёру. Укажите partnerRef — Ref_Key партнёра; нового партнёра " +
+        "сначала создайте write.counterparty.create_partner. Ничего не создано.",
+    );
   const inn = input.inn?.trim();
   const legalType = input.legalType ?? (inn && /^\d{10}$/.test(inn) ? "ЮридическоеЛицо" : undefined);
   if (!legalType)
@@ -95,103 +93,18 @@ export async function createTradeCounterparty(
         "юрлицо, а ИНН из 12 цифр бывает и у ИП, и у частного лица. Ничего не создано.",
     );
   const legal = LEGAL[legalType];
-
-  let partnerKey: string | undefined;
-  let partnerPreview: Record<string, unknown> | undefined;
-  const partnerRef = input.partnerRef?.replace(/[{}']/g, "");
-  if (partnerRef) {
-    let partner: ODataEntity;
-    try {
-      partner = await conn.client.getEntity<ODataEntity>(
-        `${PARTNERS}(guid'${partnerRef}')${buildQuery({ select: ["Ref_Key", "Description", "DeletionMark"] })}`,
-      );
-    } catch (e) {
-      if (e instanceof ODataError && e.kind === "not_found")
-        return fail(`Партнёр ${partnerRef} не найден в этой базе. Ничего не создано.`);
-      throw e;
-    }
-    if (partner["DeletionMark"] === true)
-      return fail(`Партнёр «${String(partner["Description"])}» помечен на удаление. Ничего не создано.`);
-    partnerKey = partnerRef;
-    if (input.relations?.length)
-      notes.push("relations не применены: отношения существующего партнёра этим инструментом не меняются.");
-  } else if (!input.relations?.length) {
-    return fail(
-      "В Управлении торговлей контрагент принадлежит партнёру. Укажите relations (client — клиент, supplier — " +
-        "поставщик, other — прочие отношения), чтобы создать нового партнёра, или partnerRef — существующего. " +
-        "Ничего не создано.",
+  let partner: ODataEntity;
+  try {
+    partner = await conn.client.getEntity<ODataEntity>(
+      `${PARTNERS}(guid'${partnerRef}')${buildQuery({ select: ["Ref_Key", "Description", "DeletionMark"] })}`,
     );
+  } catch (e) {
+    if (e instanceof ODataError && e.kind === "not_found")
+      return fail(`Партнёр ${partnerRef} не найден в этой базе. Ничего не создано.`);
+    throw e;
   }
-
-  const operationId = currentWriteOperationId();
-  const requestHash = currentWriteRequestHash();
-  const partnerOp = operationId ? derivedOperationId(operationId, "partner") : undefined;
-  const partnerPayload = async () => {
-    const entry = partnerOp ? await conn.client.operationEntry(partnerOp) : undefined;
-    const relations = new Set(input.relations);
-    return {
-      Description: input.name,
-      НаименованиеПолное: input.fullName ?? input.name,
-      ЮрФизЛицо: legal.partner,
-      Клиент: relations.has("client"),
-      Поставщик: relations.has("supplier"),
-      ПрочиеОтношения: relations.has("other"),
-      ДатаРегистрации: dayOf(entry?.createdAt),
-    };
-  };
-  const inPartnerOp = <T>(fn: () => Promise<T>) =>
-    partnerOp && requestHash ? withWriteOperation(partnerOp, requestHash, fn) : fn();
-
-  if (!partnerKey && !confirm) {
-    partnerPreview = await partnerPayload();
-    await inPartnerOp(() => conn.client.prepareCreate(PARTNERS, partnerPreview!));
-    partnerKey = (partnerOp && (await conn.client.operationEntry(partnerOp))?.refKey) || EMPTY_REF;
-    notes.push(
-      "Будет создан и партнёр (Catalog_Партнеры) — см. partner. Контрагент без партнёра в документах УТ не выбирается.",
-    );
-  }
-  let createdPartner: string | undefined;
-  if (!partnerKey && confirm) {
-    const payload = await partnerPayload();
-    const entry = partnerOp ? await conn.client.operationEntry(partnerOp) : undefined;
-    // Ответ на запись партнёра потерялся (исход неизвестен): Ref_Key назначен при предпросмотре — сверяем простым GET.
-    // Партнёр есть — фиксируем успех подоперации и продолжаем; повтор не создаёт второго (ревью).
-    if (partnerOp && entry?.refKey && (entry.state === "outcome_unknown" || entry.state === "executing")) {
-      const found = await conn.client
-        .getEntity<ODataEntity>(`${PARTNERS}(guid'${entry.refKey}')${buildQuery({ select: ["Ref_Key"] })}`)
-        .catch((e: unknown) => {
-          if (e instanceof ODataError && e.kind === "not_found") return undefined;
-          throw e;
-        });
-      if (!found || String(found["Ref_Key"]).toLowerCase() !== entry.refKey.toLowerCase())
-        return fail(
-          `Запись партнёра не дошла до 1С: партнёра ${entry.refKey} в базе нет. Закройте подоперацию партнёра как ` +
-            `неприменённую (write.operation.status с operationId ${partnerOp}) и повторите подтверждение. Ничего не создано.`,
-        );
-      await conn.client.reconcileOperation(partnerOp, found);
-    }
-    let partner: ODataEntity;
-    try {
-      partner = await inPartnerOp(() => conn.client.create<ODataEntity>(PARTNERS, payload));
-    } catch (e) {
-      const after = partnerOp ? await conn.client.operationEntry(partnerOp) : undefined;
-      const message = e instanceof Error ? e.message : String(e);
-      const where = `Шаг «партнёр» (Catalog_Партнеры${after?.refKey ? `, ref ${after.refKey}` : ""}): ${message}`;
-      if (after?.state === "rejected")
-        return fail(
-          `${where} 1С отклонила партнёра — ничего не создано. Исправьте данные и сделайте новый предпросмотр.`,
-        );
-      throw new ODataError({
-        kind: e instanceof ODataError ? e.kind : "unknown",
-        message:
-          `${where} Контрагент не создан. Повторите подтверждение с тем же operationId — коннектор сверит партнёра ` +
-          "по этой ссылке и не создаст второго.",
-        cause: e,
-      });
-    }
-    createdPartner = String(partner["Ref_Key"]);
-    partnerKey = createdPartner;
-  }
+  if (partner["DeletionMark"] === true)
+    return fail(`Партнёр «${String(partner["Description"])}» помечен на удаление. Ничего не создано.`);
 
   const payload = Object.fromEntries(
     Object.entries({
@@ -201,39 +114,55 @@ export async function createTradeCounterparty(
       КПП: input.kpp?.trim(),
       ЮрФизЛицо: legal.kind,
       ЮридическоеФизическоеЛицо: legal.legal,
-      Партнер_Key: partnerKey,
+      Партнер_Key: partnerRef,
       ...extraFields,
     }).filter(([, v]) => v !== undefined && v !== ""),
   );
-  let result: CallToolResult;
-  try {
-    result = await createCore(conn, set, payload, confirm, notes, (created) =>
-      // Головной контрагент — сам контрагент (так у всех, кроме обособленных подразделений): 1С заполняет его при
-      // записи; не заполнила — сказать, а не молчать.
-      !created["ГоловнойКонтрагент_Key"] || created["ГоловнойКонтрагент_Key"] === EMPTY_REF
-        ? "1С не заполнила головного контрагента — откройте карточку в 1С и сохраните её."
-        : undefined,
-    );
-  } catch (e) {
-    if (!createdPartner) throw e;
-    const message = e instanceof Error ? e.message : String(e);
+  return createCore(conn, set, payload, confirm, notes, (created) =>
+    // Головной контрагент — сам контрагент (так у всех, кроме обособленных подразделений): 1С заполняет его при
+    // записи (проверено на копии); не заполнила — сказать, а не молчать.
+    !created["ГоловнойКонтрагент_Key"] || created["ГоловнойКонтрагент_Key"] === EMPTY_REF
+      ? "1С не заполнила головного контрагента — откройте карточку в 1С и сохраните её."
+      : undefined,
+  );
+}
+
+export interface PartnerInput {
+  name: string;
+  fullName?: string | undefined;
+  privatePerson: boolean;
+  relations: Relation[];
+}
+
+/** Партнёр УТ — одна запись своей операцией журнала; контрагента к нему — create_counterparty с partnerRef. */
+export async function createPartner(
+  conn: Connection,
+  input: PartnerInput,
+  confirm: boolean,
+): Promise<CallToolResult> {
+  if (!(await conn.available()).has(PARTNERS))
     return fail(
-      `Партнёр создан (ref ${createdPartner}), а контрагент — нет: ${message} Повторите подтверждение с тем же ` +
-        `operationId, если исход неизвестен; если 1С отказала — новый предпросмотр с partnerRef=${createdPartner}: ` +
-        "второй партнёр не создастся.",
+      "Справочник «Партнеры» (Catalog_Партнеры) не опубликован в OData: партнёры есть в Управлении торговлей, КА и " +
+        "ERP. Ничего не создано.",
     );
-  }
-  if (result.isError || !result.structuredContent) return result;
-  const sc = result.structuredContent as Record<string, unknown>;
-  const extra = partnerPreview
-    ? { partner: { willCreate: PARTNERS, ref: partnerKey, payload: partnerPreview } }
-    : { partnerRef: partnerKey, ...(createdPartner ? { partnerCreated: true } : {}) };
-  const structuredContent = { ...sc, ...extra };
-  return {
-    ...result,
-    structuredContent,
-    content: [{ type: "text", text: JSON.stringify(structuredContent, null, 2) }],
+  const relations = new Set(input.relations);
+  const payload = {
+    Description: input.name,
+    НаименованиеПолное: input.fullName ?? input.name,
+    ЮрФизЛицо: input.privatePerson ? "ЧастноеЛицо" : "Компания",
+    Клиент: relations.has("client"),
+    Поставщик: relations.has("supplier"),
+    ПрочиеОтношения: relations.has("other"),
+    ДатаРегистрации: await previewDay(conn),
   };
+  return createCore(
+    conn,
+    PARTNERS,
+    payload,
+    confirm,
+    ["Контрагента (юрлицо) к партнёру — write.counterparty.create_counterparty с partnerRef = ref партнёра."],
+    () => undefined,
+  );
 }
 
 /** День предпросмотра этой операции: при подтверждении — из журнала, в предпросмотре — сегодня. */

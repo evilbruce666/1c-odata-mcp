@@ -456,6 +456,7 @@ const TRADE_WRITE: Record<string, TradeWrite> = {
           : partners(conn),
   },
   "write.counterparty.create_counterparty": { applies: () => true, ready: partners },
+  "write.counterparty.create_partner": { applies: () => true, ready: partners },
   "write.counterparty.update_counterparty": { applies: () => true, ready: partners },
   "write.counterparty.create_bank_account": { applies: () => true, ready: partners },
   "write.counterparty.create_contact_person": { applies: () => true, ready: partners },
@@ -472,7 +473,7 @@ const TRADE_WRITE: Record<string, TradeWrite> = {
 const TRADE_WRITE_HINT =
   "В Управлении торговлей поддержаны установка цен (write.pricing.create_price_setting, затем " +
   `write.document.post_document и write.entity.mark_for_deletion для ${PRICE_DOC}) и контрагенты с партнёрами ` +
-  "(write.counterparty.create_counterparty, update_counterparty, create_bank_account, create_contact_person), " +
+  "(write.counterparty.create_partner, create_counterparty, update_counterparty, create_bank_account, create_contact_person), " +
   "договоры и соглашения (write.catalog.create_contract, create_agreement), номенклатура и её папки " +
   "(create_nomenclature, update_nomenclature, write.entity.create_folder и move_to_folder для Catalog_Номенклатура).";
 

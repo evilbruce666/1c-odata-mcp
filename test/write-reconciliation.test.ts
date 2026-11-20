@@ -84,13 +84,18 @@ const ARGS: Record<string, Record<string, unknown>> = {
   "write.counterparty.create_contact_person": { ownerRef: id, name: "Тест" },
   "write.entity.create_folder": { entitySet: "Catalog_Контрагенты", name: "Тест" },
   "write.catalog.create_agreement": { side: "client", counterpartyRef: id, name: "Synthetic" },
+  "write.counterparty.create_partner": { name: "Synthetic", relations: ["client"] },
   "write.document.copy_document": doc,
   "write.document.add_document_line": { ...doc, line },
   "write.document.remove_document_line": { ...doc, lineNumber: 1 },
 };
 
 /** Инструменты Управления торговлей: в Бухгалтерии они законно отказывают, их журнал проверяется на снимке УТ. */
-const UT_TOOLS = new Set(["write.pricing.create_price_setting", "write.catalog.create_agreement"]);
+const UT_TOOLS = new Set([
+  "write.pricing.create_price_setting",
+  "write.catalog.create_agreement",
+  "write.counterparty.create_partner",
+]);
 
 function setup(schema: "bp30" | "ut11" = "bp30") {
   const conn = snapshotConnection(

@@ -320,4 +320,36 @@ describe("create_nomenclature в Управлении торговлей", () =>
     expect(r.isError).toBe(true);
     expect(r.text).not.toContain("Измените позицию в 1С");
   });
+
+  it("поля вида — только опубликованные: нет ВладелецСерий_Key у вида в $metadata — не в payload", async () => {
+    const s = setup();
+    const meta = await s.fake.conn.getMetadata();
+    const kinds = meta.entities.get("Catalog_ВидыНоменклатуры")!;
+    vi.spyOn(s.fake.conn, "getMetadata").mockResolvedValue({
+      ...meta,
+      entities: new Map([
+        ...meta.entities,
+        [
+          "Catalog_ВидыНоменклатуры",
+          { ...kinds, properties: kinds.properties.filter((p) => p.name !== "ВладелецСерий_Key") },
+        ],
+      ]),
+    });
+    const r = await s.call({ name: "ZZ-TEST", kind: "Товары" });
+    expect(r.isError, r.text.slice(0, 300)).toBeFalsy();
+    expect(r.sc["payload"]).not.toHaveProperty("ВладелецСерий_Key");
+    expect(r.sc["payload"]).toMatchObject({ ТипНоменклатуры: "Товар" });
+  });
+
+  it("справочник «Ставки НДС» не опубликован — понятный отказ, записей нет", async () => {
+    const s = setup();
+    const available = await s.fake.conn.available();
+    vi.spyOn(s.fake.conn, "available").mockResolvedValue(
+      new Set([...available].filter((x) => x !== "Catalog_СтавкиНДС")),
+    );
+    const r = await s.call({ name: "ZZ-TEST", kind: "Товары" });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("Ставки НДС");
+    expect(s.posts).toEqual([]);
+  });
 });
