@@ -130,6 +130,18 @@ export function odataDate(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
+/**
+ * Дата документа или договора: заданный день — на полночь; по умолчанию — момент предпросмотра этой операции (при
+ * подтверждении — из журнала). Журнал сравнивает у дат только день, и «сейчас» при подтверждении после полуночи давало
+ * другой день: подтверждение отказывало, а документ получил бы не ту дату, что в предпросмотре.
+ */
+export async function docDate(conn: Connection, date: string | undefined): Promise<string> {
+  if (date) return odataDate(new Date(`${date}T00:00:00`));
+  const operationId = currentWriteOperationId();
+  const entry = operationId ? await conn.client.operationEntry(operationId) : undefined;
+  return odataDate(entry?.createdAt ? new Date(entry.createdAt) : new Date());
+}
+
 /** Резолвит организацию: по названию, либо авто, если в базе ровно одна. */
 async function resolveOrg(
   conn: Connection,
@@ -445,7 +457,7 @@ async function createGoodsDoc(
 ) {
   const rows = buildGoodsRows(p.lines, p.lineAccountsFor);
   const payload = clean({
-    Date: odataDate(p.date ? new Date(`${p.date}T00:00:00`) : new Date()),
+    Date: await docDate(conn, p.date),
     Posted: false,
     Организация_Key: p.orgKey,
     Контрагент_Key: p.counterpartyRef,
@@ -2370,7 +2382,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const payload = clean({
           Description: name ?? `Договор ${num}`,
           Номер: num,
-          Дата: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Дата: await docDate(conn, date),
           Owner_Key: counterpartyRef,
           ВидДоговора: kind,
           Организация_Key: org.key,
@@ -2470,7 +2482,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const bank = await resolveOrgBankAccount(conn, org.key, orgBankAccount);
         const rows = buildInvoiceRows(lines);
         const payload = clean({
-          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Date: await docDate(conn, date),
           Posted: false,
           Организация_Key: org.key,
           Контрагент_Key: counterpartyRef,
@@ -2887,7 +2899,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const org = await resolveOrg(conn, organization);
         const rows = buildGoodsRows(lines, noAccounts);
         const payload = clean({
-          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Date: await docDate(conn, date),
           Posted: false,
           Организация_Key: org.key,
           Контрагент_Key: counterpartyRef,
@@ -2995,7 +3007,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           currencyRef ? Promise.resolve(currencyRef) : resolveDefaultCurrency(conn),
         ]);
         const payload = clean({
-          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Date: await docDate(conn, date),
           Posted: false,
           Number: number,
           Организация_Key: org.ref,
@@ -3187,7 +3199,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         });
         const rows = buildGoodsRows(lines, lineAccountsFor);
         const payload = clean({
-          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Date: await docDate(conn, date),
           Posted: false,
           Организация_Key: org.key,
           Склад_Key: warehouseKey,
@@ -3225,7 +3237,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const { settlement, lineAccountsFor } = await goodsAccounts(conn, org.key, lines, "purchase");
         const rows = buildGoodsRows(lines, lineAccountsFor);
         const payload = clean({
-          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Date: await docDate(conn, date),
           Posted: false,
           Организация_Key: org.key,
           Склад_Key: warehouseKey,
@@ -3277,7 +3289,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           }),
         );
         const payload = clean({
-          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Date: await docDate(conn, date),
           Posted: false,
           Организация_Key: org.key,
           СкладОтправитель_Key: fromKey,
@@ -3324,7 +3336,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           }),
         );
         const payload = clean({
-          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Date: await docDate(conn, date),
           Posted: false,
           Организация_Key: org.key,
           Склад_Key: warehouseKey,
@@ -3372,7 +3384,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           }),
         );
         const payload = clean({
-          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Date: await docDate(conn, date),
           Posted: false,
           Организация_Key: org.key,
           Склад_Key: warehouseKey,
@@ -3445,7 +3457,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           }),
         );
         const payload = clean({
-          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Date: await docDate(conn, date),
           Posted: false,
           Организация_Key: org.key,
           Склад_Key: warehouseKey,
@@ -3551,7 +3563,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const guid = ref.replace(/[{}']/g, "");
         const source = await conn.client.getEntity(`${entitySet}(guid'${guid}')${buildQuery({})}`);
         const payload = stripForCopy(source);
-        payload["Date"] = odataDate(date ? new Date(`${date}T00:00:00`) : new Date());
+        payload["Date"] = await docDate(conn, date);
         payload["Posted"] = false;
 
         if (lines?.length) {
@@ -3708,7 +3720,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         });
         const rows = buildGoodsRows(lines, lineAccountsFor);
         const payload = clean({
-          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Date: await docDate(conn, date),
           Posted: false,
           ВидОперации: configuredOperationKind(conn.cfg, "salesAct", operationKind),
           Организация_Key: org.key,
@@ -3800,7 +3812,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           }),
         );
         const payload = clean({
-          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Date: await docDate(conn, date),
           Posted: false,
           Организация_Key: org.key,
           Контрагент_Key: counterpartyRef,
@@ -3874,7 +3886,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const advance = codes.get("receivableAdvance");
         const cpSet = resolveEntity(CATALOGS.counterparties, await conn.available());
         const payload = clean({
-          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Date: await docDate(conn, date),
           Posted: false,
           ВидОперации: configuredOperationKind(conn.cfg, "customerPayment", operationKind),
           Организация_Key: org.key,
@@ -3996,7 +4008,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const bank = await resolveOrgBankAccount(conn, org.key, orgBankAccount);
         const bd = await buildSettlementRow(conn, operationKind, contractRef, amount);
         const payload = clean({
-          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Date: await docDate(conn, date),
           Posted: false,
           ВидОперации: operationKind,
           Организация_Key: org.key,
@@ -4045,7 +4057,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   ): Promise<Record<string, unknown>> => {
     const bd = await buildSettlementRow(conn, a.operationKind, a.contractRef, a.amount);
     return clean({
-      Date: odataDate(a.date ? new Date(`${a.date}T00:00:00`) : new Date()),
+      Date: await docDate(conn, a.date),
       Posted: false,
       ВидОперации: a.operationKind,
       Организация_Key: org.key,
@@ -4145,7 +4157,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
             "Документ-основание «Реализация товаров и услуг»",
           ));
         const b = await invoiceBasis(conn, baseSet, baseDocumentRef);
-        const d = odataDate(date ? new Date(`${date}T00:00:00`) : new Date());
+        const d = await docDate(conn, date);
         const baseGuid = baseDocumentRef.replace(/[{}']/g, "");
         const baseRow = clean({
           LineNumber: 1,
@@ -4216,7 +4228,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           ДокументОснование_Type: `StandardODATA.${baseSet}`,
         });
         const payload = clean({
-          Date: odataDate(date ? new Date(`${date}T00:00:00`) : new Date()),
+          Date: await docDate(conn, date),
           Posted: false,
           ВидСчетаФактуры: "НаПоступление",
           Организация_Key: b.org,

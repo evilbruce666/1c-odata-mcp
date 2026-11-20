@@ -164,6 +164,7 @@ describe("create_contract regulated currency", () => {
         new Set(["Catalog_ДоговорыКонтрагентов", "Catalog_Организации", "Catalog_Валюты"]),
       client: {
         prepareCreate: vi.fn(),
+        operationEntry: async () => undefined,
         getCollection: async (path: string) => ({
           value: path.startsWith("Catalog_Валюты")
             ? [{ Ref_Key: cp, ...(code ? { Code: code } : {}) }]

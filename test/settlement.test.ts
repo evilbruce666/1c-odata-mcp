@@ -182,7 +182,7 @@ const connWith = (registerRows: unknown[] | undefined, currency = "643") => {
           ],
         ]),
       }),
-      client: { getCollection, getEntity },
+      client: { getCollection, getEntity, operationEntry: async () => undefined },
     } as never,
   };
 };
