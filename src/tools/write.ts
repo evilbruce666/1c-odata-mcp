@@ -1468,12 +1468,35 @@ async function createOrPreview(
   /** keepSettlement — счета расчётов уже заданы (копия документа): настройку договора не применять. */
   opts?: { keepSettlement?: boolean; settlementSide?: SettlementSide },
 ) {
+  // Подстановки Бухгалтерии: договор по умолчанию и счета расчётов. Общее создание — createCore.
   const contract = await withDefaultContract(conn, entitySet, payload);
   const settlement = opts?.keepSettlement
     ? { payload: contract.payload, notes: [] }
     : await withSettlementAccounts(conn, entitySet, contract.payload, opts?.settlementSide);
-  payload = await withOperationMarker(conn, entitySet, settlement.payload);
-  const allNotes = [...(notes ?? []), ...contract.notes, ...settlement.notes];
+  return createCore(conn, entitySet, settlement.payload, confirm, [
+    ...(notes ?? []),
+    ...contract.notes,
+    ...settlement.notes,
+  ]);
+}
+
+/**
+ * Создание объекта без подстановок конфигурации: метка операции, предпросмотр или POST, ответ. Сборщики, которым
+ * договор и счета расчётов Бухгалтерии не нужны (Управление торговлей), вызывают её напрямую.
+ */
+export async function createCore(
+  conn: Connection,
+  entitySet: string,
+  payload: Record<string, unknown>,
+  confirm: boolean,
+  allNotes: string[] = [],
+  /** Своя проверка созданного: предупреждение о пустых счетах расчётов — только для Бухгалтерии. */
+  check: (
+    created: ODataEntity,
+    payload: Record<string, unknown>,
+  ) => string | undefined = emptySettlementWarning,
+) {
+  payload = await withOperationMarker(conn, entitySet, payload);
   const extra = allNotes.length ? { notes: allNotes } : {};
   if (!confirm) {
     await conn.client.prepareCreate(entitySet, payload);
@@ -1496,7 +1519,7 @@ async function createOrPreview(
   } catch (e) {
     throw await withEnumValues(conn, e);
   }
-  const warning = emptySettlementWarning(created, payload);
+  const warning = check(created, payload);
   if (warning) allNotes.push(warning);
   const createdExtra = allNotes.length ? { notes: allNotes } : {};
   return ok({
