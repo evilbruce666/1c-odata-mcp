@@ -20,6 +20,8 @@ const FOLDER = g(3);
 const SERIES_OWNER = g(4);
 const PCS = g(10);
 const KG = g(11);
+/** Вторая «шт» — как на живой УТ: код «796 » заведён позже, номенклатура им не пользуется. */
+const PCS2 = g(12);
 const VAT20 = g(20);
 const VAT22 = g(22);
 const NOVAT = g(29);
@@ -44,6 +46,7 @@ const TABLES: Record<string, Record<string, unknown>[]> = {
   Catalog_УпаковкиЕдиницыИзмерения: [
     { Ref_Key: PCS, Description: "шт", Code: "0796" },
     { Ref_Key: KG, Description: "кг", Code: "0166" },
+    { Ref_Key: PCS2, Description: "шт", Code: "796 " },
   ],
   Catalog_СтавкиНДС: [
     {
@@ -77,12 +80,13 @@ function select(rows: Record<string, unknown>[], filter: string) {
     (r) =>
       (values.length === 0 ||
         values.includes(String(r["Description"])) ||
-        values.includes(String(r["Code"]))) &&
+        // 1С сравнивает строки без хвостовых пробелов: «796» находит код «796 ».
+        values.includes(String(r["Code"] ?? "").trimEnd())) &&
       (!filter.includes("Основная eq true") || r["Основная"] === true),
   );
 }
 
-function setup(schema: FakeSchema = "ut11") {
+function setup(schema: FakeSchema = "ut11", usedUnits: string[] = [PCS]) {
   const posts: { set: string; body: Record<string, unknown> }[] = [];
   const fake = fake1C(
     {
@@ -93,6 +97,10 @@ function setup(schema: FakeSchema = "ut11") {
     {
       schema,
       data: (q: FakeQuery) => {
+        const filter = q.params.get("$filter") ?? "";
+        const unit = /ЕдиницаИзмерения_Key eq guid'([0-9a-f-]{36})'/.exec(filter)?.[1];
+        if (q.base === "Catalog_Номенклатура" && unit)
+          return usedUnits.includes(unit) ? [{ Ref_Key: g(99) }] : [];
         const rows = TABLES[q.base];
         return rows ? select(rows, q.params.get("$filter") ?? "") : undefined;
       },
@@ -232,5 +240,17 @@ describe("create_nomenclature в Управлении торговлей", () =>
     expect(r.isError, r.text.slice(0, 300)).toBeFalsy();
     expect(r.sc["payload"]).not.toHaveProperty("ВидНоменклатуры_Key");
     expect(r.sc["payload"]).not.toHaveProperty("ЕдиницаДляОтчетов_Key");
+  });
+
+  it("две «шт» в базе — взята та, которой пользуется номенклатура, с заметкой; обе в ходу — отказ", async () => {
+    const r = await setup().call({ name: "ZZ-TEST", kind: "Товары" });
+    expect(r.isError, r.text.slice(0, 300)).toBeFalsy();
+    expect(r.sc["payload"]).toMatchObject({ ЕдиницаИзмерения_Key: PCS });
+    expect(JSON.stringify(r.sc["notes"])).toContain("пользуется номенклатура");
+    const both = await setup("ut11", [PCS, PCS2]).call({ name: "ZZ-TEST", kind: "Товары" });
+    expect(both.isError).toBe(true);
+    expect(both.text).toContain(PCS2);
+    const explicit = await setup().call({ name: "ZZ-TEST", kind: "Товары", unit: PCS2 });
+    expect(explicit.sc["payload"]).toMatchObject({ ЕдиницаИзмерения_Key: PCS2 });
   });
 });

@@ -67,28 +67,18 @@ export async function tradeNomenclatureSchema(conn: Connection, set: string): Pr
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Один элемент по Ref_Key или точному наименованию (код — для единиц); несколько или ни одного — текст отказа. */
+/** Один элемент по Ref_Key или точному наименованию; несколько или ни одного — текст отказа. */
 async function one(
   conn: Connection,
   set: string,
   query: string,
   label: string,
   extra: string[] = [],
-  byCode = false,
 ): Promise<ODataEntity | string> {
   const q = query.trim();
   const filter = GUID.test(q)
     ? cmp("Ref_Key", "eq", odataGuid(q))
-    : and(
-        "DeletionMark eq false",
-        byCode
-          ? or(
-              cmp("Description", "eq", odataString(q)),
-              cmp("Code", "eq", odataString(q)),
-              cmp("Code", "eq", odataString(q.padStart(4, "0"))),
-            )
-          : cmp("Description", "eq", odataString(q)),
-      );
+    : and("DeletionMark eq false", cmp("Description", "eq", odataString(q)));
   const { value } = await conn.client.getCollection<ODataEntity>(
     `${set}${buildQuery({ filter, select: ["Ref_Key", "Description", ...extra], top: 5 })}`,
   );
@@ -98,6 +88,57 @@ async function one(
     `${label}: под «${q}» подходит несколько — ${value.map((r) => `${String(r["Description"])} (${String(r["Ref_Key"])})`).join("; ")}. ` +
     "Укажите Ref_Key. Ничего не создано."
   );
+}
+
+/**
+ * Единица по названию или коду. Одинаковых бывает несколько (на живой УТ — две «шт»: «0796» и заведённая позже «796 »):
+ * тогда берётся та, которой пользуется номенклатура базы, если такая одна; иначе — отказ со ссылками.
+ */
+async function resolveUnit(
+  conn: Connection,
+  set: string,
+  query: string,
+  notes: string[],
+): Promise<ODataEntity | string> {
+  const q = query.trim();
+  if (GUID.test(q)) return one(conn, UNITS, q, "Единица измерения");
+  const { value } = await conn.client.getCollection<ODataEntity>(
+    `${UNITS}${buildQuery({
+      filter: and(
+        "DeletionMark eq false",
+        or(
+          cmp("Description", "eq", odataString(q)),
+          cmp("Code", "eq", odataString(q)),
+          cmp("Code", "eq", odataString(q.padStart(4, "0"))),
+        ),
+      ),
+      select: ["Ref_Key", "Description", "Code"],
+      top: 5,
+    })}`,
+  );
+  if (value.length === 1) return value[0]!;
+  if (value.length === 0) return `Единица измерения «${q}» не найдена. Ничего не создано.`;
+  const used: ODataEntity[] = [];
+  for (const u of value) {
+    const { value: items } = await conn.client.getCollection<ODataEntity>(
+      `${set}${buildQuery({
+        filter: cmp("ЕдиницаИзмерения_Key", "eq", odataGuid(String(u["Ref_Key"]))),
+        select: ["Ref_Key"],
+        top: 1,
+      })}`,
+    );
+    if (items.length) used.push(u);
+  }
+  if (used.length === 1) {
+    notes.push(
+      `Единиц «${q}» в базе ${value.length}; взята та, которой пользуется номенклатура: код ${String(used[0]!["Code"]).trim()} ` +
+        `(${String(used[0]!["Ref_Key"])}). Другая — unit с её Ref_Key.`,
+    );
+    return used[0]!;
+  }
+  return `Единица измерения: под «${q}» подходит несколько — ${value
+    .map((r) => `${String(r["Description"])}, код ${String(r["Code"]).trim()} (${String(r["Ref_Key"])})`)
+    .join("; ")}. Укажите Ref_Key. Ничего не создано.`;
 }
 
 /** Основная действующая ставка НДС на день: признак «Основная», не расчётная, день внутри периода действия. */
@@ -155,7 +196,8 @@ export async function createTradeNomenclature(
       `isService=true, а вид «${String(kindRow["Description"])}» — ${String(kindRow["ТипНоменклатуры"])}: выберите вид ` +
         "услуг. Ничего не создано.",
     );
-  const unit = await one(conn, UNITS, input.unit ?? "796", "Единица измерения", [], true);
+  const unitNotes: string[] = [];
+  const unit = await resolveUnit(conn, set, input.unit ?? "796", unitNotes);
   if (typeof unit === "string") return fail(unit);
   const day = await previewDay(conn);
   const rate = input.vatRate
@@ -177,6 +219,7 @@ export async function createTradeNomenclature(
     СтавкаНДС_Key: String(rate["Ref_Key"]),
   };
   const notes = [
+    ...unitNotes,
     `Вид «${String(kindRow["Description"])}», единица «${String(unit["Description"])}», ставка НДС «${String(rate["Description"])}»` +
       (input.vatRate ? "." : " — основная действующая."),
   ];
