@@ -254,7 +254,7 @@ describe("create_nomenclature в Управлении торговлей", () =>
     expect(explicit.sc["payload"]).toMatchObject({ ЕдиницаИзмерения_Key: PCS2 });
   });
 
-  it("пометка номенклатуры: 1С отвечает 500 (как на живой УТ) — понятный отказ с советом; другой 500 — как был", async () => {
+  it("изменение номенклатуры: 1С отвечает 500 (как на живой УТ) — понятный отказ; у контрагента — как был", async () => {
     const s = setup();
     const inner = globalThis.fetch;
     vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
@@ -276,13 +276,21 @@ describe("create_nomenclature в Управлении торговлей", () =>
       MARK,
     );
     expect(r.isError).toBe(true);
-    expect(r.text).toContain("Пометьте позицию в 1С");
+    expect(r.text).toContain("Измените позицию в 1С");
+    for (const [tool, args] of [
+      ["write.catalog.update_nomenclature", { ref: GOODS, article: "ZZ-2" }],
+      ["write.entity.move_to_folder", { entitySet: "Catalog_Номенклатура", ref: GOODS, folder: FOLDER }],
+    ] as const) {
+      const u = await s.call({ ...args, confirm: true }, tool);
+      expect(u.isError, tool).toBe(true);
+      expect(u.text, tool).toContain("Измените позицию в 1С");
+    }
     expect(r.text).toContain("Не удалось записать");
     const other = await s.call(
       { entitySet: "Catalog_Контрагенты", ref: GOODS, mark: true, confirm: true },
       MARK,
     );
     expect(other.isError).toBe(true);
-    expect(other.text).not.toContain("Пометьте позицию в 1С");
+    expect(other.text).not.toContain("Измените позицию в 1С");
   });
 });

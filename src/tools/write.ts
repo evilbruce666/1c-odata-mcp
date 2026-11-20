@@ -1683,6 +1683,22 @@ function bankSettlementPatchRefusal(entitySet: string, fields: Record<string, un
 }
 
 /** Общий путь изменения (PATCH): dry-run при confirm=false, иначе применяет. */
+/**
+ * Управление торговлей 11.5 (копия рабочей базы, 20.11.2026): любое изменение существующей номенклатуры через OData —
+ * правку, перемещение в папку, пометку удаления — 1С отвергает ответом 500 «Не удалось записать …» без причины, и у
+ * позиции, созданной в 1С, и у созданной коннектором; создание проходит. Причину 1С показывает только в своём
+ * интерфейсе. Отказ до записи не ставится: в другой базе изменение может работать.
+ */
+function nomenclatureChangeRefused(e: unknown, entitySet: string): string | undefined {
+  if (entitySet !== "Catalog_Номенклатура" || !(e instanceof ODataError) || e.kind !== "server")
+    return undefined;
+  return (
+    `1С не записала изменение номенклатуры (${e.message}). Ничего не изменено. В Управлении торговлей так ` +
+    "отказывает изменение существующей номенклатуры через OData — любой позиции, не только созданной коннектором; " +
+    "причину 1С показывает в своём интерфейсе. Измените позицию в 1С."
+  );
+}
+
 async function patchOrPreview(
   conn: Connection,
   entitySet: string,
@@ -1709,7 +1725,14 @@ async function patchOrPreview(
         : `Предпросмотр. ВНИМАНИЕ: запись в базу "${conn.cfg.name}" запрещена — включите ODATA_DB_${conn.cfg.name.toUpperCase()}_WRITABLE=true (и READ_ONLY=false).`,
     });
   }
-  const updated = await conn.client.patch<ODataEntity>(`${entitySet}(guid'${guid}')?$format=json`, fields);
+  let updated: ODataEntity;
+  try {
+    updated = await conn.client.patch<ODataEntity>(`${entitySet}(guid'${guid}')?$format=json`, fields);
+  } catch (e) {
+    const refusal = nomenclatureChangeRefused(e, entitySet);
+    if (refusal) return fail(refusal);
+    throw e;
+  }
   // Успех — только по фактически сохранённым значениям (#60): 1С может принять PATCH и при записи
   // объекта перезаполнить часть полей сама.
   const types = await scalarFields(conn, entitySet, fields);
@@ -2205,15 +2228,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         try {
           updated = await conn.client.patch<ODataEntity>(path, { DeletionMark: mark });
         } catch (e) {
-          // Управление торговлей 11.5 (копия рабочей базы, 20.11.2026): пометку любой номенклатуры через OData 1С
-          // отвергает ответом 500 «Не удалось записать …» без причины — и созданной в 1С, и созданной коннектором;
-          // обычная запись той же позиции проходит. Причину 1С показывает только в своём интерфейсе.
-          if (mark && entitySet === "Catalog_Номенклатура" && e instanceof ODataError && e.kind === "server")
-            return fail(
-              `1С не поставила пометку удаления (${e.message}). Ничего не изменено. В Управлении торговлей так ` +
-                "отказывает пометка номенклатуры через OData — любой позиции, не только созданной коннектором; " +
-                "причину 1С показывает в своём интерфейсе. Пометьте позицию в 1С.",
-            );
+          const refusal = nomenclatureChangeRefused(e, entitySet);
+          if (refusal) return fail(refusal);
           throw e;
         }
         return ok({
