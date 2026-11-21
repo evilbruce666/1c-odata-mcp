@@ -2,7 +2,7 @@ import type { CallToolResult } from "@modelcontextprotocol/server";
 import type { Connection } from "../context.js";
 import type { ODataEntity } from "../types/odata.js";
 import { ODataError } from "../odata/errors.js";
-import { EMPTY_REF, detectMechanism, slicePrices } from "../odata/pricing.js";
+import { EMPTY_REF } from "../odata/pricing.js";
 import { buildQuery, cmp, odataGuid, or } from "../odata/query.js";
 import { InputError } from "../errors.js";
 import { withoutAccounting } from "../odata/configuration.js";
@@ -293,8 +293,8 @@ export async function createTradeSurplus(
     await resolveCatalogItem(conn, [INCOME_ITEMS], "Статья доходов", input.incomeItem),
     await resolveCatalogItem(conn, ["Catalog_Валюты"], "Справочник «Валюты»", "643"),
   ];
+  requirePrices(input.lines, kind.name ?? input.priceKind);
   const date = await docDate(conn, input.date);
-  const priced = await pricesByKind(conn, kind, input.lines, date);
   const payload = {
     Date: date,
     Posted: false,
@@ -309,56 +309,26 @@ export async function createTradeSurplus(
       LineNumber: i + 1,
       Номенклатура_Key: l.nomenclatureRef,
       Количество: l.quantity,
-      Цена: priced.prices[i]!,
-      Сумма: round2(l.quantity * priced.prices[i]!),
+      Цена: l.price!,
+      Сумма: round2(l.quantity * l.price!),
     })),
   };
-  const notes = [...priced.notes, ...(await seriesNotes(conn, input.lines, SERIES_IN_1C))];
+  const notes = await seriesNotes(conn, input.lines, SERIES_IN_1C);
   return createCore(conn, STOCK_DOCS.surplus, payload, confirm, notes, () => undefined);
 }
 
 /**
- * Цены строк оприходования: указанная в строке — как есть; не указана (0) — действующая цена вида цены на дату
- * документа, как заполняет форма 1С (решение владельца, 21.11.2026). Нет цены у позиции — отказ: излишки с нулевой
- * стоимостью ушли бы молча (ревью выпуска 3).
+ * Цена каждой строки оприходования обязательна (решение владельца, 21.11.2026). Подстановка по виду цены дважды дала
+ * находки ревью: цена в валюте и за упаковку уходила бы без пересчёта. Узнать цену — read.analytics.get_prices.
  */
-async function pricesByKind(
-  conn: Connection,
-  kind: { ref: string; name?: string | undefined },
-  lines: readonly StockLine[],
-  at: string,
-): Promise<{ prices: number[]; notes: string[] }> {
-  const missing = [
-    ...new Set(lines.filter((l) => !l.price).map((l) => guidOf(l.nomenclatureRef).toLowerCase())),
-  ];
-  if (!missing.length) return { prices: lines.map((l) => l.price!), notes: [] };
-  let found: Map<string, number>;
-  try {
-    const mech = await detectMechanism(conn);
-    const records = await slicePrices(conn, mech, { kindRefs: [kind.ref], itemRefs: missing, at });
-    // Цена без характеристики: строки коннектора характеристику не задают.
-    found = new Map(
-      records.filter((r) => !r.characteristicRef).map((r) => [r.itemRef.toLowerCase(), r.price] as const),
-    );
-  } catch (e) {
+function requirePrices(lines: readonly StockLine[], kindName: string): void {
+  const missing = lines.map((l, i) => (l.price ? 0 : i + 1)).filter(Boolean);
+  if (missing.length)
     throw new InputError(
-      `Цены вида «${kind.name ?? kind.ref}» прочитать не удалось (${e instanceof Error ? e.message : String(e)}). ` +
-        "Укажите price в строках. Ничего не записано.",
+      `Оприходование излишков: укажите price в строках ${missing.join(", ")} — коннектор цену не подставляет. ` +
+        `Действующую цену вида «${kindName}» покажет read.analytics.get_prices; уточните её у пользователя. ` +
+        "Ничего не записано.",
     );
-  }
-  const absent = missing.filter((r) => !found.get(r));
-  if (absent.length)
-    throw new InputError(
-      `У вида цены «${kind.name ?? kind.ref}» нет цены на ${at.slice(0, 10)} для позиций: ${absent.join(", ")}. ` +
-        "Укажите price в этих строках. Ничего не записано.",
-    );
-  return {
-    prices: lines.map((l) => l.price || found.get(guidOf(l.nomenclatureRef).toLowerCase())!),
-    notes: [
-      `Цены ${missing.length === 1 ? "одной позиции" : `${missing.length} позиций`} подставлены по виду цены ` +
-        `«${kind.name ?? kind.ref}» на ${at.slice(0, 10)}, как в форме 1С. Указанные в строках цены не менялись.`,
-    ],
-  };
 }
 
 export interface WriteoffInput {

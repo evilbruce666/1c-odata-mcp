@@ -102,8 +102,6 @@ function setup(
     dropSeriesWithoutStatus?: boolean;
     /** Последнее проведённое перемещение организации: откуда берётся налогообложение НДС. */
     lastTransfer?: Record<string, unknown>;
-    /** Действующие цены вида «Закупочные цены» по позициям: срез последних регистра цен. */
-    prices?: Record<string, number>;
     /** Флаги ордерной схемы складов: по Ref_Key склада. */
     orderScheme?: Record<string, Record<string, unknown>>;
   } = {},
@@ -129,23 +127,6 @@ function setup(
     {
       schema: o.schema ?? "ut11",
       data: (q: FakeQuery) => {
-        // Механизм цен — прежний: последние документы цен заполняют «Товары», а не «Товары2_5».
-        if (q.base === "Document_УстановкаЦенНоменклатуры_Товары2_5") return [];
-        if (
-          q.base === "Document_УстановкаЦенНоменклатуры" ||
-          q.base === "Document_УстановкаЦенНоменклатуры_Товары"
-        )
-          return [{ Ref_Key: g("7", 1) }];
-        if (q.base === "InformationRegister_ЦеныНоменклатуры_RecordType" && q.fn === "SliceLast")
-          return Object.entries(o.prices ?? { [ITEM]: 12.5 })
-            .filter(([item]) => (q.args["Condition"] ?? "").includes(item))
-            .map(([item, Цена]) => ({
-              Period: "2026-11-01T00:00:00",
-              Номенклатура_Key: item,
-              ВидЦены_Key: PRICE_KIND,
-              Характеристика_Key: EMPTY,
-              Цена,
-            }));
         if (q.base === "Catalog_Склады" && o.orderScheme)
           return pick(
             TABLES["Catalog_Склады"]!.map((w) => ({ ...w, ...o.orderScheme![String(w["Ref_Key"])] })),
@@ -426,38 +407,22 @@ describe("складские документы в Управлении торг
     expect(s.fake.violations).toEqual([]);
   });
 
-  it("оприходование без цены в строке — цена по виду цены на дату документа, с заметкой; указанная — как есть", async () => {
-    const s = setup({ prices: { [ITEM]: 12.5, [ITEM_SERIES]: 99 } });
+  it("оприходование без цены в строке — отказ с номерами строк и подсказкой get_prices; регистр цен не читается", async () => {
+    const s = setup();
     const r = await s.call(S, {
       organization: "ТЕСТ",
       warehouse: "Основной",
       priceKind: "Закупочные цены",
       incomeItem: "Излишки",
-      date: "2026-11-20",
-      lines: [line(2), line(1, { nomenclatureRef: ITEM_SERIES, price: 7 })],
-    });
-    expect(r.isError, r.text).toBeFalsy();
-    expect(payloadOf(r)["Товары"]).toMatchObject([
-      { Номенклатура_Key: ITEM, Цена: 12.5, Сумма: 25 },
-      { Номенклатура_Key: ITEM_SERIES, Цена: 7, Сумма: 7 },
-    ]);
-    expect(JSON.stringify(r.sc["notes"])).toContain(
-      "подставлены по виду цены «Закупочные цены» на 2026-11-20",
-    );
-  });
-
-  it("оприходование: у позиции нет цены этого вида — отказ «укажите price», записей нет", async () => {
-    const s = setup({ prices: {} });
-    const r = await s.call(S, {
-      organization: "ТЕСТ",
-      warehouse: "Основной",
-      priceKind: "Закупочные цены",
-      incomeItem: "Излишки",
-      lines: [line(1)],
+      lines: [line(2, { price: 5 }), line(1)],
     });
     expect(r.isError).toBe(true);
-    expect(r.text).toContain("Укажите price");
+    expect(r.text).toContain("укажите price в строках 2");
+    expect(r.text).toContain("read.analytics.get_prices");
     expect(s.posts).toEqual([]);
+    expect(s.fake.requests.some((q) => q.resource.startsWith("InformationRegister_ЦеныНоменклатуры"))).toBe(
+      false,
+    );
   });
 
   it("пересчёт: organization не используется — заметка, а не молчание", async () => {
@@ -477,7 +442,7 @@ describe("складские документы в Управлении торг
       priceKind: PRICE_KIND,
       incomeItem: "1",
       inventoryRef: g("9", 9),
-      lines: [line(1)],
+      lines: [line(1, { price: 2 })],
     });
     expect(r.isError, r.text).toBeFalsy();
     expect(payloadOf(r)).toMatchObject({
@@ -553,7 +518,7 @@ describe("складские документы в Управлении торг
     warehouse: "Основной",
     priceKind: "Закупочные цены",
     incomeItem: "Излишки",
-    lines: [line(2), line(1)],
+    lines: [line(2, { price: 3 }), line(1, { price: 4 })],
   };
 
   it("оприходование: движения совпали — verified; отмена проведения — движений нет, тоже verified; проводки Бухгалтерии не читаются", async () => {

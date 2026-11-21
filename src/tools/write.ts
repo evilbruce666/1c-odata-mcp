@@ -3425,8 +3425,9 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       description:
         "Создаёт документ «Оприходование товаров» (излишки). НЕПРОВЕДЁННЫЙ; провести — post_document " +
         "(проводки Дт 41 Кт 91.01). Можно указать документ-основание — инвентаризацию. dry-run/confirm. В " +
-        "Управлении торговлей — «Оприходование излишков товаров»: обязательны priceKind и incomeItem (уточните у " +
-        "пользователя), основание — пересчёт; post_document сверяет движения по складу.",
+        "Управлении торговлей — «Оприходование излишков товаров»: обязательны priceKind, incomeItem и price в каждой " +
+        "строке (уточните у пользователя; действующую цену покажет read.analytics.get_prices), основание — " +
+        "пересчёт; post_document сверяет движения по складу.",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
