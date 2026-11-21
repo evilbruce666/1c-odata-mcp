@@ -1470,10 +1470,16 @@ export async function withSettlementAccounts(
 const settlementLinesField = z
   .array(
     z.object({
-      contractRef: z.string().min(1).optional().describe("Бухгалтерия: Ref_Key договора строки"),
+      contractRef: z
+        .string()
+        .trim()
+        .regex(GUID_RE, "Ref_Key договора (GUID)")
+        .optional()
+        .describe("Бухгалтерия: Ref_Key договора строки"),
       basisRef: z
         .string()
-        .min(1)
+        .trim()
+        .regex(GUID_RE, "Ref_Key документа-основания (GUID)")
         .optional()
         .describe(
           "Управление торговлей: Ref_Key документа, по которому идут расчёты строки (поставщику — приобретение или заказ поставщику; от клиента — реализация или заказ клиента)",
@@ -1523,55 +1529,76 @@ async function transferTarget(
   if (!ref) throw new InputError("Счёт-получатель не найден. Ничего не записано.");
   if (ref === source.toLowerCase())
     throw new InputError("Счёт-получатель совпадает со счётом-отправителем. Ничего не записано.");
-  const set = resolveEntity(CATALOGS.bankAccounts, await conn.available());
-  if (!set) throw new InputError("Справочник банковских счетов не опубликован в OData. Ничего не записано.");
-  const read = (r: string) =>
-    conn.client.getEntity<ODataEntity>(
-      `${set}(${odataGuid(r)})${buildQuery({ select: ["Ref_Key", "Owner", "ВалютаДенежныхСредств_Key"] })}`,
-    );
-  const [src, dst] = await Promise.all([read(source), read(ref)]);
-  if (String(dst["Owner"] ?? "").toLowerCase() !== orgKey.toLowerCase())
-    throw new InputError(
-      "Счёт-получатель — не банковский счёт этой организации. Перевод контрагенту — другой вид операции. Ничего не записано.",
-    );
-  if (
-    String(dst["ВалютаДенежныхСредств_Key"] ?? "").toLowerCase() !==
-    String(src["ВалютаДенежныхСредств_Key"] ?? "").toLowerCase()
-  )
-    throw new InputError(
-      "Валюта счёта-получателя другая: это покупка или продажа валюты — оформите её в 1С. Ничего не записано.",
-    );
+  const refusal = await transferAccountsRefusal(conn, orgKey, source, ref);
+  if (refusal) throw new InputError(refusal);
   return { ref };
 }
 
 /**
- * Вид списания, который 1С из OData-записи проводит неверно (WRITEOFF_REFUSED), — отказ и в копии, и при смене вида
- * операции через update_entity, не только при создании (ревью выпуска 5).
+ * Счета перевода: получатель задан, это не отправитель, счёт той же организации и в той же валюте. Одна проверка для
+ * создания, копии и правки (ревью 1.0: копия и правка проверяли только «не пуст и не тот же»).
  */
-function writeoffKindRefusal(
+async function transferAccountsRefusal(
+  conn: Connection,
+  orgKey: unknown,
+  source: unknown,
+  target: unknown,
+): Promise<string | undefined> {
+  const ref = (v: unknown) => (typeof v === "string" && v && v !== EMPTY_REF ? v.toLowerCase() : undefined);
+  const src = ref(source);
+  const dst = ref(target);
+  if (!dst || dst === src)
+    return "Перевод на другой счёт без счёта-получателя (или на тот же счёт) 1С проведёт Дт 51 Кт 51 по одному счёту. Укажите СчетКонтрагента_Key — другой банковский счёт организации. Ничего не записано.";
+  if (!src) return "У перевода не указан счёт-отправитель (СчетОрганизации_Key). Ничего не записано.";
+  const set = resolveEntity(CATALOGS.bankAccounts, await conn.available());
+  if (!set) return "Справочник банковских счетов не опубликован в OData. Ничего не записано.";
+  const read = (r: string) =>
+    conn.client.getEntity<ODataEntity>(
+      `${set}(${odataGuid(r)})${buildQuery({ select: ["Ref_Key", "Owner", "ВалютаДенежныхСредств_Key"] })}`,
+    );
+  const [a, b] = await Promise.all([read(src), read(dst)]);
+  if (String(b["Owner"] ?? "").toLowerCase() !== String(orgKey ?? "").toLowerCase())
+    return "Счёт-получатель — не банковский счёт этой организации. Перевод контрагенту — другой вид операции. Ничего не записано.";
+  if (
+    String(b["ВалютаДенежныхСредств_Key"] ?? "").toLowerCase() !==
+    String(a["ВалютаДенежныхСредств_Key"] ?? "").toLowerCase()
+  )
+    return "Валюта счёта-получателя другая: это покупка или продажа валюты — оформите её в 1С. Ничего не записано.";
+  return undefined;
+}
+
+/**
+ * Вид списания, который 1С из OData-записи проводит неверно (WRITEOFF_REFUSED), — отказ и в копии, и при смене вида
+ * операции через update_entity, не только при создании (ревью выпуска 5). Перевод — проверка счетов итогового
+ * документа: копия — по её реквизитам, правка — по текущему документу с правкой (ревью 1.0).
+ */
+async function writeoffKindRefusal(
+  conn: Connection,
   entitySet: string,
   fields: Record<string, unknown>,
-  /** Правка через update_entity: остальных реквизитов документа здесь нет. */
-  isUpdate = false,
-): string | undefined {
+  /** Правка через update_entity: ссылка документа, чтобы прочитать реквизиты, которых нет в правке. */
+  updateRef?: string,
+): Promise<string | undefined> {
+  if (!(WRITE_DOCUMENTS.bankOut as readonly string[]).includes(entitySet)) return undefined;
   const kind = fields["ВидОперации"];
-  if (!(WRITE_DOCUMENTS.bankOut as readonly string[]).includes(entitySet) || typeof kind !== "string")
-    return undefined;
-  if (Object.hasOwn(WRITEOFF_REFUSED, kind)) return `${WRITEOFF_REFUSED[kind]} Ничего не записано.`;
-  // Перевод без счёта-получателя (или на тот же счёт) 1С проводит Дт 51 Кт 51 по одному счёту — проводка без смысла.
-  if (kind === TRANSFER_KIND) {
-    if (isUpdate)
-      return "Сменить вид операции на перевод на другой счёт правкой нельзя: нужен счёт-получатель. Создайте перевод — write.money.create_bank_writeoff с targetBankAccount. Ничего не записано.";
-    const target = fields["СчетКонтрагента_Key"];
-    if (
-      typeof target !== "string" ||
-      !target ||
-      target === EMPTY_REF ||
-      target.toLowerCase() === String(fields["СчетОрганизации_Key"] ?? "").toLowerCase()
-    )
-      return "Перевод на другой счёт без счёта-получателя (или на тот же счёт) 1С проведёт Дт 51 Кт 51 по одному счёту. Укажите в fields СчетКонтрагента_Key — другой банковский счёт организации. Ничего не записано.";
+  if (typeof kind === "string" && Object.hasOwn(WRITEOFF_REFUSED, kind))
+    return `${WRITEOFF_REFUSED[kind]} Ничего не записано.`;
+  const keys = ["ВидОперации", "СчетКонтрагента_Key", "СчетОрганизации_Key", "Организация_Key"];
+  let doc = fields;
+  if (updateRef) {
+    if (!keys.some((k) => Object.hasOwn(fields, k))) return undefined;
+    const current = await conn.client.getEntity<ODataEntity>(
+      `${entitySet}(${odataGuid(updateRef.replace(/[{}']/g, ""))})${buildQuery({ select: keys })}`,
+    );
+    doc = { ...current, ...fields };
   }
-  return undefined;
+  if (doc["ВидОперации"] !== TRANSFER_KIND) return undefined;
+  return transferAccountsRefusal(
+    conn,
+    doc["Организация_Key"],
+    doc["СчетОрганизации_Key"],
+    doc["СчетКонтрагента_Key"],
+  );
 }
 
 /** После записи: счёт расчётов пуст — 1С проведёт документ без проводок по расчётам, молча. */
@@ -3022,7 +3049,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           return updateTradeMoney(conn, entitySet, ref, fields, confirm, (f) =>
             patchOrPreview(conn, entitySet, ref, f, confirm),
           );
-        const refusedKind = writeoffKindRefusal(entitySet, fields, true);
+        const refusedKind = await writeoffKindRefusal(conn, entitySet, fields, ref);
         if (refusedKind) return fail(refusedKind);
         return patchOrPreview(conn, entitySet, ref, fields, confirm);
       }),
@@ -4283,7 +4310,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         }
         // Реквизиты шапки применяем последними — явное указание важнее пересчёта.
         Object.assign(payload, fields ?? {});
-        const refusedKind = writeoffKindRefusal(entitySet, payload);
+        const refusedKind = await writeoffKindRefusal(conn, entitySet, payload);
         if (refusedKind) return fail(refusedKind);
         // Копия сохраняет счета расчётов исходного документа (бухгалтер мог поставить их вручную).
         // Настройку договора применяем, только если в fields сменили договор и счета не заданы явно.

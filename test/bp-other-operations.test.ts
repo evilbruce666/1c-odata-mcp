@@ -672,7 +672,89 @@ describe("Бухгалтерия: прочие операции денежных
       fields: { ВидОперации: "ПереводНаДругойСчет" },
     });
     expect(upd.err).toBe(true);
-    expect(upd.text).toContain("правкой нельзя");
+    expect(upd.text).toContain("без счёта-получателя");
+    expect(s.fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
+  });
+
+  it("1.0.1: копия и правка перевода проверяют счёт-получатель как создание — организацию, валюту, не тот же", async () => {
+    const ORG = g("e", 1);
+    const RUB = g("e", 3);
+    const USD = g("e", 4);
+    const [B1, B2, B3, B4] = [g("f", 1), g("f", 2), g("f", 3), g("f", 4)];
+    const DOC = g("d", 5);
+    const acc = (Ref_Key: string, Owner: string, cur: string) => ({
+      Ref_Key,
+      Owner,
+      Owner_Type: "StandardODATA.Catalog_Организации",
+      Description: Ref_Key,
+      НомерСчета: Ref_Key.slice(-4),
+      ВалютаДенежныхСредств_Key: cur,
+      DeletionMark: false,
+    });
+    const s = setup({
+      plainChart: true,
+      extra: {
+        Catalog_БанковскиеСчета: [
+          acc(B1, ORG, RUB),
+          acc(B2, ORG, RUB),
+          acc(B3, ORG, USD),
+          acc(B4, g("e", 2), RUB),
+        ],
+        Document_СписаниеСРасчетногоСчета: [
+          {
+            Ref_Key: DOC,
+            Posted: false,
+            ВидОперации: "ПереводНаДругойСчет",
+            Организация_Key: ORG,
+            СчетОрганизации_Key: B1,
+            СчетКонтрагента_Key: B2,
+            СуммаДокумента: 5,
+            РасшифровкаПлатежа: [{ LineNumber: "1", СуммаПлатежа: 5 }],
+          },
+        ],
+      },
+    });
+    const SET = "Document_СписаниеСРасчетногоСчета";
+    const copy = (f: Record<string, unknown>) =>
+      s.call("write.document.copy_document", { entitySet: SET, ref: DOC, fields: f });
+    const upd = (f: Record<string, unknown>) =>
+      s.call("write.entity.update_entity", { entitySet: SET, ref: DOC, fields: f });
+    for (const [f, text] of [
+      [{ СчетКонтрагента_Key: B4 }, "не банковский счёт этой организации"],
+      [{ СчетКонтрагента_Key: B3 }, "Валюта счёта-получателя другая"],
+      [{ СчетКонтрагента_Key: B1.toUpperCase() }, "на тот же счёт"],
+    ] as const) {
+      for (const [label, r] of [
+        ["копия", await copy(f)],
+        ["правка", await upd(f)],
+      ] as const) {
+        expect(r.err, `${label} ${JSON.stringify(f)}`).toBe(true);
+        expect(r.text).toContain(text);
+      }
+    }
+    // Правка без счётов (комментарий) — не проверяется; тот же вид с верным счётом — не отказ «правкой нельзя».
+    const comment = await upd({ Комментарий: "x" });
+    expect(comment.err, comment.text).toBe(false);
+    const same = await upd({ ВидОперации: "ПереводНаДругойСчет" });
+    expect(same.err, same.text).toBe(false);
+    const ok = await copy({});
+    expect(ok.err, ok.text).toBe(false);
+    expect(s.fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
+  });
+
+  it("1.0.1: settlementLines — contractRef и basisRef только GUID (отказ схемы, а не ошибка 1С)", async () => {
+    const s = setup({ plainChart: true });
+    await expect(
+      s.call("write.money.create_bank_writeoff", {
+        operationKind: "ОплатаПоставщику",
+        amount: 2,
+        counterpartyRef: CP,
+        settlementLines: [
+          { contractRef: "не-гуид", amount: 1 },
+          { contractRef: CTR, amount: 1 },
+        ],
+      }),
+    ).rejects.toThrow(/GUID/);
     expect(s.fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
   });
 
