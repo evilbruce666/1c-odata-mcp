@@ -365,6 +365,10 @@ const TRADE_WRITE_TOOLS = new Set([
   "write.catalog.create_agreement",
   "write.catalog.create_nomenclature",
   "write.catalog.update_nomenclature",
+  "write.warehouse.create_transfer",
+  "write.warehouse.create_surplus",
+  "write.warehouse.create_writeoff",
+  "write.warehouse.create_inventory",
 ]);
 
 describe("запись на снимке схемы УТ 11 отказывает до предпросмотра", () => {

@@ -54,6 +54,14 @@ import {
 } from "./trade-counterparty.js";
 import { createAgreement, createTradeContract } from "./trade-contracts.js";
 import { createTradeNomenclature, tradeNomenclatureSchema } from "./trade-nomenclature.js";
+import {
+  createTradeInventory,
+  createTradeSurplus,
+  createTradeTransfer,
+  createTradeWriteoff,
+  tradeStockSet,
+  verifyStockMovements,
+} from "./trade-warehouse.js";
 
 /** Тип ссылки на номенклатуру в табличной части (полиморфная ссылка 1С). */
 const NOMENCLATURE_TYPE = "StandardODATA.Catalog_Номенклатура";
@@ -251,7 +259,10 @@ async function findCatalogObject(
 }
 
 /** Резолвит склад по названию; если не задан и склад один — берёт его; иначе undefined. */
-async function resolveWarehouse(conn: Connection, rawName: string | undefined): Promise<string | undefined> {
+export async function resolveWarehouse(
+  conn: Connection,
+  rawName: string | undefined,
+): Promise<string | undefined> {
   const name = rawName?.trim();
   if (rawName !== undefined && !name) throw new InputError("Склад: пустое значение. Ничего не записано.");
   const set = resolveEntity(CATALOGS.warehouses, await conn.available());
@@ -2609,7 +2620,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           // Документ цен: проверка — по движениям регистра цен, а не только по состоянию документа.
           const movements =
             confirm && result["done"] === true
-              ? await verifyPriceMovements(conn, entitySet, ref, post)
+              ? ((await verifyPriceMovements(conn, entitySet, ref, post)) ??
+                (await verifyStockMovements(conn, entitySet, ref, post)))
               : undefined;
           return ok({ ...result, ...movements });
         }
@@ -2656,7 +2668,9 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           );
         }
         // Документ цен проводит не проводки, а записи регистра цен: их и сверяем.
-        const movements = await verifyPriceMovements(conn, entitySet, guid, post);
+        const movements =
+          (await verifyPriceMovements(conn, entitySet, guid, post)) ??
+          (await verifyStockMovements(conn, entitySet, guid, post));
         // Что провёл документ — сразу в ответе: проводки по регистру Хозрасчетный.
         // Сбой чтения проводок не отменяет проведения, только поясняется.
         let postings: Record<string, unknown> = {};
@@ -3217,10 +3231,26 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         nomenclatureRef: z.string().describe("Ref_Key номенклатуры"),
         quantity: z.number().positive().describe("Количество"),
         price: z.number().nonnegative().default(0).describe("Цена за единицу (для оценки)"),
+        seriesRef: z
+          .string()
+          .optional()
+          .describe("Управление торговлей: Ref_Key серии номенклатуры, если вид номенклатуры ведёт серии"),
       }),
     )
     .min(1)
     .describe("Позиции документа");
+  /** Серии — только в Управлении торговлей: в Бухгалтерии их некуда записать. */
+  const noSeries = (lines: Array<{ seriesRef?: string | undefined }>) => {
+    if (lines.some((l) => l.seriesRef))
+      throw new InputError("seriesRef поддерживается только в Управлении торговлей. Ничего не записано.");
+  };
+  /** Склад в УТ обязателен: документ без склада 1С не проведёт. */
+  const tradeWarehouse = async (conn: Connection, name: string | undefined, label = "Склад") => {
+    const ref = await resolveWarehouse(conn, name);
+    if (!ref) throw new InputError(`${label}: укажите склад (в базе их несколько). Ничего не записано.`);
+    return ref;
+  };
+  const tradeComment = z.string().optional().describe("Управление торговлей: комментарий документа");
 
   const toGoodsLines = (
     lines: Array<{ nomenclatureRef: string; quantity: number; price: number }>,
@@ -3330,14 +3360,32 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         toWarehouse: z.string().describe("Склад-получатель: название, код или Ref_Key"),
         date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         lines: whLines,
+        status: z
+          .enum(["Принято", "Отгружено"])
+          .optional()
+          .describe(
+            "Управление торговлей: «Принято» (по умолчанию) — расход с отправителя и приход на получателя одним " +
+              "документом; «Отгружено» — только расход, приход — позже",
+          ),
+        comment: tradeComment,
         confirm: confirmField,
       }),
       outputSchema: createResultSchema,
     },
-    ({ database, organization, fromWarehouse, toWarehouse, date, lines, confirm }) =>
+    ({ database, organization, fromWarehouse, toWarehouse, date, lines, status, comment, confirm }) =>
       guard("write.warehouse.create_transfer", async () => {
         const conn = ctx.db(database);
+        if (await tradeStockSet(conn, "transfer")) {
+          const [from, to] = [
+            await tradeWarehouse(conn, fromWarehouse, "Склад-отправитель"),
+            await tradeWarehouse(conn, toWarehouse, "Склад-получатель"),
+          ];
+          return createTradeTransfer(conn, { organization, from, to, date, status, comment, lines }, confirm);
+        }
         const set = await requireEntity(conn, WRITE_DOCUMENTS.transfer, "Документ «Перемещение товаров»");
+        noSeries(lines);
+        if (status)
+          throw new InputError("status поддерживается только в Управлении торговлей. Ничего не записано.");
         const org = await resolveOrg(conn, organization);
         const [fromKey, toKey] = await Promise.all([
           resolveWarehouse(conn, fromWarehouse),
@@ -3359,6 +3407,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           Организация_Key: org.key,
           СкладОтправитель_Key: fromKey,
           СкладПолучатель_Key: toKey,
+          Комментарий: comment,
           Товары: rows,
         });
         return createOrPreview(conn, set, payload, confirm);
@@ -3376,17 +3425,60 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         database: databaseField,
         organization: organizationField,
         warehouse: z.string().optional().describe("Название, код или Ref_Key склада (если несколько)"),
-        inventoryRef: z.string().optional().describe("Ref_Key инвентаризации-основания (необязательно)"),
+        inventoryRef: z
+          .string()
+          .optional()
+          .describe(
+            "Ref_Key инвентаризации-основания (в Управлении торговлей — пересчёта товаров), необязательно",
+          ),
         date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         lines: whLines,
+        priceKind: z
+          .string()
+          .optional()
+          .describe(
+            "Управление торговлей, обязательно: вид цены — название или Ref_Key. НЕ выбирайте сами — уточните у пользователя",
+          ),
+        incomeItem: z
+          .string()
+          .optional()
+          .describe(
+            "Управление торговлей, обязательно: статья доходов — название, код или Ref_Key. НЕ выбирайте сами — уточните у пользователя",
+          ),
+        comment: tradeComment,
         confirm: confirmField,
       }),
       outputSchema: createResultSchema,
     },
-    ({ database, organization, warehouse, inventoryRef, date, lines, confirm }) =>
+    ({
+      database,
+      organization,
+      warehouse,
+      inventoryRef,
+      date,
+      lines,
+      priceKind,
+      incomeItem,
+      comment,
+      confirm,
+    }) =>
       guard("write.warehouse.create_surplus", async () => {
         const conn = ctx.db(database);
+        if (await tradeStockSet(conn, "surplus")) {
+          if (!priceKind || !incomeItem)
+            throw new InputError(
+              "Управление торговлей: для оприходования излишков нужны вид цены (priceKind) и статья доходов " +
+                "(incomeItem) — уточните у пользователя. Ничего не записано.",
+            );
+          const wh = await tradeWarehouse(conn, warehouse);
+          return createTradeSurplus(
+            conn,
+            { organization, warehouse: wh, priceKind, incomeItem, inventoryRef, date, comment, lines },
+            confirm,
+          );
+        }
         const set = await requireEntity(conn, WRITE_DOCUMENTS.surplus, "Документ «Оприходование товаров»");
+        noSeries(lines);
         const org = await resolveOrg(conn, organization);
         const warehouseKey = await resolveWarehouse(conn, warehouse);
         const lineAcc = await goodsOnlyAccounts(conn, org.key, toGoodsLines(lines));
@@ -3407,6 +3499,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           Склад_Key: warehouseKey,
           ИнвентаризацияТоваровНаСкладе_Key: inventoryRef,
           СуммаДокумента: rowsTotal(rows),
+          Комментарий: comment,
           Товары: rows,
         });
         return createOrPreview(conn, set, payload, confirm);
@@ -3424,17 +3517,43 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         database: databaseField,
         organization: organizationField,
         warehouse: z.string().optional().describe("Название, код или Ref_Key склада (если несколько)"),
-        inventoryRef: z.string().optional().describe("Ref_Key инвентаризации-основания (необязательно)"),
+        inventoryRef: z
+          .string()
+          .optional()
+          .describe(
+            "Ref_Key инвентаризации-основания (в Управлении торговлей — пересчёта товаров), необязательно",
+          ),
         date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         lines: whLines,
+        expenseItem: z
+          .string()
+          .optional()
+          .describe(
+            "Управление торговлей, обязательно: статья расходов — название, код или Ref_Key. НЕ выбирайте сами — уточните у пользователя",
+          ),
+        comment: tradeComment,
         confirm: confirmField,
       }),
       outputSchema: createResultSchema,
     },
-    ({ database, organization, warehouse, inventoryRef, date, lines, confirm }) =>
+    ({ database, organization, warehouse, inventoryRef, date, lines, expenseItem, comment, confirm }) =>
       guard("write.warehouse.create_writeoff", async () => {
         const conn = ctx.db(database);
+        if (await tradeStockSet(conn, "writeoff")) {
+          if (!expenseItem)
+            throw new InputError(
+              "Управление торговлей: для списания недостач нужна статья расходов (expenseItem) — уточните у " +
+                "пользователя. Ничего не записано.",
+            );
+          const wh = await tradeWarehouse(conn, warehouse);
+          return createTradeWriteoff(
+            conn,
+            { organization, warehouse: wh, expenseItem, inventoryRef, date, comment, lines },
+            confirm,
+          );
+        }
         const set = await requireEntity(conn, WRITE_DOCUMENTS.writeoff, "Документ «Списание товаров»");
+        noSeries(lines);
         const org = await resolveOrg(conn, organization);
         const warehouseKey = await resolveWarehouse(conn, warehouse);
         const lineAcc = await goodsOnlyAccounts(conn, org.key, toGoodsLines(lines));
@@ -3455,6 +3574,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           Склад_Key: warehouseKey,
           ИнвентаризацияТоваровНаСкладе_Key: inventoryRef,
           СуммаДокумента: rowsTotal(rows),
+          Комментарий: comment,
           Товары: rows,
         });
         return createOrPreview(conn, set, payload, confirm);
@@ -3485,13 +3605,21 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           )
           .min(1)
           .describe("Позиции инвентаризации"),
+        comment: tradeComment,
         confirm: confirmField,
       }),
       outputSchema: createResultSchema,
     },
-    ({ database, organization, warehouse, date, lines, confirm }) =>
+    ({ database, organization, warehouse, date, lines, comment, confirm }) =>
       guard("write.warehouse.create_inventory", async () => {
         const conn = ctx.db(database);
+        // В УТ — пересчёт товаров: у него нет организации, учёт и факт — в строке.
+        if (await tradeStockSet(conn, "inventory"))
+          return createTradeInventory(
+            conn,
+            { warehouse: await tradeWarehouse(conn, warehouse), date, comment, lines },
+            confirm,
+          );
         const set = await requireEntity(
           conn,
           WRITE_DOCUMENTS.inventory,
@@ -3526,6 +3654,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           Posted: false,
           Организация_Key: org.key,
           Склад_Key: warehouseKey,
+          Комментарий: comment,
           Товары: rows,
         });
         return createOrPreview(conn, set, payload, confirm);

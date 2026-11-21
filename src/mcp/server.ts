@@ -24,6 +24,7 @@ import { tradeWithoutAccounting, withoutAccounting } from "../odata/configuratio
 import { PRICE_DOC, priceMechanisms } from "../odata/pricing.js";
 import { PARTNERS, tradeCounterpartySchema } from "../tools/trade-counterparty.js";
 import { tradeNomenclatureSchema } from "../tools/trade-nomenclature.js";
+import { STOCK_DOCS, tradeStockSchema } from "../tools/trade-warehouse.js";
 import { registerDebtTools } from "../tools/debts.js";
 import { registerMonthCloseTools } from "../tools/month-close.js";
 import { registerCardTools } from "../tools/card.js";
@@ -442,18 +443,29 @@ const prices = async (conn: Connection) => (await priceMechanisms(conn)).length 
 const partners = (conn: Connection) => tradeCounterpartySchema(conn);
 const NOMENCLATURE = "Catalog_Номенклатура";
 const nomenclature = (conn: Connection) => tradeNomenclatureSchema(conn, NOMENCLATURE);
+/** Складские документы УТ: перемещение, излишки, недостачи, пересчёт — устроены как в УТ, а не как в Бухгалтерии. */
+const STOCK_SETS = new Set<string>(Object.values(STOCK_DOCS));
+const stock = (set: string) => async (conn: Connection) => (await tradeStockSchema(conn, set)) !== undefined;
 const TRADE_WRITE: Record<string, TradeWrite> = {
   "write.pricing.create_price_setting": { applies: () => true, ready: prices },
-  "write.document.post_document": { applies: (a) => a.entitySet === PRICE_DOC, ready: prices },
+  "write.document.post_document": {
+    applies: (a) => a.entitySet === PRICE_DOC || STOCK_SETS.has(String(a.entitySet)),
+    ready: (conn, a) => (a.entitySet === PRICE_DOC ? prices(conn) : stock(String(a.entitySet))(conn)),
+  },
   // Пометка — и для справочников, которые в УТ создаются (ошибочно созданного контрагента и партнёра убрать).
   "write.entity.mark_for_deletion": {
-    applies: (a) => a.entitySet === PRICE_DOC || TRADE_CATALOGS.has(String(a.entitySet)),
+    applies: (a) =>
+      a.entitySet === PRICE_DOC ||
+      TRADE_CATALOGS.has(String(a.entitySet)) ||
+      STOCK_SETS.has(String(a.entitySet)),
     ready: (conn, a) =>
       a.entitySet === PRICE_DOC
         ? prices(conn)
-        : a.entitySet === NOMENCLATURE
-          ? nomenclature(conn)
-          : partners(conn),
+        : STOCK_SETS.has(String(a.entitySet))
+          ? stock(String(a.entitySet))(conn)
+          : a.entitySet === NOMENCLATURE
+            ? nomenclature(conn)
+            : partners(conn),
   },
   "write.counterparty.create_counterparty": { applies: () => true, ready: partners },
   "write.counterparty.create_partner": { applies: () => true, ready: partners },
@@ -464,6 +476,10 @@ const TRADE_WRITE: Record<string, TradeWrite> = {
   "write.catalog.create_agreement": { applies: () => true, ready: partners },
   "write.catalog.create_nomenclature": { applies: () => true, ready: nomenclature },
   "write.catalog.update_nomenclature": { applies: () => true, ready: nomenclature },
+  "write.warehouse.create_transfer": { applies: () => true, ready: stock(STOCK_DOCS.transfer) },
+  "write.warehouse.create_surplus": { applies: () => true, ready: stock(STOCK_DOCS.surplus) },
+  "write.warehouse.create_writeoff": { applies: () => true, ready: stock(STOCK_DOCS.writeoff) },
+  "write.warehouse.create_inventory": { applies: () => true, ready: stock(STOCK_DOCS.inventory) },
   // Папки — только номенклатуры: у контрагентов УТ иерархии нет (решение владельца — отказ).
   "write.entity.create_folder": { applies: (a) => a.entitySet === NOMENCLATURE, ready: nomenclature },
   "write.entity.move_to_folder": { applies: (a) => a.entitySet === NOMENCLATURE, ready: nomenclature },
@@ -475,7 +491,9 @@ const TRADE_WRITE_HINT =
   `write.document.post_document и write.entity.mark_for_deletion для ${PRICE_DOC}) и контрагенты с партнёрами ` +
   "(write.counterparty.create_partner, create_counterparty, update_counterparty, create_bank_account, create_contact_person), " +
   "договоры и соглашения (write.catalog.create_contract, create_agreement), номенклатура и её папки " +
-  "(create_nomenclature, update_nomenclature, write.entity.create_folder и move_to_folder для Catalog_Номенклатура).";
+  "(create_nomenclature, update_nomenclature, write.entity.create_folder и move_to_folder для Catalog_Номенклатура), " +
+  "складские документы (write.warehouse.create_transfer, create_surplus, create_writeoff, create_inventory, затем " +
+  "post_document и mark_for_deletion для этих документов).";
 
 /**
  * Запись собирает документы и справочники Бухгалтерии. В базе без регистра бухгалтерии (Управление торговлей, другие

@@ -147,10 +147,14 @@ export const postDocumentResultSchema = z
       .optional(),
     postingsNote: z.string().optional(),
     movementsVerified: z.boolean().optional(),
+    /** Пояснение, когда движения не сверялись: пересчёт товаров их не делает, статус перемещения неизвестен. */
+    movementsNote: z.string().optional(),
     movements: z
       .object({
-        mechanism: z.string(),
-        expected: z.number(),
+        /** Механизм цен — у документа цен; регистр — у складских документов УТ. */
+        mechanism: z.string().optional(),
+        register: z.string().optional(),
+        expected: z.number().optional(),
         found: z.number(),
         mismatches: z.array(z.string()).optional(),
       })

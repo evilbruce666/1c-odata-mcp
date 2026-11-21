@@ -12,7 +12,8 @@ standard OData interface. Ask your 1C database in plain language; nothing is ins
 - **1C:Trade Management 11** (verified on 11.5) — stock by warehouse and item group, unit sales including retail with
   revenue and returns, customer and supplier balances by due date, cash in bank accounts, cash desks and POS, current
   prices; write of price settings and catalogs (partners, counterparties, bank accounts, contacts, contracts,
-  agreements, items and their folders).
+  agreements, items and their folders) and warehouse documents (transfer, surplus, shortage write-off, stock count),
+  with posting checked against the stock register.
 - **1C:Integrated Automation 2, ERP 2** — expected to work with both tool groups; not yet verified on a live base.
 - **Other and customised configurations** — documents, catalogs and the schema.
 
