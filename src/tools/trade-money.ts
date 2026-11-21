@@ -553,3 +553,196 @@ export const PAYOUT_ORDER_IN_TRADE =
   "В Управлении торговлей платёжного поручения как документа Бухгалтерии нет: оплату оформляют заявкой на " +
   "расходование (write.money.create_payment_request) и списанием безналичных (write.money.create_bank_writeoff). " +
   "Ничего не записано.";
+
+// ─── Копия и правка полей ───
+
+/** Поля шапки денежного документа УТ, которые можно менять (update_entity) и задавать копии (copy_document). */
+const MONEY_EDITABLE = new Set([
+  "Комментарий",
+  "Date",
+  "СуммаДокумента",
+  "НазначениеПлатежа",
+  "Основание",
+  "ПринятоОт",
+  "Выдать",
+  "Подразделение_Key",
+  "Статус",
+  "ЖелательнаяДатаПлатежа",
+  "ДатаПлатежа",
+]);
+const moneyWhitelistRefusal = (bad: string[]) =>
+  `Поля ${bad.join(", ")} в денежном документе Управления торговлей коннектор не меняет: от них зависят расчёты и ` +
+  `объект расчётов, который 1С заполняет сама. Можно: ${[...MONEY_EDITABLE].join(", ")}; другое — новый документ. ` +
+  "Ничего не записано.";
+
+/** Кинд денежного документа УТ, если коннектор умеет его править; undefined — Бухгалтерия, как раньше. */
+export async function tradeMoneyEditKind(
+  conn: Connection,
+  entitySet: string,
+): Promise<MoneyKind | undefined> {
+  const kind = (Object.keys(MONEY_DOCS) as MoneyKind[]).find((k) => MONEY_DOCS[k] === entitySet);
+  return kind && (await tradeMoneySet(conn, kind)) ? kind : undefined;
+}
+
+/** Сумма документа и одной строки расшифровки меняются вместе; строк несколько — разнести сумму нельзя. */
+function withAmount(doc: ODataEntity, fields: Record<string, unknown>): Record<string, unknown> | string {
+  if (!("СуммаДокумента" in fields)) return fields;
+  const amount = Number(fields["СуммаДокумента"]);
+  if (!(amount > 0)) return "Сумма документа должна быть больше нуля.";
+  const rows = (doc["РасшифровкаПлатежа"] as ODataEntity[] | undefined) ?? [];
+  if (rows.length > 1)
+    return "В расшифровке платежа несколько строк: какую сумму в какую строку — не определить. Измените документ в 1С.";
+  if (!rows.length) return fields;
+  const row = Object.fromEntries(
+    Object.entries(rows[0]!).filter(([k]) => !k.includes("@") && k !== "Ref_Key"),
+  );
+  return {
+    ...fields,
+    РасшифровкаПлатежа: [
+      { ...row, Сумма: amount, ...("СуммаВзаиморасчетов" in row ? { СуммаВзаиморасчетов: amount } : {}) },
+    ],
+  };
+}
+
+/** Изменение полей шапки по белому списку, только у непроведённого документа. */
+export async function updateTradeMoney(
+  conn: Connection,
+  entitySet: string,
+  ref: string,
+  fields: Record<string, unknown>,
+  confirm: boolean,
+  patch: (fields: Record<string, unknown>) => Promise<CallToolResult>,
+): Promise<CallToolResult> {
+  const bad = Object.keys(fields).filter((k) => !MONEY_EDITABLE.has(k));
+  if (bad.length) throw new InputError(moneyWhitelistRefusal(bad));
+  const doc = await conn.client.getEntity<ODataEntity>(
+    `${entitySet}(${odataGuid(guidOf(ref))})?$format=json`,
+  );
+  if (doc["Posted"] === true)
+    throw new InputError(
+      "Документ проведён. Сначала отмените проведение (write.document.post_document с post=false), затем меняйте его. Ничего не записано.",
+    );
+  const full = withAmount(doc, fields);
+  if (typeof full === "string") throw new InputError(`${full} Ничего не записано.`);
+  const result = await patch(full);
+  const sc = result.structuredContent as Record<string, unknown> | undefined;
+  if (!confirm || result.isError || !sc || sc["dryRun"] || !("РасшифровкаПлатежа" in full)) return result;
+  // Общая проверка правки табличные части не сверяет: сумму строки расшифровки перечитываем сами.
+  const after = await conn.client.getEntity<ODataEntity>(
+    `${entitySet}(${odataGuid(guidOf(ref))})?$format=json`,
+  );
+  const want = Number(full["СуммаДокумента"]);
+  const rows = (after["РасшифровкаПлатежа"] as ODataEntity[] | undefined) ?? [];
+  const ok =
+    rows.length === 1 &&
+    cents(Number(rows[0]!["Сумма"])) === cents(want) &&
+    cents(Number(after["СуммаДокумента"])) === cents(want);
+  return {
+    ...result,
+    structuredContent: ok
+      ? { ...sc, verified: true }
+      : {
+          ...sc,
+          verified: false,
+          note: `1С сохранила сумму иначе: в документе ${String(after["СуммаДокумента"])}, в расшифровке ${rows.map((r) => r["Сумма"]).join(", ")}. Проверьте документ в 1С.`,
+        },
+  };
+}
+
+/**
+ * Поля, которые копия не берёт у образца: объект расчётов и связи с исходными документами (1С заполнит объект
+ * расчётов сама, как при создании), данные банковской выписки.
+ */
+const MONEY_NOT_COPIED = new Set([
+  "ДокументОснование",
+  "ДокументОснование_Type",
+  "ЗаявкаНаРасходованиеДенежныхСредств",
+  "ЗаявкаНаРасходованиеДенежныхСредств_Type",
+  "ОбъектРасчетов_Key",
+  "ДанныеВыписки",
+  "ДатаЗагрузки",
+  "ДатаВыгрузки",
+  "ИдентификаторПлатежа",
+  "ИдентификаторДокумента",
+  "НомерВходящегоДокумента",
+  "ДатаВходящегоДокумента",
+  "Автор_Key",
+  "ДополнительныеРеквизиты",
+]);
+const MONEY_ROW_NOT_COPIED = new Set([
+  "ОбъектРасчетов_Key",
+  "ИдентификаторСтроки",
+  "ОснованиеПлатежа",
+  "ОснованиеПлатежа_Type",
+  "ЗаявкаНаРасходованиеДенежныхСредств",
+  "ЗаявкаНаРасходованиеДенежныхСредств_Type",
+]);
+
+/** Копия денежного документа УТ: непроведённая, с новой датой, без объекта расчётов и связей образца. */
+export async function copyTradeMoney(
+  conn: Connection,
+  entitySet: string,
+  kind: MoneyKind,
+  ref: string,
+  input: {
+    date?: string | undefined;
+    fields?: Record<string, unknown> | undefined;
+    lines?: unknown[] | undefined;
+  },
+  confirm: boolean,
+  strip: (e: ODataEntity) => Record<string, unknown>,
+): Promise<CallToolResult> {
+  if (input.lines?.length)
+    throw new InputError(
+      "У денежного документа строк товаров нет: правки lines не применяются; сумму задайте в fields.СуммаДокумента. Ничего не записано.",
+    );
+  const bad = Object.keys(input.fields ?? {}).filter((k) => !MONEY_EDITABLE.has(k));
+  if (bad.length) throw new InputError(moneyWhitelistRefusal(bad));
+  const source = await conn.client.getEntity<ODataEntity>(
+    `${entitySet}(${odataGuid(guidOf(ref))})?$format=json`,
+  );
+  const spec = MONEY_OPS[kind][String(source["ХозяйственнаяОперация"])];
+  if (!spec)
+    throw new InputError(
+      `Хозяйственная операция образца «${String(source["ХозяйственнаяОперация"])}» коннектором не поддержана — копию не создаю. Ничего не записано.`,
+    );
+  const base = strip(source);
+  const payload: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(base)) if (!MONEY_NOT_COPIED.has(k)) payload[k] = v;
+  payload["РасшифровкаПлатежа"] = (
+    (base["РасшифровкаПлатежа"] as Record<string, unknown>[] | undefined) ?? []
+  ).map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => !MONEY_ROW_NOT_COPIED.has(k))));
+  const date = await docDate(conn, input.date);
+  payload["Date"] = date;
+  payload["Posted"] = false;
+  const day = `${date.slice(0, 10)}T00:00:00`;
+  if (kind === "bankIn" || kind === "bankOut") {
+    payload["ПроведеноБанком"] = true;
+    payload["ДатаПроведенияБанком"] = day;
+  }
+  if (kind === "request") {
+    payload["ЖелательнаяДатаПлатежа"] = day;
+    payload["ДатаПлатежа"] = day;
+    payload["Статус"] = "НеСогласована";
+  }
+  const full = withAmount(
+    { ...source, РасшифровкаПлатежа: payload["РасшифровкаПлатежа"] },
+    input.fields ?? {},
+  );
+  if (typeof full === "string") throw new InputError(`${full} Ничего не записано.`);
+  Object.assign(payload, full);
+  if (!(payload["РасшифровкаПлатежа"] as unknown[]).length) delete payload["РасшифровкаПлатежа"];
+  return createCore(
+    conn,
+    entitySet,
+    payload,
+    confirm,
+    [
+      "Копия — без объекта расчётов и связей образца (основание, заявка): 1С заполнит объект расчётов при записи.",
+      ...(kind === "request" && !("Статус" in (input.fields ?? {}))
+        ? ["Копия заявки — «Не согласована»."]
+        : []),
+    ],
+    () => undefined,
+  );
+}

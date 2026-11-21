@@ -57,8 +57,11 @@ import { createTradeNomenclature, tradeNomenclatureSchema } from "./trade-nomenc
 import {
   MONEY_OPS,
   PAYOUT_ORDER_IN_TRADE,
+  copyTradeMoney,
   createTradeMoney,
+  tradeMoneyEditKind,
   tradeMoneySet,
+  updateTradeMoney,
   verifyMoneyMovements,
   type MoneyInput,
   type MoneyKind,
@@ -2770,6 +2773,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         if (Object.keys(fields).length === 0) return fail("Не заданы поля для изменения.");
         const trade = await tradeEditKind(conn, entitySet);
         if (trade) return updateTradeFields(conn, entitySet, trade, ref, fields, confirm);
+        if (await tradeMoneyEditKind(conn, entitySet))
+          return updateTradeMoney(conn, entitySet, ref, fields, confirm, (f) =>
+            patchOrPreview(conn, entitySet, ref, f, confirm),
+          );
         return patchOrPreview(conn, entitySet, ref, fields, confirm);
       }),
   );
@@ -3852,6 +3859,17 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         if (ka) return fail(ka);
         const trade = await tradeEditKind(conn, entitySet);
         if (trade) return copyTradeDocument(conn, entitySet, trade, ref, { date, fields, lines }, confirm);
+        const moneyKind = await tradeMoneyEditKind(conn, entitySet);
+        if (moneyKind)
+          return copyTradeMoney(
+            conn,
+            entitySet,
+            moneyKind,
+            ref,
+            { date, fields, lines },
+            confirm,
+            stripForCopy,
+          );
         const guid = ref.replace(/[{}']/g, "");
         const source = await conn.client.getEntity(`${entitySet}(guid'${guid}')${buildQuery({})}`);
         const payload = stripForCopy(source);

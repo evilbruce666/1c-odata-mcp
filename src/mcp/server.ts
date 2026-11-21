@@ -508,6 +508,18 @@ const TRADE_WRITE: Record<string, TradeWrite> = {
       { applies: (a: Record<string, unknown>) => STOCK_SETS.has(String(a.entitySet)), ready: stockOf },
     ]),
   ),
+  // Копия и поля денежных документов УТ (строк товаров у них нет — инструменты строк отказывают).
+  ...Object.fromEntries(
+    ["write.document.copy_document", "write.entity.update_entity"].map((name) => [
+      name,
+      {
+        applies: (a: Record<string, unknown>) =>
+          STOCK_SETS.has(String(a.entitySet)) || MONEY_SETS.has(String(a.entitySet)),
+        ready: (conn: Connection, a: Record<string, unknown>) =>
+          MONEY_SETS.has(String(a.entitySet)) ? moneyOf(conn, a) : stockOf(conn, a),
+      },
+    ]),
+  ),
   "write.money.create_cash_receipt": { applies: () => true, ready: money("cashIn") },
   "write.money.create_cash_payment": { applies: () => true, ready: money("cashOut") },
   "write.money.create_payment": { applies: () => true, ready: money("bankIn") },

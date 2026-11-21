@@ -105,6 +105,7 @@ function setup(
   } = {},
 ) {
   const posts: { set: string; body: Record<string, unknown> }[] = [];
+  const patches: Record<string, unknown>[] = [];
   const docs = new Map<
     string,
     {
@@ -167,6 +168,12 @@ function setup(
       }
       if (d && method === "GET")
         return json(200, { ...d.body, Ref_Key: ref, Posted: d.posted, DataVersion: `v${d.v}` });
+      if (d && method === "PATCH") {
+        const patch = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        patches.push(patch);
+        Object.assign(d.body, patch);
+        return json(200, { ...d.body, Ref_Key: ref });
+      }
     }
     const reg = /^AccumulationRegister_([^(]+)\(Recorder='([0-9a-f-]{36})'/i.exec(path);
     if (reg) {
@@ -202,7 +209,7 @@ function setup(
     await call("write.document.post_document", { entitySet, ref, post: p });
     return call("write.document.post_document", { entitySet, ref, post: p, confirm: true });
   };
-  return { call, create, post, posts, docs, fake };
+  return { call, create, post, posts, patches, docs, fake };
 }
 
 const IN = "write.money.create_cash_receipt";
@@ -590,6 +597,138 @@ describe("денежные документы УТ: проведение со с
     const kept = await run({ keepOnUnpost: true }, pay, SET, true);
     expect(kept.sc).toMatchObject({ verified: false });
     expect(String(kept.sc["note"])).toContain("остались");
+  });
+});
+
+describe("денежные документы УТ: копия и поля", () => {
+  const SET = "Document_СписаниеБезналичныхДенежныхСредств";
+  const pay = { ...base, operationKind: "ОплатаПоставщику", orgBankAccount: BANK, counterpartyRef: CP };
+  const twice = async (s: ReturnType<typeof setup>, name: string, args: Record<string, unknown>) => {
+    const p = await s.call(name, args);
+    if (p.isError) return p;
+    return s.call(name, {
+      ...args,
+      confirm: true,
+      ...(p.sc["operationId"] ? { operationId: p.sc["operationId"] } : {}),
+    });
+  };
+
+  it("сумма документа меняется вместе с единственной строкой расшифровки; поле вне списка и проведённый — отказ", async () => {
+    const s = setup();
+    const { ref } = await s.create(BOUT, pay);
+    s.docs.get(ref)!.body["РасшифровкаПлатежа"] = [
+      { LineNumber: 1, Сумма: 10, СуммаВзаиморасчетов: 10, ОбъектРасчетов_Key: g("9", 1) },
+    ];
+    const r = await twice(s, "write.entity.update_entity", {
+      entitySet: SET,
+      ref,
+      fields: { СуммаДокумента: 25, НазначениеПлатежа: "ZZ" },
+    });
+    expect(r.isError, r.text).toBeFalsy();
+    expect(s.patches.at(-1)).toMatchObject({
+      СуммаДокумента: 25,
+      НазначениеПлатежа: "ZZ",
+      РасшифровкаПлатежа: [{ Сумма: 25, СуммаВзаиморасчетов: 25, ОбъектРасчетов_Key: g("9", 1) }],
+    });
+    expect(r.sc).toMatchObject({ updated: true, verified: true });
+    const bad = await s.call("write.entity.update_entity", {
+      entitySet: SET,
+      ref,
+      fields: { Контрагент_Key: CP },
+    });
+    expect(bad.text).toContain("Контрагент_Key");
+    await s.post(SET, ref);
+    const posted = await s.call("write.entity.update_entity", {
+      entitySet: SET,
+      ref,
+      fields: { Комментарий: "x" },
+    });
+    expect(posted.text).toContain("проведён");
+    expect(s.patches).toHaveLength(1);
+  });
+
+  it("сумма при нескольких строках расшифровки — отказ: разнести нельзя", async () => {
+    const s = setup();
+    const { ref } = await s.create(BOUT, pay);
+    s.docs.get(ref)!.body["РасшифровкаПлатежа"] = [{ Сумма: 5 }, { Сумма: 5 }];
+    const r = await s.call("write.entity.update_entity", {
+      entitySet: SET,
+      ref,
+      fields: { СуммаДокумента: 12 },
+    });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("несколько строк");
+  });
+
+  it("копия: без объекта расчётов и связей, «проведено банком» новой датой, новая сумма; строки и чужие поля — отказ", async () => {
+    const s = setup();
+    const { ref } = await s.create(BOUT, pay);
+    Object.assign(s.docs.get(ref)!.body, {
+      ДокументОснование: g("9", 2),
+      НомерВходящегоДокумента: "77",
+      РасшифровкаПлатежа: [
+        {
+          LineNumber: 1,
+          Сумма: 10,
+          СуммаВзаиморасчетов: 10,
+          ОбъектРасчетов_Key: g("9", 1),
+          Партнер_Key: PARTNER,
+        },
+      ],
+    });
+    const c = await s.create("write.document.copy_document", {
+      entitySet: SET,
+      ref,
+      date: "2026-11-25",
+      fields: { СуммаДокумента: 30 },
+    });
+    const body = s.posts.at(-1)!.body;
+    expect(body).toMatchObject({
+      Posted: false,
+      ПроведеноБанком: true,
+      ДатаПроведенияБанком: "2026-11-25T00:00:00",
+      СуммаДокумента: 30,
+    });
+    expect(body).not.toHaveProperty("ДокументОснование");
+    expect(body).not.toHaveProperty("НомерВходящегоДокумента");
+    expect(body["РасшифровкаПлатежа"]).toEqual([
+      expect.objectContaining({ Сумма: 30, СуммаВзаиморасчетов: 30, Партнер_Key: PARTNER }),
+    ]);
+    expect(JSON.stringify(body["РасшифровкаПлатежа"])).not.toContain("ОбъектРасчетов");
+    expect(JSON.stringify(c.preview.sc["notes"])).toContain("без объекта расчётов");
+    const lines = await s.call("write.document.copy_document", {
+      entitySet: SET,
+      ref,
+      lines: [{ lineNumber: 1, fields: { Сумма: 1 } }],
+    });
+    expect(lines.text).toContain("строк товаров нет");
+    const bad = await s.call("write.document.copy_document", {
+      entitySet: SET,
+      ref,
+      fields: { Контрагент_Key: CP },
+    });
+    expect(bad.text).toContain("Контрагент_Key");
+  });
+
+  it("копия заявки — «Не согласована» и даты платежа по новой дате", async () => {
+    const s = setup();
+    const { ref } = await s.create(REQ, {
+      ...base,
+      operationKind: "ОплатаПоставщику",
+      payForm: "bank",
+      orgBankAccount: BANK,
+      counterpartyRef: CP,
+      status: "КОплате",
+    });
+    await s.create("write.document.copy_document", {
+      entitySet: "Document_ЗаявкаНаРасходованиеДенежныхСредств",
+      ref,
+      date: "2026-11-26",
+    });
+    expect(s.posts.at(-1)!.body).toMatchObject({
+      Статус: "НеСогласована",
+      ДатаПлатежа: "2026-11-26T00:00:00",
+    });
   });
 });
 
