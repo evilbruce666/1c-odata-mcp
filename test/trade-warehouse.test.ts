@@ -46,6 +46,7 @@ const TABLES: Record<string, Record<string, unknown>[]> = {
   ChartOfCharacteristicTypes_СтатьиДоходов: [{ Ref_Key: INCOME, Description: "Излишки", Code: "1" }],
   ChartOfCharacteristicTypes_СтатьиРасходов: [{ Ref_Key: EXPENSE, Description: "Списание брака", Code: "1" }],
   Catalog_Валюты: [{ Ref_Key: RUB, Description: "RUB", Code: "643" }],
+  Catalog_СтруктураПредприятия: [{ Ref_Key: g("e", 5), Description: "Магазин 1", Code: "1" }],
 };
 
 /** Отбор как в 1С: по Ref_Key или по точному Code/Description; без отбора — все строки. */
@@ -107,6 +108,7 @@ function setup(
   } = {},
 ) {
   const posts: { set: string; body: Record<string, unknown> }[] = [];
+  const patches: { set: string; body: Record<string, unknown> }[] = [];
   const actions: string[] = [];
   const docs = new Map<
     string,
@@ -179,8 +181,15 @@ function setup(
           DeletionMark: false,
           DataVersion: `v${d.version}`,
         });
-      if (d && method === "PATCH")
-        return json(200, { ...d.body, ...(JSON.parse(String(init?.body)) as object) });
+      if (d && method === "PATCH") {
+        const patch = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        patches.push({ set, body: patch });
+        const rows = (patch["Товары"] as Record<string, unknown>[] | undefined) ?? undefined;
+        if (o.dropSeriesWithoutStatus && rows?.every((r) => !r["СтатусУказанияСерий"]) && patch["Серии"])
+          patch["Серии"] = [];
+        Object.assign(d.body, patch);
+        return json(200, { ...d.body, Ref_Key: ref });
+      }
     }
     if (path.startsWith("AccumulationRegister_ТоварыНаСкладах(Recorder=")) {
       const rec = /Recorder='([0-9a-f-]{36})'/i.exec(path)![1]!.toLowerCase();
@@ -220,7 +229,7 @@ function setup(
     await call("write.document.post_document", args);
     return call("write.document.post_document", { ...args, confirm: true });
   };
-  return { call, create, post, posts, actions, docs, fake };
+  return { call, create, post, posts, patches, actions, docs, fake };
 }
 
 const T = "write.warehouse.create_transfer";
@@ -697,6 +706,246 @@ describe("складские документы в Управлении торг
   });
 });
 
+describe("складские документы в Управлении торговлей: правка, копия, поля", () => {
+  const transferArgs = { organization: "ТЕСТ", fromWarehouse: "Основной", toWarehouse: "Брак" };
+  const SET = "Document_ПеремещениеТоваров";
+  /** Создать перемещение и дописать в него поля, которые 1С заполняет сама (как после проведения и отмены). */
+  const made = async (s: ReturnType<typeof setup>, lines = [line(1)]) => {
+    const { ref } = await s.create(T, { ...transferArgs, lines });
+    const d = s.docs.get(ref)!;
+    d.body["ВидыЗапасов"] = [{ LineNumber: 1, ВидЗапасов_Key: g("8", 1), Количество: 1 }];
+    for (const r of d.body["Товары"] as Record<string, unknown>[])
+      r["АналитикаУчетаНоменклатуры_Key"] = g("8", 2);
+    return ref;
+  };
+  const twice = async (s: ReturnType<typeof setup>, name: string, args: Record<string, unknown>) => {
+    const p = await s.call(name, args);
+    if (p.isError) return p;
+    return s.call(name, {
+      ...args,
+      confirm: true,
+      ...(p.sc["operationId"] ? { operationId: p.sc["operationId"] } : {}),
+    });
+  };
+
+  it("замена строк: строки как при создании (количество упаковок, серии со статусом), серии заменяются", async () => {
+    const s = setup();
+    const ref = await made(s, [line(1, { nomenclatureRef: ITEM_SERIES, seriesRef: SERIES })]);
+    const r = await twice(s, "write.document.update_document_lines", {
+      entitySet: SET,
+      ref,
+      lines: [line(3, { price: 1 })],
+    });
+    expect(r.isError, r.text).toBeFalsy();
+    expect(s.patches.at(-1)!.body).toEqual({
+      Товары: [{ LineNumber: 1, Номенклатура_Key: ITEM, Количество: 3, КоличествоУпаковок: 3 }],
+      Серии: [],
+    });
+    expect(s.fake.violations).toEqual([]);
+  });
+
+  it("замена строк: проведённый, пересчёт, оприходование без цены и серия в списании — отказ без PATCH", async () => {
+    const s = setup();
+    const ref = await made(s);
+    await s.post(SET, ref);
+    const posted = await s.call("write.document.update_document_lines", {
+      entitySet: SET,
+      ref,
+      lines: [line(1, { price: 1 })],
+    });
+    expect(posted.text).toContain("проведён");
+    const inv = await s.create(I, {
+      warehouse: "Основной",
+      lines: [{ nomenclatureRef: ITEM, factQuantity: 1, accountingQuantity: 1 }],
+    });
+    const invLines = await s.call("write.document.update_document_lines", {
+      entitySet: "Document_ПересчетТоваров",
+      ref: inv.ref,
+      lines: [line(1, { price: 1 })],
+    });
+    expect(invLines.text).toContain("create_inventory");
+    const sur = await s.create(S, {
+      organization: "ТЕСТ",
+      warehouse: "Основной",
+      priceKind: "Закупочные цены",
+      incomeItem: "Излишки",
+      lines: [line(1, { price: 2 })],
+    });
+    const noPrice = await s.call("write.document.update_document_lines", {
+      entitySet: "Document_ОприходованиеИзлишковТоваров",
+      ref: sur.ref,
+      lines: [line(1, { price: 0 })],
+    });
+    expect(noPrice.text).toContain("укажите price");
+    const wo = await s.create(W, {
+      organization: "ТЕСТ",
+      warehouse: "Брак",
+      expenseItem: "Списание брака",
+      lines: [line(1)],
+    });
+    const ser = await s.call("write.document.add_document_line", {
+      entitySet: "Document_СписаниеНедостачТоваров",
+      ref: wo.ref,
+      line: line(1, { price: 0, seriesRef: SERIES }),
+    });
+    expect(ser.text).toContain("пока не поддержаны");
+    for (const r of [posted, invLines, noPrice, ser]) expect(r.isError).toBe(true);
+    expect(s.patches).toEqual([]);
+  });
+
+  it("добавление строки сохраняет поля прежних строк, которые заполнила 1С; серия — в «Серии»", async () => {
+    const s = setup();
+    const ref = await made(s);
+    const r = await twice(s, "write.document.add_document_line", {
+      entitySet: SET,
+      ref,
+      line: line(2, { nomenclatureRef: ITEM_SERIES, seriesRef: SERIES, price: 0 }),
+    });
+    expect(r.isError, r.text).toBeFalsy();
+    const body = s.patches.at(-1)!.body;
+    expect(body["Товары"]).toMatchObject([
+      { LineNumber: 1, Номенклатура_Key: ITEM, АналитикаУчетаНоменклатуры_Key: g("8", 2) },
+      { LineNumber: 2, Номенклатура_Key: ITEM_SERIES, Количество: 2, СтатусУказанияСерий: 2 },
+    ]);
+    expect(body["Серии"]).toEqual([
+      { LineNumber: 1, Номенклатура_Key: ITEM_SERIES, Серия_Key: SERIES, Количество: 2 },
+    ]);
+  });
+
+  it("1С не сохранила серии при правке — заметка в ответе", async () => {
+    const s = setup({ dropSeriesWithoutStatus: true });
+    const ref = await made(s);
+    // Строки без статуса: как если бы статус потерялся — 1С очищает «Серии».
+    const d = s.docs.get(ref)!;
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      if ((init?.method ?? "GET") === "PATCH" && String(init?.body).includes("СтатусУказанияСерий")) {
+        const b = JSON.parse(String(init!.body)) as Record<string, unknown>;
+        for (const row of b["Товары"] as Record<string, unknown>[]) delete row["СтатусУказанияСерий"];
+        return inner(input, { ...init, body: JSON.stringify(b) });
+      }
+      return inner(input, init);
+    });
+    const r = await twice(s, "write.document.add_document_line", {
+      entitySet: SET,
+      ref,
+      line: line(1, { nomenclatureRef: ITEM_SERIES, seriesRef: SERIES, price: 0 }),
+    });
+    expect(JSON.stringify(r.sc["notes"])).toContain("сохранила серий 0 из 1");
+    expect(d.body["Серии"]).toEqual([]);
+  });
+
+  it("удаление строки уносит серии её позиции; если та же позиция ещё в другой строке — отказ", async () => {
+    const s = setup();
+    const ref = await made(s, [line(1), line(1, { nomenclatureRef: ITEM_SERIES, seriesRef: SERIES })]);
+    const r = await twice(s, "write.document.remove_document_line", { entitySet: SET, ref, lineNumber: 2 });
+    expect(r.isError, r.text).toBeFalsy();
+    expect(s.patches.at(-1)!.body).toMatchObject({
+      Товары: [{ LineNumber: 1, Номенклатура_Key: ITEM }],
+      Серии: [],
+    });
+    const both = await made(s, [
+      line(1, { nomenclatureRef: ITEM_SERIES, seriesRef: SERIES }),
+      line(1, { nomenclatureRef: ITEM_SERIES, seriesRef: g("f", 2) }),
+    ]);
+    const amb = await s.call("write.document.remove_document_line", {
+      entitySet: SET,
+      ref: both,
+      lineNumber: 1,
+    });
+    expect(amb.isError).toBe(true);
+    expect(amb.text).toContain("не определить");
+  });
+
+  it("поля шапки: по белому списку — PATCH; поле вне списка или проведённый документ — отказ", async () => {
+    const s = setup();
+    const ref = await made(s);
+    const ok = await twice(s, "write.entity.update_entity", {
+      entitySet: SET,
+      ref,
+      fields: { Комментарий: "ZZ-TEST правка", Статус: "Отгружено" },
+    });
+    expect(ok.isError, ok.text).toBeFalsy();
+    expect(s.patches.at(-1)!.body).toEqual({ Комментарий: "ZZ-TEST правка", Статус: "Отгружено" });
+    const bad = await s.call("write.entity.update_entity", {
+      entitySet: SET,
+      ref,
+      fields: { Организация_Key: ORG },
+    });
+    expect(bad.isError).toBe(true);
+    expect(bad.text).toContain("Организация_Key");
+    await s.post(SET, ref);
+    const posted = await s.call("write.entity.update_entity", {
+      entitySet: SET,
+      ref,
+      fields: { Комментарий: "x" },
+    });
+    expect(posted.text).toContain("проведён");
+    expect(s.patches).toHaveLength(1);
+  });
+
+  it("копия: без основания, видов запасов и ключей аналитики; правка количества тянет количество упаковок", async () => {
+    const s = setup();
+    const ref = await made(s, [line(2)]);
+    s.docs.get(ref)!.body["ЗаказНаПеремещение_Key"] = g("9", 3);
+    const { done } = await s.create("write.document.copy_document", {
+      entitySet: SET,
+      ref,
+      fields: { Комментарий: "ZZ-TEST копия" },
+      lines: [{ lineNumber: 1, fields: { Количество: 5 } }],
+    });
+    const body = s.posts.at(-1)!.body;
+    expect(body).toMatchObject({ Комментарий: "ZZ-TEST копия", Posted: false, СкладОтправитель_Key: WH_A });
+    expect(body).not.toHaveProperty("ВидыЗапасов");
+    expect(body).not.toHaveProperty("ЗаказНаПеремещение_Key");
+    expect(body).not.toHaveProperty("Number");
+    expect(body["Товары"]).toEqual([expect.objectContaining({ Количество: 5, КоличествоУпаковок: 5 })]);
+    expect(JSON.stringify(body["Товары"])).not.toContain("АналитикаУчетаНоменклатуры");
+    expect(JSON.stringify(done.sc["notes"])).toContain("без основания");
+    const bad = await s.call("write.document.copy_document", {
+      entitySet: SET,
+      ref,
+      fields: { Организация_Key: ORG },
+    });
+    expect(bad.isError).toBe(true);
+    const badRow = await s.call("write.document.copy_document", {
+      entitySet: SET,
+      ref,
+      lines: [{ lineNumber: 1, fields: { Номенклатура_Key: ITEM_SERIES } }],
+    });
+    expect(badRow.text).toContain("Номенклатура_Key");
+  });
+
+  it("подразделение: по названию — в документ; без него — пусто с заметкой", async () => {
+    const s = setup();
+    const base = { organization: "ТЕСТ", warehouse: "Брак", expenseItem: "Списание брака", lines: [line(1)] };
+    const withDep = await s.call(W, { ...base, department: "Магазин 1" });
+    expect(payloadOf(withDep)["Подразделение_Key"]).toBe(g("e", 5));
+    const without = await s.call(W, base);
+    expect(payloadOf(without)).not.toHaveProperty("Подразделение_Key");
+    expect(JSON.stringify(without.sc["notes"])).toContain("Подразделение не указано");
+  });
+
+  it("КА и ERP: складской документ как в УТ в базе с бухучётом — отказ с причиной и в создании, и в правке", async () => {
+    const s = setup();
+    const ref = await made(s);
+    const available = await s.fake.conn.available();
+    vi.spyOn(s.fake.conn, "available").mockResolvedValue(
+      new Set([...available, "AccountingRegister_Хозрасчетный"]),
+    );
+    for (const [name, args] of [
+      [T, { ...transferArgs, lines: [line(1)] }],
+      [W, { organization: "ТЕСТ", warehouse: "Брак", lines: [line(1)] }],
+      ["write.document.add_document_line", { entitySet: SET, ref, line: line(1, { price: 0 }) }],
+      ["write.document.copy_document", { entitySet: SET, ref }],
+    ] as const) {
+      const r = await s.call(name, args);
+      expect(r.isError, name).toBe(true);
+      expect(r.text, name).toContain("КА 2 или ERP 2");
+    }
+  });
+});
+
 describe("складские инструменты в Бухгалтерии — как раньше", () => {
   it("КА и ERP (есть «Хозрасчётный» и документы как в УТ): сборщик и сверка УТ не включаются — как раньше", async () => {
     const s = setup();
@@ -720,6 +969,18 @@ describe("складские инструменты в Бухгалтерии �
     expect(posted.sc).not.toHaveProperty("movementsVerified");
     expect(posted.sc).not.toHaveProperty("movementsNote");
     expect(s.fake.requests.some((q) => q.resource === "AccumulationRegister_ТоварыНаСкладах")).toBe(false);
+  });
+
+  it("серия в строке документа Бухгалтерии (реализация) — отказ: серию некуда записать", async () => {
+    const s = setup({ schema: "bp30" });
+    const r = await s.call("write.sales.create_shipment", {
+      counterpartyRef: g("9", 7),
+      warehouse: "Основной",
+      lines: [{ nomenclatureRef: ITEM, quantity: 1, price: 10, seriesRef: SERIES }],
+    });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("только в Управлении торговлей");
+    expect(s.posts).toEqual([]);
   });
 
   it("серия и статус — только в УТ: в Бухгалтерии отказ без записи", async () => {

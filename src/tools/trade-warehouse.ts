@@ -39,6 +39,24 @@ export async function tradeStockSet(conn: Connection, kind: StockKind): Promise<
   return (await tradeStockSchema(conn, set)) === kind ? set : undefined;
 }
 
+/**
+ * Складской документ устроен как в УТ, а база — с регистром бухгалтерии (КА 2, ERP 2). Сборщик Бухгалтерии записал
+ * бы в него счета учёта, которых у документа нет, а сборщик УТ на такой базе не проверен: отказ с причиной (решение
+ * владельца, 21.11.2026). undefined — отказывать не нужно.
+ */
+export async function stockInAccountingBaseRefusal(
+  conn: Connection,
+  set: string,
+): Promise<string | undefined> {
+  const kind = (Object.keys(STOCK_DOCS) as StockKind[]).find((k) => STOCK_DOCS[k] === set);
+  if (!kind || (await withoutAccounting(conn)) || (await tradeStockSchema(conn, set)) !== kind)
+    return undefined;
+  return (
+    `Документ ${set} устроен как в Управлении торговлей, а в базе есть регистр бухгалтерии — похоже, это КА 2 или ` +
+    "ERP 2. Запись складских документов в таких базах не проверена: ничего не записано. Создайте документ в 1С."
+  );
+}
+
 /** Поля, которые пишет сборщик УТ: документ подходит, если в схеме есть все. */
 const HEADER: Record<StockKind, readonly string[]> = {
   transfer: [
@@ -203,6 +221,73 @@ async function transferVatActivity(conn: Connection, org: string): Promise<{ val
   };
 }
 
+/**
+ * Строки складского документа УТ из позиций: одна сборка для создания и правки строк. Перемещение — с количеством
+ * упаковок и серией в таблице «Серии» (статус 2, без него 1С очищает серии при записи); оприходование — с ценой и
+ * суммой; списание — только количество. Пересчёт строится отдельно: у него учёт и факт.
+ */
+export function stockRows(
+  kind: Exclude<StockKind, "inventory">,
+  lines: readonly StockLine[],
+): { Товары: Array<Record<string, unknown>>; Серии?: Array<Record<string, unknown>> } {
+  const Товары = lines.map((l, i) => ({
+    LineNumber: i + 1,
+    Номенклатура_Key: l.nomenclatureRef,
+    Количество: l.quantity,
+    ...(kind === "transfer"
+      ? {
+          // Форма 1С показывает и правит количество упаковок; без упаковки оно равно количеству (так у всех
+          // перемещений копии рабочей базы).
+          КоличествоУпаковок: l.quantity,
+          ...(l.seriesRef ? SERIES_IN_TABLE : {}),
+        }
+      : {}),
+    ...(kind === "surplus" ? { Цена: l.price!, Сумма: round2(l.quantity * l.price!) } : {}),
+  }));
+  const series = kind === "transfer" ? lines.filter((l) => l.seriesRef) : [];
+  return series.length
+    ? {
+        Товары,
+        Серии: series.map((l, i) => ({
+          LineNumber: i + 1,
+          Номенклатура_Key: l.nomenclatureRef,
+          Серия_Key: l.seriesRef,
+          Количество: l.quantity,
+        })),
+      }
+    : { Товары };
+}
+
+/** Молчаливую потерю серий видно сразу: 1С возвращает записанный документ. */
+export function seriesSavedNote(sent: number, saved: ODataEntity): string | undefined {
+  const n = (saved["Серии"] as unknown[] | undefined)?.length ?? 0;
+  return sent && n !== sent
+    ? `1С сохранила серий ${n} из ${sent}. Проверьте документ в 1С, прежде чем проводить.`
+    : undefined;
+}
+
+const DEPARTMENTS = "Catalog_СтруктураПредприятия";
+
+/**
+ * Подразделение оприходования и списания — аналитика доходов и расходов, заполнена в 95–98% документов копии рабочей
+ * базы, но с подразделением склада совпадает у списаний лишь в трети случаев: не угадываем. Не указано — пусто, с
+ * заметкой (решение владельца, 21.11.2026).
+ */
+async function departmentOf(
+  conn: Connection,
+  department: string | undefined,
+): Promise<{ field: Record<string, string>; note?: string }> {
+  if (!department)
+    return {
+      field: {},
+      note:
+        "Подразделение не указано — поле пустое; для аналитики доходов и расходов укажите department " +
+        "(название, код или Ref_Key).",
+    };
+  const d = await resolveCatalogItem(conn, [DEPARTMENTS], "Подразделение", department);
+  return { field: { Подразделение_Key: d.ref } };
+}
+
 export interface TransferInput {
   organization?: string | undefined;
   from: string;
@@ -238,40 +323,16 @@ export async function createTradeTransfer(
     ХозяйственнаяОперация: "ПеремещениеТоваров",
     Статус: input.status ?? "Принято",
     ...(input.comment ? { Комментарий: input.comment } : {}),
-    Товары: input.lines.map((l, i) => ({
-      LineNumber: i + 1,
-      Номенклатура_Key: l.nomenclatureRef,
-      Количество: l.quantity,
-      // Форма 1С показывает и правит количество упаковок; без упаковки оно равно количеству (так у всех
-      // перемещений копии рабочей базы).
-      КоличествоУпаковок: l.quantity,
-      // Без статуса указания серий 1С при записи очищает таблицу «Серии» (проверено на копии). У перемещений с
-      // сериями в базе статус везде 2 — серии указаны в таблице «Серии».
-      ...(l.seriesRef ? SERIES_IN_TABLE : {}),
-    })),
-    // Серии перемещения — в своей табличной части, как в документах, созданных в 1С.
-    ...(series.length
-      ? {
-          Серии: series.map((l, i) => ({
-            LineNumber: i + 1,
-            Номенклатура_Key: l.nomenclatureRef,
-            Серия_Key: l.seriesRef,
-            Количество: l.quantity,
-          })),
-        }
-      : {}),
+    ...stockRows("transfer", input.lines),
   };
-  return createCore(conn, STOCK_DOCS.transfer, payload, confirm, notes, (created) => {
-    // Молчаливую потерю серий видно сразу: 1С возвращает записанный документ.
-    const saved = (created["Серии"] as unknown[] | undefined)?.length ?? 0;
-    return series.length && saved !== series.length
-      ? `1С сохранила серий ${saved} из ${series.length}. Проверьте документ в 1С, прежде чем проводить.`
-      : undefined;
-  });
+  return createCore(conn, STOCK_DOCS.transfer, payload, confirm, notes, (created) =>
+    seriesSavedNote(series.length, created),
+  );
 }
 
 export interface SurplusInput {
   organization?: string | undefined;
+  department?: string | undefined;
   warehouse: string;
   priceKind: string;
   incomeItem: string;
@@ -295,25 +356,24 @@ export async function createTradeSurplus(
   ];
   requirePrices(input.lines, kind.name ?? input.priceKind);
   const date = await docDate(conn, input.date);
+  const department = await departmentOf(conn, input.department);
   const payload = {
     Date: date,
     Posted: false,
     Организация_Key: await resolveOrgRef(conn, input.organization),
+    ...department.field,
     Склад_Key: input.warehouse,
     ВидЦены_Key: kind.ref,
     СтатьяДоходов_Key: item.ref,
     Валюта_Key: currency.ref,
     ...(input.inventoryRef ? { ПересчетТоваров_Key: guidOf(input.inventoryRef) } : {}),
     ...(input.comment ? { Комментарий: input.comment } : {}),
-    Товары: input.lines.map((l, i) => ({
-      LineNumber: i + 1,
-      Номенклатура_Key: l.nomenclatureRef,
-      Количество: l.quantity,
-      Цена: l.price!,
-      Сумма: round2(l.quantity * l.price!),
-    })),
+    ...stockRows("surplus", input.lines),
   };
-  const notes = await seriesNotes(conn, input.lines, SERIES_IN_1C);
+  const notes = [
+    ...(department.note ? [department.note] : []),
+    ...(await seriesNotes(conn, input.lines, SERIES_IN_1C)),
+  ];
   return createCore(conn, STOCK_DOCS.surplus, payload, confirm, notes, () => undefined);
 }
 
@@ -333,6 +393,7 @@ function requirePrices(lines: readonly StockLine[], kindName: string): void {
 
 export interface WriteoffInput {
   organization?: string | undefined;
+  department?: string | undefined;
   warehouse: string;
   expenseItem: string;
   inventoryRef?: string | undefined;
@@ -352,21 +413,20 @@ export async function createTradeWriteoff(
   const notes = await seriesNotes(conn, input.lines, SERIES_IN_1C);
   if (input.lines.some((l) => l.price))
     notes.push("Цена в списании Управления торговлей не указывается: 1С списывает по себестоимости.");
+  const department = await departmentOf(conn, input.department);
+  if (department.note) notes.unshift(department.note);
   const payload = {
     Date: await docDate(conn, input.date),
     Posted: false,
     Организация_Key: await resolveOrgRef(conn, input.organization),
+    ...department.field,
     Склад_Key: input.warehouse,
     // Составное поле: тип рядом со значением, как у документов, созданных в 1С.
     СтатьяРасходов: item.ref,
     СтатьяРасходов_Type: `StandardODATA.${EXPENSE_ITEMS}`,
     ...(input.inventoryRef ? { ПересчетТоваров_Key: guidOf(input.inventoryRef) } : {}),
     ...(input.comment ? { Комментарий: input.comment } : {}),
-    Товары: input.lines.map((l, i) => ({
-      LineNumber: i + 1,
-      Номенклатура_Key: l.nomenclatureRef,
-      Количество: l.quantity,
-    })),
+    ...stockRows("writeoff", input.lines),
   };
   return createCore(conn, STOCK_DOCS.writeoff, payload, confirm, notes, () => undefined);
 }

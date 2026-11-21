@@ -55,13 +55,23 @@ import {
 import { createAgreement, createTradeContract } from "./trade-contracts.js";
 import { createTradeNomenclature, tradeNomenclatureSchema } from "./trade-nomenclature.js";
 import {
+  addTradeLine,
+  copyTradeDocument,
+  removeTradeLine,
+  replaceTradeLines,
+  tradeEditKind,
+  updateTradeFields,
+} from "./trade-edit.js";
+import {
   createTradeInventory,
   createTradeSurplus,
   createTradeTransfer,
   createTradeWriteoff,
+  stockInAccountingBaseRefusal,
   tradeStockSet,
   verifyStockMovements,
 } from "./trade-warehouse.js";
+import { STOCK_DOCS as STOCK_SET } from "./trade-warehouse.js";
 
 /** Тип ссылки на номенклатуру в табличной части (полиморфная ссылка 1С). */
 const NOMENCLATURE_TYPE = "StandardODATA.Catalog_Номенклатура";
@@ -361,6 +371,8 @@ export interface GoodsLine {
   expenseAccount?: string | undefined;
   /** Исходная строка документа (при правке существующего) — чтобы не терять её поля. */
   source?: Record<string, unknown> | undefined;
+  /** Серия — только Управление торговлей; в Бухгалтерии — отказ. */
+  seriesRef?: string | undefined;
 }
 type LineAccountsFor = (line: GoodsLine) => Record<string, string>;
 
@@ -412,10 +424,17 @@ export function carriedRowFields(l: GoodsLine): Record<string, unknown> {
 }
 
 /** Строки табличной части «Товары»/«Услуги» для поступления/реализации (Номенклатура_Key + счета). */
+/** Серии — понятие Управления торговлей: в документе Бухгалтерии серию некуда записать, молча терять нельзя. */
+function refuseBpSeries(lines: ReadonlyArray<{ seriesRef?: string | undefined }>): void {
+  if (lines.some((l) => l.seriesRef))
+    throw new InputError("seriesRef поддерживается только в Управлении торговлей. Ничего не записано.");
+}
+
 export function buildGoodsRows(
   lines: GoodsLine[],
   lineAccountsFor: LineAccountsFor,
 ): Array<Record<string, unknown>> {
+  refuseBpSeries(lines);
   return lines.map((l, i) =>
     clean({
       ...carriedRowFields(l),
@@ -434,6 +453,7 @@ export function buildGoodsRows(
 
 /** Строки «Товары» для счёта покупателю (полиморфная ссылка Номенклатура+_Type). */
 export function buildInvoiceRows(lines: GoodsLine[]): Array<Record<string, unknown>> {
+  refuseBpSeries(lines);
   return lines.map((l, i) =>
     clean({
       ...carriedRowFields(l),
@@ -1090,6 +1110,10 @@ const baseLineShape = {
   price: z.number().nonnegative().describe("Цена за единицу"),
   vatRate: z.enum(VAT_RATES).default("БезНДС").describe("Ставка НДС"),
   content: contentField,
+  seriesRef: z
+    .string()
+    .optional()
+    .describe("Управление торговлей: Ref_Key серии номенклатуры (там, где документ УТ её принимает)"),
 };
 
 /** Позиция документа продажи: со счетами доходов/расходов на строку. */
@@ -1724,7 +1748,7 @@ async function nomenclatureChangeRefused(
   );
 }
 
-async function patchOrPreview(
+export async function patchOrPreview(
   conn: Connection,
   entitySet: string,
   ref: string,
@@ -1800,7 +1824,7 @@ async function patchOrPreview(
  * Подтверждение идёт через журнал операций; для сверки после таймаута в журнал пишется число
  * строк до записи и ожидаемое после.
  */
-async function patchLinesOrPreview(
+export async function patchLinesOrPreview(
   conn: Connection,
   entitySet: string,
   ref: string,
@@ -2733,6 +2757,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
         if (Object.keys(fields).length === 0) return fail("Не заданы поля для изменения.");
+        const trade = await tradeEditKind(conn, entitySet);
+        if (trade) return updateTradeFields(conn, entitySet, trade, ref, fields, confirm);
         return patchOrPreview(conn, entitySet, ref, fields, confirm);
       }),
   );
@@ -3199,6 +3225,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       guard("write.document.update_document_lines", async () => {
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
+        const ka = await stockInAccountingBaseRefusal(conn, entitySet);
+        if (ka) return fail(ka);
+        const trade = await tradeEditKind(conn, entitySet);
+        if (trade) return replaceTradeLines(conn, entitySet, trade, ref, lines, confirm);
         const info = await getDocInfo(conn, entitySet, ref.replace(/[{}']/g, ""));
         if (info.posted) {
           return fail(
@@ -3253,6 +3283,12 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     return ref;
   };
   const tradeComment = z.string().optional().describe("Управление торговлей: комментарий документа");
+  const tradeDepartment = z
+    .string()
+    .optional()
+    .describe(
+      "Управление торговлей: подразделение (аналитика доходов и расходов) — название, код или Ref_Key; без него поле пустое",
+    );
 
   const toGoodsLines = (
     lines: Array<{ nomenclatureRef: string; quantity: number; price: number }>,
@@ -3379,6 +3415,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, organization, fromWarehouse, toWarehouse, date, lines, status, comment, confirm }) =>
       guard("write.warehouse.create_transfer", async () => {
         const conn = ctx.db(database);
+        const ka = await stockInAccountingBaseRefusal(conn, STOCK_SET.transfer);
+        if (ka) return fail(ka);
         if (await tradeStockSet(conn, "transfer")) {
           const [from, to] = [
             await tradeWarehouse(conn, fromWarehouse, "Склад-отправитель"),
@@ -3446,6 +3484,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .describe(
             "Управление торговлей, обязательно: вид цены — название или Ref_Key. НЕ выбирайте сами — уточните у пользователя",
           ),
+        department: tradeDepartment,
         incomeItem: z
           .string()
           .optional()
@@ -3466,11 +3505,14 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       lines,
       priceKind,
       incomeItem,
+      department,
       comment,
       confirm,
     }) =>
       guard("write.warehouse.create_surplus", async () => {
         const conn = ctx.db(database);
+        const ka = await stockInAccountingBaseRefusal(conn, STOCK_SET.surplus);
+        if (ka) return fail(ka);
         if (await tradeStockSet(conn, "surplus")) {
           if (!priceKind || !incomeItem)
             throw new InputError(
@@ -3480,7 +3522,17 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           const wh = await tradeWarehouse(conn, warehouse);
           return createTradeSurplus(
             conn,
-            { organization, warehouse: wh, priceKind, incomeItem, inventoryRef, date, comment, lines },
+            {
+              organization,
+              department,
+              warehouse: wh,
+              priceKind,
+              incomeItem,
+              inventoryRef,
+              date,
+              comment,
+              lines,
+            },
             confirm,
           );
         }
@@ -3534,6 +3586,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           ),
         date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         lines: whLines,
+        department: tradeDepartment,
         expenseItem: z
           .string()
           .optional()
@@ -3545,9 +3598,22 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       }),
       outputSchema: createResultSchema,
     },
-    ({ database, organization, warehouse, inventoryRef, date, lines, expenseItem, comment, confirm }) =>
+    ({
+      database,
+      organization,
+      warehouse,
+      inventoryRef,
+      date,
+      lines,
+      expenseItem,
+      department,
+      comment,
+      confirm,
+    }) =>
       guard("write.warehouse.create_writeoff", async () => {
         const conn = ctx.db(database);
+        const ka = await stockInAccountingBaseRefusal(conn, STOCK_SET.writeoff);
+        if (ka) return fail(ka);
         if (await tradeStockSet(conn, "writeoff")) {
           if (!expenseItem)
             throw new InputError(
@@ -3557,7 +3623,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           const wh = await tradeWarehouse(conn, warehouse);
           return createTradeWriteoff(
             conn,
-            { organization, warehouse: wh, expenseItem, inventoryRef, date, comment, lines },
+            { organization, department, warehouse: wh, expenseItem, inventoryRef, date, comment, lines },
             confirm,
           );
         }
@@ -3623,6 +3689,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, organization, warehouse, date, lines, comment, confirm }) =>
       guard("write.warehouse.create_inventory", async () => {
         const conn = ctx.db(database);
+        const ka = await stockInAccountingBaseRefusal(conn, STOCK_SET.inventory);
+        if (ka) return fail(ka);
         // В УТ — пересчёт товаров: у него нет организации, учёт и факт — в строке.
         if (await tradeStockSet(conn, "inventory"))
           return createTradeInventory(
@@ -3694,6 +3762,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       guard("write.document.add_document_line", async () => {
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
+        const ka = await stockInAccountingBaseRefusal(conn, entitySet);
+        if (ka) return fail(ka);
+        const trade = await tradeEditKind(conn, entitySet);
+        if (trade) return addTradeLine(conn, entitySet, trade, ref, line, confirm);
         const info = await getDocInfo(conn, entitySet, ref.replace(/[{}']/g, ""));
         if (info.posted) return fail("Документ проведён. Сначала отмените проведение, затем меняйте строки.");
         const built = await buildSectionRows(
@@ -3764,6 +3836,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       guard("write.document.copy_document", async () => {
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
+        const ka = await stockInAccountingBaseRefusal(conn, entitySet);
+        if (ka) return fail(ka);
+        const trade = await tradeEditKind(conn, entitySet);
+        if (trade) return copyTradeDocument(conn, entitySet, trade, ref, { date, fields, lines }, confirm);
         const guid = ref.replace(/[{}']/g, "");
         const source = await conn.client.getEntity(`${entitySet}(guid'${guid}')${buildQuery({})}`);
         const payload = stripForCopy(source);
@@ -3836,6 +3912,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       guard("write.document.remove_document_line", async () => {
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
+        const ka = await stockInAccountingBaseRefusal(conn, entitySet);
+        if (ka) return fail(ka);
+        const trade = await tradeEditKind(conn, entitySet);
+        if (trade) return removeTradeLine(conn, entitySet, trade, ref, lineNumber, confirm);
         const info = await getDocInfo(conn, entitySet, ref.replace(/[{}']/g, ""));
         if (info.posted) return fail("Документ проведён. Сначала отмените проведение, затем меняйте строки.");
         if (lineNumber > info.lines.length) return fail(`В документе всего ${info.lines.length} строк(и).`);

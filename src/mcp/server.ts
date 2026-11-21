@@ -446,6 +446,7 @@ const nomenclature = (conn: Connection) => tradeNomenclatureSchema(conn, NOMENCL
 /** Складские документы УТ: перемещение, излишки, недостачи, пересчёт — устроены как в УТ, а не как в Бухгалтерии. */
 const STOCK_SETS = new Set<string>(Object.values(STOCK_DOCS));
 const stock = (set: string) => async (conn: Connection) => (await tradeStockSchema(conn, set)) !== undefined;
+const stockOf = (conn: Connection, a: Record<string, unknown>) => stock(String(a.entitySet))(conn);
 const TRADE_WRITE: Record<string, TradeWrite> = {
   "write.pricing.create_price_setting": { applies: () => true, ready: prices },
   "write.document.post_document": {
@@ -476,6 +477,19 @@ const TRADE_WRITE: Record<string, TradeWrite> = {
   "write.catalog.create_agreement": { applies: () => true, ready: partners },
   "write.catalog.create_nomenclature": { applies: () => true, ready: nomenclature },
   "write.catalog.update_nomenclature": { applies: () => true, ready: nomenclature },
+  // Правка, копия и поля складских документов УТ — только этих четырёх документов (белый список полей — в trade-edit).
+  ...Object.fromEntries(
+    [
+      "write.document.update_document_lines",
+      "write.document.add_document_line",
+      "write.document.remove_document_line",
+      "write.document.copy_document",
+      "write.entity.update_entity",
+    ].map((name) => [
+      name,
+      { applies: (a: Record<string, unknown>) => STOCK_SETS.has(String(a.entitySet)), ready: stockOf },
+    ]),
+  ),
   "write.warehouse.create_transfer": { applies: () => true, ready: stock(STOCK_DOCS.transfer) },
   "write.warehouse.create_surplus": { applies: () => true, ready: stock(STOCK_DOCS.surplus) },
   "write.warehouse.create_writeoff": { applies: () => true, ready: stock(STOCK_DOCS.writeoff) },
