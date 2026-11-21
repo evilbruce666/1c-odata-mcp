@@ -3352,7 +3352,9 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       title: "Создать перемещение товаров",
       description:
         "Создаёт документ «Перемещение товаров» между складами. НЕПРОВЕДЁННЫЙ; провести — post_document " +
-        "(проводки Дт 41(склад-получатель) Кт 41(склад-отправитель)). dry-run/confirm.",
+        "(проводки Дт 41(склад-получатель) Кт 41(склад-отправитель)). dry-run/confirm. В Управлении торговлей — " +
+        "перемещение УТ: status «Принято» (по умолчанию) или «Отгружено», серия — seriesRef; post_document сверяет " +
+        "движения по складу со строками.",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
@@ -3420,7 +3422,9 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       title: "Создать оприходование товаров",
       description:
         "Создаёт документ «Оприходование товаров» (излишки). НЕПРОВЕДЁННЫЙ; провести — post_document " +
-        "(проводки Дт 41 Кт 91.01). Можно указать документ-основание — инвентаризацию. dry-run/confirm.",
+        "(проводки Дт 41 Кт 91.01). Можно указать документ-основание — инвентаризацию. dry-run/confirm. В " +
+        "Управлении торговлей — «Оприходование излишков товаров»: обязательны priceKind и incomeItem (уточните у " +
+        "пользователя), основание — пересчёт; post_document сверяет движения по складу.",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
@@ -3512,7 +3516,9 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       title: "Создать списание товаров",
       description:
         "Создаёт документ «Списание товаров» (недостача/порча). НЕПРОВЕДЁННЫЙ; провести — post_document " +
-        "(проводки Дт 94 Кт 41). Можно указать документ-основание — инвентаризацию. dry-run/confirm.",
+        "(проводки Дт 94 Кт 41). Можно указать документ-основание — инвентаризацию. dry-run/confirm. В " +
+        "Управлении торговлей — «Списание недостач товаров»: обязательна expenseItem (уточните у пользователя), " +
+        "основание — пересчёт; post_document сверяет движения по складу.",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
@@ -3588,7 +3594,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       description:
         "Создаёт документ «Инвентаризация товаров на складе» (сверка факт/учёт). Документ НЕ проводится " +
         "(движений не делает) — служит основанием для оприходования/списания. dry-run/confirm. " +
-        "Для каждой позиции: фактическое и учётное количество.",
+        "Для каждой позиции: фактическое и учётное количество. В Управлении торговлей — «Пересчёт товаров» " +
+        "(статус «Выполнено», без организации); его проведение движений по складу не делает.",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,

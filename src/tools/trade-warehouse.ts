@@ -59,10 +59,16 @@ const HEADER: Record<StockKind, readonly string[]> = {
   inventory: ["Склад_Key", "Статус", "УчетныеДанныеЗаполнены"],
 };
 const ROWS: Record<StockKind, readonly string[]> = {
-  transfer: ["Номенклатура_Key", "Количество"],
+  transfer: ["Номенклатура_Key", "Количество", "КоличествоУпаковок"],
   surplus: ["Номенклатура_Key", "Количество", "Цена", "Сумма", "Серия_Key"],
   writeoff: ["Номенклатура_Key", "Количество", "Серия_Key"],
-  inventory: ["Номенклатура_Key", "Количество", "КоличествоФакт"],
+  inventory: [
+    "Номенклатура_Key",
+    "Количество",
+    "КоличествоФакт",
+    "КоличествоУпаковок",
+    "КоличествоУпаковокФакт",
+  ],
 };
 
 /**
@@ -86,6 +92,7 @@ export interface StockLine {
   seriesRef?: string | undefined;
 }
 
+const REF_CHUNK = 20;
 const guidOf = (s: string) => s.replace(/[{}']/g, "").trim();
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -101,22 +108,28 @@ async function seriesNotes(conn: Connection, lines: readonly StockLine[]): Promi
   const meta = await conn.getMetadata();
   const has = (set: string, f: string) => !!meta.entities.get(set)?.properties.some((p) => p.name === f);
   if (!has(ITEMS, "ВидНоменклатуры_Key") || !has(KINDS, "ИспользоватьСерии")) return [];
-  const items = await conn.client.getCollection<ODataEntity>(
-    `${ITEMS}${buildQuery({
-      filter: or(...without.map((r) => cmp("Ref_Key", "eq", odataGuid(r)))),
-      select: ["Ref_Key", "Description", "ВидНоменклатуры_Key"],
-    })}`,
-  );
+  // По ссылкам — частями: длинный отбор «or» 1С не примет (как у цен).
+  const byRefs = async (set: string, refs: readonly string[], select: string[]) => {
+    const out: ODataEntity[] = [];
+    for (let i = 0; i < refs.length; i += REF_CHUNK)
+      out.push(
+        ...(
+          await conn.client.getCollection<ODataEntity>(
+            `${set}${buildQuery({
+              filter: or(...refs.slice(i, i + REF_CHUNK).map((r) => cmp("Ref_Key", "eq", odataGuid(r)))),
+              select,
+            })}`,
+          )
+        ).value,
+      );
+    return out;
+  };
+  const items = { value: await byRefs(ITEMS, without, ["Ref_Key", "Description", "ВидНоменклатуры_Key"]) };
   const kinds = [...new Set(items.value.map((i) => String(i["ВидНоменклатуры_Key"] ?? "")))].filter(
     (k) => k && k !== EMPTY_REF,
   );
   if (!kinds.length) return [];
-  const withSeries = await conn.client.getCollection<ODataEntity>(
-    `${KINDS}${buildQuery({
-      filter: or(...kinds.map((k) => cmp("Ref_Key", "eq", odataGuid(k)))),
-      select: ["Ref_Key", "ИспользоватьСерии"],
-    })}`,
-  );
+  const withSeries = { value: await byRefs(KINDS, kinds, ["Ref_Key", "ИспользоватьСерии"]) };
   const series = new Set(
     withSeries.value.filter((k) => k["ИспользоватьСерии"] === true).map((k) => String(k["Ref_Key"])),
   );
@@ -166,6 +179,9 @@ export async function createTradeTransfer(
       LineNumber: i + 1,
       Номенклатура_Key: l.nomenclatureRef,
       Количество: l.quantity,
+      // Форма 1С показывает и правит количество упаковок; без упаковки оно равно количеству (так у всех
+      // перемещений копии рабочей базы).
+      КоличествоУпаковок: l.quantity,
     })),
     // Серии перемещения — в своей табличной части, как в документах, созданных в 1С.
     ...(series.length
@@ -301,6 +317,9 @@ export async function createTradeInventory(
       Номенклатура_Key: l.nomenclatureRef,
       Количество: l.accountingQuantity,
       КоличествоФакт: l.factQuantity,
+      // Без упаковки — те же числа, как у всех пересчётов копии рабочей базы.
+      КоличествоУпаковок: l.accountingQuantity,
+      КоличествоУпаковокФакт: l.factQuantity,
       ...(l.price
         ? {
             Цена: l.price,
@@ -416,8 +435,9 @@ export async function verifyStockMovements(
   docRef: string,
   post: boolean,
 ): Promise<Record<string, unknown> | undefined> {
-  const kind = await tradeStockSchema(conn, entitySet);
-  if (!kind) return undefined;
+  const kind = (Object.keys(STOCK_DOCS) as StockKind[]).find((k) => STOCK_DOCS[k] === entitySet);
+  // Как у сборщика: только база без регистра бухгалтерии; в КА и ERP — проводки, как раньше.
+  if (!kind || !(await tradeStockSet(conn, kind))) return undefined;
   if (kind === "inventory")
     return { movementsNote: "Пересчёт товаров не делает движений по складу: проверено состояние документа." };
   const guid = guidOf(docRef);

@@ -233,7 +233,8 @@ describe("складские документы в Управлении торг
       Статус: "Принято",
       Posted: false,
       Комментарий: "ZZ-TEST",
-      Товары: [{ LineNumber: 1, Номенклатура_Key: ITEM, Количество: 2 }],
+      // Количество упаковок — как у всех перемещений копии рабочей базы: без упаковки равно количеству.
+      Товары: [{ LineNumber: 1, Номенклатура_Key: ITEM, Количество: 2, КоличествоУпаковок: 2 }],
     });
     expect(JSON.stringify(payloadOf(preview))).not.toContain("СчетУчета");
     expect(s.posts).toHaveLength(1);
@@ -347,7 +348,17 @@ describe("складские документы в Управлении торг
       Склад_Key: WH_A,
       Статус: "Выполнено",
       УчетныеДанныеЗаполнены: true,
-      Товары: [{ Количество: 3, КоличествоФакт: 5, Цена: 2, Сумма: 6, СуммаФакт: 10 }],
+      Товары: [
+        {
+          Количество: 3,
+          КоличествоФакт: 5,
+          КоличествоУпаковок: 3,
+          КоличествоУпаковокФакт: 5,
+          Цена: 2,
+          Сумма: 6,
+          СуммаФакт: 10,
+        },
+      ],
     });
     expect(p).not.toHaveProperty("Организация_Key");
     expect(s.posts[0]!.set).toBe("Document_ПересчетТоваров");
@@ -520,6 +531,30 @@ describe("складские документы в Управлении торг
 });
 
 describe("складские инструменты в Бухгалтерии — как раньше", () => {
+  it("КА и ERP (есть «Хозрасчётный» и документы как в УТ): сборщик и сверка УТ не включаются — как раньше", async () => {
+    const s = setup();
+    const available = await s.fake.conn.available();
+    vi.spyOn(s.fake.conn, "available").mockResolvedValue(
+      new Set([...available, "AccountingRegister_Хозрасчетный"]),
+    );
+    const r = await s.call(T, {
+      organization: "ТЕСТ",
+      fromWarehouse: "Основной",
+      toWarehouse: "Брак",
+      lines: [line(1)],
+    });
+    expect(JSON.stringify(r.sc["payload"] ?? {})).not.toContain("ХозяйственнаяОперация");
+    const posted = await s.call("write.document.post_document", {
+      entitySet: "Document_ПеремещениеТоваров",
+      ref: g("9", 1),
+      post: true,
+      confirm: true,
+    });
+    expect(posted.sc).not.toHaveProperty("movementsVerified");
+    expect(posted.sc).not.toHaveProperty("movementsNote");
+    expect(s.fake.requests.some((q) => q.resource === "AccumulationRegister_ТоварыНаСкладах")).toBe(false);
+  });
+
   it("серия и статус — только в УТ: в Бухгалтерии отказ без записи", async () => {
     const s = setup({ schema: "bp30" });
     const series = await s.call(W, { warehouse: "Основной", lines: [line(1, { seriesRef: SERIES })] });
