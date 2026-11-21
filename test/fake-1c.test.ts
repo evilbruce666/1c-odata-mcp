@@ -45,6 +45,8 @@ const SETTINGS_UPDATE = { mode: "update", singleWriter: true, accounts: { custom
 
 /** Аргументы, которые не подобрать по имени поля. Новый инструмент обычно сюда не нужен. */
 const OVERRIDES: Record<string, Record<string, unknown>> = {
+  // В схеме они необязательны (в УТ бывают операции без контрагента), в Бухгалтерии — обязательны.
+  "write.money.create_payment": { counterpartyRef: id, contractRef: id },
   // groups — вместо group, не вместе с ним: список групп проверяют test/stock.test.ts и test/items.test.ts.
   "read.analytics.get_warehouse_stock": { warehouses: [id], groups: undefined },
   "read.analytics.get_sales_register": { warehouses: [id], groups: undefined },
@@ -190,6 +192,8 @@ const EXPECTED_ERRORS: Record<string, string> = {
   // Соглашения есть только в УТ, КА и ERP: на снимке Бухгалтерии — отказ с объяснением.
   "write.catalog.create_agreement": "соглашения есть в Управлении торговлей",
   "write.counterparty.create_partner": "партнёры есть в Управлении торговлей",
+  // Заявка на расходование — документ УТ: в Бухгалтерии — отказ с указанием платёжного поручения.
+  "write.money.create_payment_request": "Заявка на расходование — документ Управления торговлей",
 };
 
 afterEach(() => {
@@ -369,6 +373,12 @@ const TRADE_WRITE_TOOLS = new Set([
   "write.warehouse.create_surplus",
   "write.warehouse.create_writeoff",
   "write.warehouse.create_inventory",
+  "write.money.create_cash_receipt",
+  "write.money.create_cash_payment",
+  "write.money.create_payment",
+  "write.money.create_bank_writeoff",
+  "write.money.create_payment_request",
+  "write.money.create_payout_order",
 ]);
 
 describe("запись на снимке схемы УТ 11 отказывает до предпросмотра", () => {
@@ -624,9 +634,35 @@ describe("самопроверка: поддельная 1С отвечает н
 });
 
 /** Необязательные аргументы, которые не заполнить по имени: взаимоисключающие или особой формы. */
+const TRADE_MONEY_FIELDS = [
+  "cash",
+  "cashflowItem",
+  "incomeItem",
+  "expenseItem",
+  "department",
+  "person",
+  "fromCash",
+  "toBankAccount",
+  "fromBankAccount",
+  "partyText",
+  "budget",
+];
 const OPTIONAL_OMIT: Record<string, string[]> = {
   "read.analytics.get_deal_history": ["dealKey"], // взаимоисключающий с contractRef
   "write.document.copy_document": ["lines"], // правки строк по номеру, не новые строки
+  // Поля денежных документов Управления торговлей: в Бухгалтерии — отказ, здесь проверяется схема Бухгалтерии.
+  ...Object.fromEntries(
+    [
+      "write.money.create_cash_receipt",
+      "write.money.create_cash_payment",
+      "write.money.create_bank_writeoff",
+      "write.money.create_payment",
+      "write.money.create_payment_request",
+    ].map((n) => [
+      n,
+      [...TRADE_MONEY_FIELDS, ...(n === "write.money.create_payment" ? ["purposeText", "comment"] : [])],
+    ]),
+  ),
 };
 
 /** Аргументы, с которыми инструмент законно отказывает: отбор без данных или взаимоисключающие параметры. */

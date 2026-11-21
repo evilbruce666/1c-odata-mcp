@@ -19,8 +19,8 @@ async function connect(env: Record<string, string>) {
 describe("фильтр инструментов", () => {
   it("по умолчанию видны все, и при READ_ONLY=true тоже: предпросмотр записи остаётся", async () => {
     const { names, client } = await connect({});
-    expect(names).toHaveLength(85);
-    expect(names.filter((n) => n.startsWith("write."))).toHaveLength(45);
+    expect(names).toHaveLength(86);
+    expect(names.filter((n) => n.startsWith("write."))).toHaveLength(46);
     expect((await client.listPrompts()).prompts).toHaveLength(PROMPTS.length);
     expect(client.getInstructions()).not.toContain("TOOLS_");
   });

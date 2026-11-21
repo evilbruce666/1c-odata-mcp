@@ -25,6 +25,7 @@ import { PRICE_DOC, priceMechanisms } from "../odata/pricing.js";
 import { PARTNERS, tradeCounterpartySchema } from "../tools/trade-counterparty.js";
 import { tradeNomenclatureSchema } from "../tools/trade-nomenclature.js";
 import { STOCK_DOCS, tradeStockSchema } from "../tools/trade-warehouse.js";
+import { MONEY_DOCS, tradeMoneySet, type MoneyKind } from "../tools/trade-money.js";
 import { registerDebtTools } from "../tools/debts.js";
 import { registerMonthCloseTools } from "../tools/month-close.js";
 import { registerCardTools } from "../tools/card.js";
@@ -447,26 +448,43 @@ const nomenclature = (conn: Connection) => tradeNomenclatureSchema(conn, NOMENCL
 const STOCK_SETS = new Set<string>(Object.values(STOCK_DOCS));
 const stock = (set: string) => async (conn: Connection) => (await tradeStockSchema(conn, set)) !== undefined;
 const stockOf = (conn: Connection, a: Record<string, unknown>) => stock(String(a.entitySet))(conn);
+/** Денежные документы УТ: ПКО, РКО, безналичные, заявка — по устройству документа (хозяйственная операция, касса). */
+const MONEY_SETS = new Map<string, MoneyKind>(
+  (Object.entries(MONEY_DOCS) as Array<[MoneyKind, string]>).map(([k, set]) => [set, k]),
+);
+const money = (kind: MoneyKind) => async (conn: Connection) =>
+  (await tradeMoneySet(conn, kind)) !== undefined;
+const moneyOf = (conn: Connection, a: Record<string, unknown>) =>
+  money(MONEY_SETS.get(String(a.entitySet))!)(conn);
 const TRADE_WRITE: Record<string, TradeWrite> = {
   "write.pricing.create_price_setting": { applies: () => true, ready: prices },
   "write.document.post_document": {
-    applies: (a) => a.entitySet === PRICE_DOC || STOCK_SETS.has(String(a.entitySet)),
-    ready: (conn, a) => (a.entitySet === PRICE_DOC ? prices(conn) : stock(String(a.entitySet))(conn)),
+    applies: (a) =>
+      a.entitySet === PRICE_DOC || STOCK_SETS.has(String(a.entitySet)) || MONEY_SETS.has(String(a.entitySet)),
+    ready: (conn, a) =>
+      a.entitySet === PRICE_DOC
+        ? prices(conn)
+        : MONEY_SETS.has(String(a.entitySet))
+          ? moneyOf(conn, a)
+          : stock(String(a.entitySet))(conn),
   },
   // Пометка — и для справочников, которые в УТ создаются (ошибочно созданного контрагента и партнёра убрать).
   "write.entity.mark_for_deletion": {
     applies: (a) =>
       a.entitySet === PRICE_DOC ||
       TRADE_CATALOGS.has(String(a.entitySet)) ||
-      STOCK_SETS.has(String(a.entitySet)),
+      STOCK_SETS.has(String(a.entitySet)) ||
+      MONEY_SETS.has(String(a.entitySet)),
     ready: (conn, a) =>
       a.entitySet === PRICE_DOC
         ? prices(conn)
-        : STOCK_SETS.has(String(a.entitySet))
-          ? stock(String(a.entitySet))(conn)
-          : a.entitySet === NOMENCLATURE
-            ? nomenclature(conn)
-            : partners(conn),
+        : MONEY_SETS.has(String(a.entitySet))
+          ? moneyOf(conn, a)
+          : STOCK_SETS.has(String(a.entitySet))
+            ? stock(String(a.entitySet))(conn)
+            : a.entitySet === NOMENCLATURE
+              ? nomenclature(conn)
+              : partners(conn),
   },
   "write.counterparty.create_counterparty": { applies: () => true, ready: partners },
   "write.counterparty.create_partner": { applies: () => true, ready: partners },
@@ -490,6 +508,13 @@ const TRADE_WRITE: Record<string, TradeWrite> = {
       { applies: (a: Record<string, unknown>) => STOCK_SETS.has(String(a.entitySet)), ready: stockOf },
     ]),
   ),
+  "write.money.create_cash_receipt": { applies: () => true, ready: money("cashIn") },
+  "write.money.create_cash_payment": { applies: () => true, ready: money("cashOut") },
+  "write.money.create_payment": { applies: () => true, ready: money("bankIn") },
+  "write.money.create_bank_writeoff": { applies: () => true, ready: money("bankOut") },
+  "write.money.create_payment_request": { applies: () => true, ready: money("request") },
+  // Платёжное поручение в УТ — отказ с указанием заявки и списания (сам инструмент объясняет).
+  "write.money.create_payout_order": { applies: () => true, ready: money("request") },
   "write.warehouse.create_transfer": { applies: () => true, ready: stock(STOCK_DOCS.transfer) },
   "write.warehouse.create_surplus": { applies: () => true, ready: stock(STOCK_DOCS.surplus) },
   "write.warehouse.create_writeoff": { applies: () => true, ready: stock(STOCK_DOCS.writeoff) },

@@ -22,6 +22,13 @@ const doc = { entitySet: "Document_СчетНаОплатуПокупателю"
 const ARGS: Record<string, Record<string, unknown>> = {
   ...Object.fromEntries(CREATE_CASES),
   "write.counterparty.create_group": { name: "Synthetic", parentRef: "00000000-0000-0000-0000-000000000000" },
+  "write.money.create_payment_request": {
+    operationKind: "ПрочаяВыдачаДенежныхСредств",
+    amount: 1,
+    payForm: "cash",
+    cashflowItem: id,
+    expenseItem: id,
+  },
   "write.pricing.create_price_setting": {
     priceKind: id,
     lines: [{ itemRef: id, price: 100 }],
@@ -92,6 +99,7 @@ const ARGS: Record<string, Record<string, unknown>> = {
 
 /** Инструменты Управления торговлей: в Бухгалтерии они законно отказывают, их журнал проверяется на снимке УТ. */
 const UT_TOOLS = new Set([
+  "write.money.create_payment_request",
   "write.pricing.create_price_setting",
   "write.catalog.create_agreement",
   "write.counterparty.create_partner",

@@ -67,6 +67,7 @@
   "write.money.create_cash_payment": 1,
   "write.money.create_cash_receipt": 1,
   "write.money.create_payment": 10,
+  "write.money.create_payment_request": 0,
   "write.money.create_payout_order": 5,
   "write.operation.status": 0,
   "write.pricing.create_price_setting": 4,

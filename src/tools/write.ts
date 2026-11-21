@@ -55,6 +55,15 @@ import {
 import { createAgreement, createTradeContract } from "./trade-contracts.js";
 import { createTradeNomenclature, tradeNomenclatureSchema } from "./trade-nomenclature.js";
 import {
+  MONEY_OPS,
+  PAYOUT_ORDER_IN_TRADE,
+  createTradeMoney,
+  tradeMoneySet,
+  verifyMoneyMovements,
+  type MoneyInput,
+  type MoneyKind,
+} from "./trade-money.js";
+import {
   addTradeLine,
   copyTradeDocument,
   removeTradeLine,
@@ -2645,7 +2654,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           const movements =
             confirm && result["done"] === true
               ? ((await verifyPriceMovements(conn, entitySet, ref, post)) ??
-                (await verifyStockMovements(conn, entitySet, ref, post)))
+                (await verifyStockMovements(conn, entitySet, ref, post)) ??
+                (await verifyMoneyMovements(conn, entitySet, ref, post)))
               : undefined;
           return ok({ ...result, ...movements });
         }
@@ -2694,7 +2704,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         // Документ цен проводит не проводки, а записи регистра цен: их и сверяем.
         const movements =
           (await verifyPriceMovements(conn, entitySet, guid, post)) ??
-          (await verifyStockMovements(conn, entitySet, guid, post));
+          (await verifyStockMovements(conn, entitySet, guid, post)) ??
+          (await verifyMoneyMovements(conn, entitySet, guid, post));
         // Что провёл документ — сразу в ответе: проводки по регистру Хозрасчетный.
         // Сбой чтения проводок не отменяет проведения, только поясняется.
         let postings: Record<string, unknown> = {};
@@ -3104,6 +3115,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     }) =>
       guard("write.money.create_payout_order", async () => {
         const conn = ctx.db(database);
+        if (await tradeMoneySet(conn, "request")) return fail(PAYOUT_ORDER_IN_TRADE);
         const set = await requireEntity(conn, WRITE_DOCUMENTS.paymentOrder, "Документ «Платёжное поручение»");
         const org = await resolveOrgOrDefault(conn, organization);
         const [resolvedOrgAccount, resolvedCurrency] = await Promise.all([
@@ -4111,6 +4123,119 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       }),
   );
 
+  /** Поля денежных документов Управления торговлей; в Бухгалтерии — отказ, а не молчаливый пропуск. */
+  const tradeMoneyFields = {
+    cash: z
+      .string()
+      .optional()
+      .describe("Управление торговлей: касса — название, код или Ref_Key (одна у организации — сама)"),
+    cashflowItem: z
+      .string()
+      .optional()
+      .describe(
+        "Управление торговлей: статья движения денежных средств — название, код или Ref_Key (НЕ угадывайте)",
+      ),
+    incomeItem: z
+      .string()
+      .optional()
+      .describe(
+        "Управление торговлей, прочее поступление: статья доходов или активов/пассивов (НЕ угадывайте)",
+      ),
+    expenseItem: z
+      .string()
+      .optional()
+      .describe("Управление торговлей, прочая выдача: статья расходов или активов/пассивов (НЕ угадывайте)"),
+    department: z
+      .string()
+      .optional()
+      .describe("Управление торговлей: подразделение — название, код или Ref_Key"),
+    person: z
+      .string()
+      .optional()
+      .describe("Управление торговлей, выдача подотчётнику: физическое лицо — название или Ref_Key"),
+    fromCash: z
+      .string()
+      .optional()
+      .describe("Управление торговлей: касса-отправитель (из другой кассы, из кассы на счёт)"),
+    toBankAccount: z
+      .string()
+      .optional()
+      .describe("Управление торговлей, инкассация: счёт организации, куда сдаются деньги"),
+    fromBankAccount: z
+      .string()
+      .optional()
+      .describe("Управление торговлей: счёт-отправитель организации (с другого счёта)"),
+    partyText: z
+      .string()
+      .optional()
+      .describe(
+        "Управление торговлей: «Принято от» / «Выдать» в ордере (по умолчанию — контрагент или лицо)",
+      ),
+    budget: z
+      .object({
+        kbk: z.string().describe("КБК"),
+        oktmo: z.string().describe("ОКТМО"),
+        payerStatus: z.string().describe("Статус составителя (01, 02, …)"),
+        kind: z.string().optional().describe("Вид перечисления (по умолчанию НалоговыйПлатеж)"),
+        basis: z.string().optional(),
+        period: z.string().optional(),
+        number: z.string().optional(),
+        date: z.string().optional(),
+      })
+      .optional()
+      .describe("Управление торговлей, перечисление в бюджет: реквизиты платежа"),
+  };
+  type TradeMoneyArgs = { [K in keyof typeof tradeMoneyFields]?: unknown };
+  const noTradeMoney = (a: TradeMoneyArgs) => {
+    const used = (Object.keys(tradeMoneyFields) as Array<keyof typeof tradeMoneyFields>).filter(
+      (k) => a[k] !== undefined,
+    );
+    if (used.length)
+      throw new InputError(
+        `Параметры ${used.join(", ")} — только для Управления торговлей. Ничего не записано.`,
+      );
+  };
+  /** Денежный документ УТ: сборщик trade-money; undefined — Бухгалтерия, как раньше. */
+  const tradeMoney = async (
+    conn: Connection,
+    kind: MoneyKind,
+    a: Record<string, unknown> & { operationKind?: string; amount: number; confirm: boolean },
+  ) => {
+    if (!(await tradeMoneySet(conn, kind))) return undefined;
+    if (!a.operationKind)
+      throw new InputError(
+        `Управление торговлей: укажите operationKind — хозяйственную операцию: ${Object.keys(MONEY_OPS[kind]).join(", ")}. Ничего не записано.`,
+      );
+    const s = (k: string) => (typeof a[k] === "string" ? (a[k] as string) : undefined);
+    const input: MoneyInput = {
+      organization: s("organization"),
+      operationKind: a.operationKind,
+      amount: a.amount,
+      cash: s("cash") ?? s("cashRef"),
+      orgBankAccount: s("orgBankAccount"),
+      counterpartyRef: s("counterpartyRef"),
+      contractRef: s("contractRef"),
+      cashflowItem: s("cashflowItem") ?? s("cashflowItemRef"),
+      incomeItem: s("incomeItem"),
+      expenseItem: s("expenseItem"),
+      department: s("department"),
+      person: s("person"),
+      fromCash: s("fromCash"),
+      toBankAccount: s("toBankAccount"),
+      fromBankAccount: s("fromBankAccount"),
+      partyText: s("partyText"),
+      basis: s("basis"),
+      purpose: s("purposeText") ?? s("purpose"),
+      budget: a["budget"] as MoneyInput["budget"],
+      payForm: s("payForm") as MoneyInput["payForm"],
+      status: s("status") as MoneyInput["status"],
+      paymentDate: s("paymentDate"),
+      date: s("date"),
+      comment: s("comment"),
+    };
+    return createTradeMoney(conn, kind, input, a.confirm);
+  };
+
   server.registerTool(
     "write.money.create_payment",
     {
@@ -4124,8 +4249,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
-        counterpartyRef: z.string().describe("Ref_Key покупателя"),
-        contractRef: z.string().describe("Ref_Key договора"),
+        counterpartyRef: z.string().optional().describe("Ref_Key покупателя (в Бухгалтерии обязателен)"),
+        contractRef: z.string().optional().describe("Ref_Key договора (в Бухгалтерии обязателен)"),
         operationKind: z
           .string()
           .trim()
@@ -4139,23 +4264,30 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         amount: z.number().positive().describe("Сумма оплаты"),
         orgBankAccount: orgBankAccountField,
         date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
+        purposeText: z.string().optional().describe("Управление торговлей: назначение платежа (текст)"),
+        comment: z.string().optional().describe("Управление торговлей: комментарий"),
+        ...tradeMoneyFields,
         confirm: confirmField,
       }),
       outputSchema: createResultSchema,
     },
-    ({
-      database,
-      organization,
-      counterpartyRef,
-      contractRef,
-      operationKind,
-      amount,
-      orgBankAccount,
-      date,
-      confirm,
-    }) =>
+    (a) =>
       guard("write.money.create_payment", async () => {
-        const conn = ctx.db(database);
+        const conn = ctx.db(a.database);
+        const trade = await tradeMoney(conn, "bankIn", a);
+        if (trade) return trade;
+        noTradeMoney(a);
+        if (a.purposeText !== undefined || a.comment !== undefined)
+          throw new InputError(
+            "purposeText и comment — только для Управления торговлей. Ничего не записано.",
+          );
+        const { organization, operationKind, amount, orgBankAccount, date, confirm } = a;
+        if (!a.counterpartyRef || !a.contractRef)
+          throw new InputError(
+            "Бухгалтерия: укажите counterpartyRef и contractRef — покупателя и договор. Ничего не записано.",
+          );
+        const counterpartyRef: string = a.counterpartyRef;
+        const contractRef: string = a.contractRef;
         const set = await requireEntity(
           conn,
           WRITE_DOCUMENTS.bankIn,
@@ -4239,6 +4371,53 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
   };
 
   server.registerTool(
+    "write.money.create_payment_request",
+    {
+      title: "Создать заявку на расходование денежных средств",
+      description:
+        "Управление торговлей: создаёт «Заявку на расходование денежных средств» — согласование будущей оплаты " +
+        "(поставщику, прочей выдачи, возврата клиенту, перечисления в бюджет). По умолчанию «Не согласована»: " +
+        "согласует ответственный в 1С. Деньги не двигает; оплата — create_bank_writeoff или create_cash_payment. " +
+        `Хозяйственные операции: ${Object.keys(MONEY_OPS.request).join(", ")}. dry-run/confirm. ` +
+        "В Бухгалтерии заявок нет — платёжное поручение (create_payout_order).",
+      inputSchema: z.object({
+        database: databaseField,
+        organization: organizationField,
+        operationKind: z.string().describe("Хозяйственная операция (ОБЯЗАТЕЛЬНО, не угадывать)"),
+        amount: z.number().positive().describe("Сумма"),
+        payForm: z.enum(["cash", "bank"]).describe("cash — из кассы, bank — со счёта"),
+        counterpartyRef: z.string().optional().describe("Ref_Key контрагента"),
+        contractRef: z.string().optional().describe("Ref_Key договора"),
+        orgBankAccount: orgBankAccountField,
+        purposeText: z.string().optional().describe("Назначение платежа"),
+        status: z
+          .enum(["НеСогласована", "Согласована", "КОплате"])
+          .optional()
+          .describe("Статус заявки (по умолчанию НеСогласована)"),
+        paymentDate: z
+          .string()
+          .optional()
+          .describe("Желательная дата платежа YYYY-MM-DD (по умолчанию — дата заявки)"),
+        date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
+        comment: z.string().optional().describe("Комментарий"),
+        ...tradeMoneyFields,
+        confirm: confirmField,
+      }),
+      outputSchema: createResultSchema,
+    },
+    (a) =>
+      guard("write.money.create_payment_request", async () => {
+        const conn = ctx.db(a.database);
+        const trade = await tradeMoney(conn, "request", a);
+        if (trade) return trade;
+        return fail(
+          "Заявка на расходование — документ Управления торговлей; в этой базе его нет или он устроен иначе. В " +
+            "Бухгалтерии исходящий платёж — платёжное поручение (write.money.create_payout_order). Ничего не записано.",
+        );
+      }),
+  );
+
+  server.registerTool(
     "write.money.create_bank_writeoff",
     {
       title: "Создать списание с расчётного счёта",
@@ -4263,26 +4442,32 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         orgBankAccount: orgBankAccountField,
         date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         comment: z.string().optional().describe("Комментарий"),
+        ...tradeMoneyFields,
         confirm: confirmField,
       }),
       outputSchema: createResultSchema,
     },
-    ({
-      database,
-      organization,
-      operationKind,
-      amount,
-      counterpartyRef,
-      contractRef,
-      purposeText,
-      cashflowItemRef,
-      orgBankAccount,
-      date,
-      comment,
-      confirm,
-    }) =>
+    (a) =>
       guard("write.money.create_bank_writeoff", async () => {
-        const conn = ctx.db(database);
+        const conn = ctx.db(a.database);
+        const trade = await tradeMoney(conn, "bankOut", a);
+        if (trade) return trade;
+        noTradeMoney(a);
+        const {
+          database,
+          organization,
+          operationKind,
+          amount,
+          counterpartyRef,
+          contractRef,
+          purposeText,
+          cashflowItemRef,
+          orgBankAccount,
+          date,
+          comment,
+          confirm,
+        } = a;
+        void database;
         const set = await requireEntity(
           conn,
           WRITE_DOCUMENTS.bankOut,
@@ -4321,6 +4506,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     cashflowItemRef: z.string().optional().describe("Ref_Key статьи ДДС"),
     date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
     comment: z.string().optional().describe("Комментарий"),
+    ...tradeMoneyFields,
     confirm: confirmField,
   };
 
@@ -4372,6 +4558,9 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     (a) =>
       guard("write.money.create_cash_receipt", async () => {
         const conn = ctx.db(a.database);
+        const trade = await tradeMoney(conn, "cashIn", a);
+        if (trade) return trade;
+        noTradeMoney(a);
         const set = await requireEntity(conn, WRITE_DOCUMENTS.cashIn, "Документ «Приходный кассовый ордер»");
         const org = await resolveOrg(conn, a.organization);
         const payload = await buildCashPayload(conn, org, a);
@@ -4395,6 +4584,9 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     (a) =>
       guard("write.money.create_cash_payment", async () => {
         const conn = ctx.db(a.database);
+        const trade = await tradeMoney(conn, "cashOut", a);
+        if (trade) return trade;
+        noTradeMoney(a);
         const set = await requireEntity(conn, WRITE_DOCUMENTS.cashOut, "Документ «Расходный кассовый ордер»");
         const org = await resolveOrg(conn, a.organization);
         const payload = await buildCashPayload(conn, org, a);
