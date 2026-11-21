@@ -2475,6 +2475,53 @@
 						FromRole="Begin"
 						ToRole="End"/>
 			</EntityType>
+			<EntityType Name="Catalog_ОбъектыРасчетов">
+				<Key>
+					<PropertyRef Name="Ref_Key"/>
+				</Key>
+				<Property Name="Ref_Key"
+						Type="Edm.Guid"
+						Nullable="false"/>
+				<Property Name="DataVersion"
+						Type="Edm.String"
+						Nullable="true"/>
+				<Property Name="DeletionMark"
+						Type="Edm.Boolean"
+						Nullable="true"/>
+				<Property Name="Description"
+						Type="Edm.String"
+						Nullable="true"/>
+				<Property Name="Объект"
+						Type="Edm.String"
+						Nullable="true"/>
+				<Property Name="Объект_Type"
+						Type="Edm.String"
+						Nullable="true"/>
+				<Property Name="ТипРасчетов"
+						Type="Edm.String"
+						Nullable="true"/>
+				<Property Name="ТипОбъектаРасчетов"
+						Type="Edm.String"
+						Nullable="true"/>
+				<Property Name="Партнер_Key"
+						Type="Edm.Guid"
+						Nullable="true"/>
+				<Property Name="Организация_Key"
+						Type="Edm.Guid"
+						Nullable="true"/>
+				<Property Name="Контрагент"
+						Type="Edm.String"
+						Nullable="true"/>
+				<Property Name="Контрагент_Type"
+						Type="Edm.String"
+						Nullable="true"/>
+				<Property Name="Договор"
+						Type="Edm.String"
+						Nullable="true"/>
+				<Property Name="Договор_Type"
+						Type="Edm.String"
+						Nullable="true"/>
+			</EntityType>
 			<EntityType Name="Catalog_Кассы">
 				<Key>
 					<PropertyRef Name="Ref_Key"/>
@@ -35328,6 +35375,8 @@
 						EntityType="StandardODATA.Catalog_ДоговорыКонтрагентов_ДополнительныеРеквизиты"/>
 				<EntitySet Name="Catalog_ДоговорыКонтрагентов_Филиалы"
 						EntityType="StandardODATA.Catalog_ДоговорыКонтрагентов_Филиалы"/>
+				<EntitySet Name="Catalog_ОбъектыРасчетов"
+						EntityType="StandardODATA.Catalog_ОбъектыРасчетов"/>
 				<EntitySet Name="Catalog_Кассы"
 						EntityType="StandardODATA.Catalog_Кассы"/>
 				<EntitySet Name="Catalog_Кассы_ПолучателиПлатежейПриПеремещенииДС"

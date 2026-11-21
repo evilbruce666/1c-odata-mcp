@@ -208,7 +208,7 @@ async function main(): Promise<number> {
       lines: L(3, 10),
     },
   );
-  await doc("реализация", "Document_РеализацияТоваровУслуг", "write.sales.create_shipment", {
+  const shipment = await doc("реализация", "Document_РеализацияТоваровУслуг", "write.sales.create_shipment", {
     ...party,
     contractRef: ctrClient,
     ...(agrClient ? { agreementRef: agrClient } : {}),
@@ -228,7 +228,7 @@ async function main(): Promise<number> {
         lines: L(1, 10),
       },
     );
-  await doc("заказ клиента", "Document_ЗаказКлиента", "write.sales.create_customer_order", {
+  const order = await doc("заказ клиента", "Document_ЗаказКлиента", "write.sales.create_customer_order", {
     ...party,
     contractRef: ctrClient,
     ...(agrClient ? { agreementRef: agrClient } : {}),
@@ -317,6 +317,113 @@ async function main(): Promise<number> {
         ...(item ? { cashflowItem: item } : {}),
       },
     );
+    // Оплата несколькими строками (lines): поставщику — по двум закупкам, от клиента — по реализации и заказу.
+    // Проведение разносит расчёты по объектам расчётов документов-оснований.
+    const byObject = async (set: string, ref: string, register: string, bases: string[]) => {
+      const objs = await Promise.all(
+        bases.map(async (b) => {
+          for (const t of [
+            "Document_ПриобретениеТоваровУслуг",
+            "Document_РеализацияТоваровУслуг",
+            "Document_ЗаказКлиента",
+          ]) {
+            const o = (
+              await get(
+                `Catalog_ОбъектыРасчетов?$format=json&$filter=Объект eq cast(guid'${b}', '${t}')&$select=Ref_Key`,
+              )
+            )[0];
+            if (o) return String(o["Ref_Key"]);
+          }
+          return "";
+        }),
+      );
+      const rs =
+        (
+          (await conn.client
+            .getEntity(`${register}(Recorder='${ref}', Recorder_Type='StandardODATA.${set}')?$format=json`)
+            .catch(() => ({ RecordSet: [] }))) as { RecordSet?: Json[] }
+        ).RecordSet ?? [];
+      return objs.map(
+        (o) =>
+          Math.round(
+            rs.filter((r) => r["ОбъектРасчетов_Key"] === o).reduce((t, r) => t + Number(r["Сумма"] ?? 0), 0) *
+              100,
+          ) / 100,
+      );
+    };
+    const pur2 = pur
+      ? await doc("приобретение 2", "Document_ПриобретениеТоваровУслуг", "write.purchase.create_purchase", {
+          ...party,
+          contractRef: ctrSupplier,
+          warehouse,
+          lines: L(1, 20),
+        })
+      : undefined;
+    if (pur && pur2) {
+      const split = await doc(
+        "оплата поставщику по двум закупкам",
+        "Document_СписаниеБезналичныхДенежныхСредств",
+        "write.money.create_bank_writeoff",
+        {
+          ...party,
+          contractRef: ctrSupplier,
+          operationKind: "ОплатаПоставщику",
+          amount: 30,
+          orgBankAccount: bankName,
+          ...(item ? { cashflowItem: item } : {}),
+          lines: [
+            { basisRef: pur, amount: 10 },
+            { basisRef: pur2, amount: 20 },
+          ],
+        },
+      );
+      if (split) {
+        const got = await byObject(
+          "Document_СписаниеБезналичныхДенежныхСредств",
+          split,
+          "AccumulationRegister_РасчетыСПоставщиками",
+          [pur, pur2],
+        );
+        check(
+          "две строки поставщику: расчёты по каждой закупке",
+          got[0] === 10 && got[1] === 20,
+          JSON.stringify(got),
+        );
+      }
+    }
+    if (shipment && order) {
+      const inItem = await cf("Document_ПоступлениеБезналичныхДенежныхСредств", "ПоступлениеОплатыОтКлиента");
+      const split = await doc(
+        "поступление от клиента по реализации и заказу",
+        "Document_ПоступлениеБезналичныхДенежныхСредств",
+        "write.money.create_payment",
+        {
+          ...party,
+          contractRef: ctrClient,
+          operationKind: "ПоступлениеОплатыОтКлиента",
+          amount: 15,
+          orgBankAccount: bankName,
+          ...(inItem ? { cashflowItem: inItem } : {}),
+          lines: [
+            { basisRef: shipment, amount: 10 },
+            { basisRef: order, amount: 5 },
+          ],
+        },
+      );
+      if (split) {
+        const got = await byObject(
+          "Document_ПоступлениеБезналичныхДенежныхСредств",
+          split,
+          "AccumulationRegister_РасчетыСКлиентами",
+          [shipment, order],
+        );
+        check(
+          "две строки от клиента: расчёты по каждому документу",
+          got[0] === 10 && got[1] === 5,
+          JSON.stringify(got),
+        );
+      }
+    }
     const reqItem = await cf("Document_ЗаявкаНаРасходованиеДенежныхСредств", "ОплатаПоставщику");
     await doc(
       "заявка на расходование",

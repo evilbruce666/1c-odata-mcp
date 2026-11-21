@@ -136,6 +136,92 @@ export interface MoneyInput {
   paymentDate?: string | undefined;
   date?: string | undefined;
   comment?: string | undefined;
+  /** Несколько строк расшифровки по документам расчётов (1.1). */
+  lines?:
+    Array<{ contractRef?: string | undefined; basisRef?: string | undefined; amount: number }> | undefined;
+}
+
+/**
+ * Строки по документам расчётов: какие документы могут быть основанием строки. Объект расчётов строки — запись
+ * справочника «Объекты расчётов» с Объект = документ (на копии УТ 11.5: закупка и заказ поставщику — «Накладная» и
+ * «Заказ»). Проверено проведением 21.11.2026: оплата поставщику двумя строками по двум закупкам — расчёты по каждой.
+ */
+const LINE_BASIS: Record<string, readonly string[]> = {
+  "bankOut:ОплатаПоставщику": [
+    "Document_ПриобретениеТоваровУслуг",
+    "Document_ЗаказПоставщику",
+    "Document_ПриобретениеУслугПрочихАктивов",
+  ],
+  "bankIn:ПоступлениеОплатыОтКлиента": ["Document_РеализацияТоваровУслуг", "Document_ЗаказКлиента"],
+};
+
+async function settlementObjectRows(
+  conn: Connection,
+  kind: MoneyKind,
+  input: MoneyInput,
+  row: Record<string, unknown>,
+  partner: unknown,
+  org: string,
+): Promise<Record<string, unknown>[]> {
+  const lines = input.lines!;
+  const sets = LINE_BASIS[`${kind}:${input.operationKind}`];
+  if (!sets)
+    refuse(
+      `lines — для оплаты поставщику (списание безналичных) и поступления оплаты от клиента (поступление безналичных); у «${input.operationKind}» строк по документам нет.`,
+    );
+  if (lines.some((l) => l.contractRef !== undefined || !l.basisRef))
+    refuse(
+      "Управление торговлей: строки lines — по документам расчётов, в каждой basisRef (договор задаётся contractRef документа).",
+    );
+  const sum = Math.round(lines.reduce((t, l) => t + l.amount, 0) * 100) / 100;
+  if (Math.abs(sum - input.amount) >= 0.005)
+    refuse(
+      `Сумма строк lines ${sum} не равна сумме документа ${input.amount}: суммы строк должны давать amount.`,
+    );
+  const refs = lines.map((l) => guidOf(l.basisRef!).toLowerCase());
+  if (new Set(refs).size !== refs.length)
+    refuse("В lines документ повторяется: объедините суммы в одну строку.");
+  const available = await conn.available();
+  if (!available.has("Catalog_ОбъектыРасчетов"))
+    refuse(
+      "Строки по документам расчётов: справочник «Объекты расчётов» не опубликован в OData — добавьте его в состав стандартного интерфейса OData.",
+    );
+  const rows: Record<string, unknown>[] = [];
+  for (const [i, ref] of refs.entries()) {
+    let obj: ODataEntity | undefined;
+    for (const set of sets!) {
+      if (!available.has(set)) continue;
+      obj = (
+        await conn.client.getCollection<ODataEntity>(
+          `Catalog_ОбъектыРасчетов${buildQuery({
+            filter: `Объект eq cast(guid'${ref}', '${set}')`,
+            select: ["Ref_Key", "Партнер_Key", "Организация_Key", "DeletionMark"],
+          })}`,
+        )
+      ).value[0];
+      if (obj) break;
+    }
+    if (!obj)
+      refuse(
+        `Строка ${i + 1}: у документа basisRef нет объекта расчётов — нужен записанный в 1С документ: ${sets!.map((x) => x.replace("Document_", "")).join(", ")}.`,
+      );
+    if (obj!["DeletionMark"] === true)
+      refuse(`Строка ${i + 1}: объект расчётов документа помечен на удаление.`);
+    if (String(obj!["Партнер_Key"] ?? "").toLowerCase() !== String(partner ?? "").toLowerCase())
+      refuse(
+        `Строка ${i + 1}: документ basisRef — расчёты с другим партнёром, не с контрагентом этой оплаты.`,
+      );
+    if (String(obj!["Организация_Key"] ?? "").toLowerCase() !== org.toLowerCase())
+      refuse(`Строка ${i + 1}: документ basisRef — другой организации.`);
+    rows.push({
+      ...row,
+      LineNumber: i + 1,
+      Сумма: lines[i]!.amount,
+      ...("СуммаВзаиморасчетов" in row ? { СуммаВзаиморасчетов: lines[i]!.amount } : {}),
+      ОбъектРасчетов_Key: obj!["Ref_Key"],
+    });
+  }
+  return rows;
 }
 
 const RUB_CODE = "643";
@@ -411,7 +497,14 @@ export async function createTradeMoney(
   if ((kind === "bankIn" || kind === "bankOut" || kind === "request") && input.purpose)
     head["НазначениеПлатежа"] = input.purpose;
   if (kind === "request" && cf) head["СтатьяДвиженияДенежныхСредств_Key"] = cf;
-  const payload = { ...head, ...(spec.noRows ? {} : { РасшифровкаПлатежа: [row] }) };
+  const rows = input.lines
+    ? await settlementObjectRows(conn, kind, input, row, head["Партнер_Key"], org)
+    : [row];
+  if (input.lines)
+    notes.push(
+      `Строк расшифровки: ${rows.length} — по объектам расчётов документов basisRef; проведение разнесёт оплату по ним.`,
+    );
+  const payload = { ...head, ...(spec.noRows ? {} : { РасшифровкаПлатежа: rows }) };
   return createCore(conn, set, payload, confirm, notes, () => undefined);
 }
 

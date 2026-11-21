@@ -53,9 +53,31 @@ const TABLES: Record<string, Record<string, unknown>[]> = {
   ChartOfCharacteristicTypes_СтатьиРасходов: [{ Ref_Key: EXPENSE, Description: "Прочие расходы", Code: "1" }],
   ChartOfCharacteristicTypes_СтатьиАктивовПассивов: [{ Ref_Key: ASSET, Description: "Займ", Code: "1" }],
   Catalog_Валюты: [{ Ref_Key: RUB, Description: "RUB", Code: "643" }],
+  Catalog_ОбъектыРасчетов: [
+    // Две закупки и заказ клиента нашего партнёра; закупка чужого партнёра; помеченный объект.
+    ...[
+      [1, "Document_ПриобретениеТоваровУслуг", PARTNER, false],
+      [2, "Document_ПриобретениеТоваровУслуг", PARTNER, false],
+      [3, "Document_ЗаказКлиента", PARTNER, false],
+      [4, "Document_ПриобретениеТоваровУслуг", g("e", 9), false],
+      [5, "Document_ПриобретениеТоваровУслуг", PARTNER, true],
+    ].map(([n, type, partner, mark]) => ({
+      Ref_Key: g("7", n as number),
+      Объект: g("8", n as number),
+      Объект_Type: `StandardODATA.${type as string}`,
+      Партнер_Key: partner,
+      Организация_Key: ORG,
+      DeletionMark: mark,
+    })),
+  ],
 };
 
 function pick(base: string, rows: Record<string, unknown>[], filter: string): Record<string, unknown>[] {
+  const obj = /Объект eq cast\(guid'([0-9a-f-]{36})', '([^']+)'\)/i.exec(filter);
+  if (base === "Catalog_ОбъектыРасчетов" && obj)
+    return rows.filter(
+      (r) => r["Объект"] === obj[1]!.toLowerCase() && r["Объект_Type"] === `StandardODATA.${obj[2]}`,
+    );
   const owner = /Owner_Key eq guid'([0-9a-f-]{36})'/i.exec(filter)?.[1];
   if (owner) return rows.filter((r) => r["Owner_Key"] === owner);
   const refs = [...filter.matchAll(/guid'([0-9a-f-]{36})'/gi)].map((m) => m[1]!.toLowerCase());
@@ -894,5 +916,142 @@ describe("1.1: перевод между счетами — параметр Б�
     expect(r.isError).toBe(true);
     expect(r.text).toContain("targetBankAccount — только для Бухгалтерии");
     expect(s.posts).toEqual([]);
+  });
+});
+
+describe("1.1: оплата несколькими строками по документам расчётов (lines)", () => {
+  const P1 = g("8", 1);
+  const P2 = g("8", 2);
+  const ORDER = g("8", 3);
+  const bout = { ...base, operationKind: "ОплатаПоставщику", orgBankAccount: BANK, counterpartyRef: CP };
+
+  it("оплата поставщику по двум закупкам: строка на объект расчётов, суммы по строкам", async () => {
+    const s = setup();
+    const r = await s.call(BOUT, {
+      ...bout,
+      amount: 30,
+      lines: [
+        { basisRef: P1, amount: 10 },
+        { basisRef: P2.toUpperCase(), amount: 20 },
+      ],
+    });
+    expect(r.isError, r.text).toBeFalsy();
+    const rows = payloadOf(r)["РасшифровкаПлатежа"] as Record<string, unknown>[];
+    expect(rows).toMatchObject([
+      {
+        LineNumber: 1,
+        Сумма: 10,
+        СуммаВзаиморасчетов: 10,
+        ОбъектРасчетов_Key: g("7", 1),
+        Партнер_Key: PARTNER,
+      },
+      {
+        LineNumber: 2,
+        Сумма: 20,
+        СуммаВзаиморасчетов: 20,
+        ОбъектРасчетов_Key: g("7", 2),
+        Партнер_Key: PARTNER,
+      },
+    ]);
+    expect(payloadOf(r)["СуммаДокумента"]).toBe(30);
+    expect(r.text).toContain("Строк расшифровки: 2");
+    expect(s.posts).toEqual([]);
+  });
+
+  it("поступление от клиента по заказу клиента и реализации-основанию — тот же путь", async () => {
+    const s = setup();
+    const r = await s.call(BIN, {
+      ...base,
+      operationKind: "ПоступлениеОплатыОтКлиента",
+      orgBankAccount: BANK,
+      counterpartyRef: CP,
+      amount: 10,
+      lines: [
+        { basisRef: ORDER, amount: 4 },
+        { basisRef: P1, amount: 6 },
+      ],
+    });
+    // Закупка — не основание поступления от клиента: объекта у неё в наборе «клиентских» документов нет.
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("Строка 2: у документа basisRef нет объекта расчётов");
+  });
+
+  it.each([
+    [
+      {
+        lines: [
+          { basisRef: P1, amount: 10 },
+          { basisRef: P2, amount: 10 },
+        ],
+      },
+      "не равна сумме документа",
+    ],
+    [
+      {
+        lines: [
+          { basisRef: P1, amount: 10 },
+          { basisRef: P1, amount: 20 },
+        ],
+      },
+      "повторяется",
+    ],
+    [
+      {
+        lines: [
+          { basisRef: P1, amount: 10 },
+          { basisRef: g("8", 4), amount: 20 },
+        ],
+      },
+      "с другим партнёром",
+    ],
+    [
+      {
+        lines: [
+          { basisRef: P1, amount: 10 },
+          { basisRef: g("8", 5), amount: 20 },
+        ],
+      },
+      "помечен на удаление",
+    ],
+    [
+      {
+        lines: [
+          { basisRef: P1, amount: 10 },
+          { contractRef: P2, amount: 20 },
+        ],
+      },
+      "в каждой basisRef",
+    ],
+    [
+      {
+        operationKind: "ВозвратОплатыКлиенту",
+        lines: [
+          { basisRef: P1, amount: 10 },
+          { basisRef: P2, amount: 20 },
+        ],
+      },
+      "lines — для оплаты поставщику",
+    ],
+  ] as const)("отказ без записи: %o", async (extra, text) => {
+    const s = setup();
+    const r = await s.call(BOUT, { ...bout, amount: 30, ...extra });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain(text);
+    expect(s.posts).toEqual([]);
+  });
+
+  it("Бухгалтерия: basisRef в строке — отказ (строки по договорам)", async () => {
+    const s = setup({ schema: "bp30" });
+    const r = await s.call(BOUT, {
+      operationKind: "ОплатаПоставщику",
+      amount: 30,
+      counterpartyRef: CP,
+      lines: [
+        { basisRef: P1, amount: 10 },
+        { basisRef: P2, amount: 20 },
+      ],
+    });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("строки lines — по договорам");
   });
 });

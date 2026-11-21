@@ -1465,11 +1465,18 @@ export async function withSettlementAccounts(
   return { payload: next, notes };
 }
 
-/** Оплата по нескольким договорам (1.1): строки расшифровки задаёт пользователь, сумма не разносится сама. */
+/** Оплата несколькими строками (1.1): строки расшифровки задаёт пользователь, сумма не разносится сама. */
 const settlementLinesField = z
   .array(
     z.object({
-      contractRef: z.string().min(1).describe("Ref_Key договора строки"),
+      contractRef: z.string().min(1).optional().describe("Бухгалтерия: Ref_Key договора строки"),
+      basisRef: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          "Управление торговлей: Ref_Key документа, по которому идут расчёты строки (поставщику — приобретение или заказ поставщику; от клиента — реализация или заказ клиента)",
+        ),
       amount: z.number().positive().describe("Сумма строки"),
     }),
   )
@@ -1477,7 +1484,7 @@ const settlementLinesField = z
   .max(50)
   .optional()
   .describe(
-    "Бухгалтерия: оплата по нескольким договорам одного контрагента — строки расшифровки {contractRef, amount}, сумма строк = amount. Как разнести сумму, решает пользователь — не угадывать. Счета расчётов — по настройке договора каждой строки",
+    "Оплата одного контрагента несколькими строками расшифровки, сумма строк = amount. Бухгалтерия — по договорам {contractRef, amount}, счета расчётов по настройке договора каждой строки; Управление торговлей — по документам {basisRef, amount} (оплата поставщику, поступление от клиента). Как разнести сумму, решает пользователь — не угадывать",
   );
 
 const TRANSFER_NOTE =
@@ -4638,9 +4645,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     a: Record<string, unknown> & { operationKind?: string; amount: number; confirm: boolean },
   ) => {
     if (!(await tradeMoneySet(conn, kind))) return undefined;
-    const bpOnly = ["corrAccount", "otherItemRef", "targetBankAccount", "lines"].filter(
-      (k) => a[k] !== undefined,
-    );
+    const bpOnly = ["corrAccount", "otherItemRef", "targetBankAccount"].filter((k) => a[k] !== undefined);
     if (bpOnly.length)
       throw new InputError(
         `Параметры ${bpOnly.join(", ")} — только для Бухгалтерии` +
@@ -4678,6 +4683,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       paymentDate: s("paymentDate"),
       date: s("date"),
       comment: s("comment"),
+      lines: a["lines"] as MoneyInput["lines"],
     };
     return createTradeMoney(conn, kind, input, a.confirm);
   };
@@ -4920,9 +4926,13 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       amount: number;
       counterpartyRef?: string | undefined;
       contractRef?: string | undefined;
-      lines: Array<{ contractRef: string; amount: number }>;
+      lines: Array<{ contractRef?: string | undefined; basisRef?: string | undefined; amount: number }>;
     },
   ): Promise<{ rows: Record<string, unknown>[]; notes: string[]; contractRef: string }> {
+    if (a.lines.some((l) => l.basisRef !== undefined || !l.contractRef))
+      throw new InputError(
+        "Бухгалтерия: строки lines — по договорам, в каждой contractRef (basisRef — для Управления торговлей). Ничего не записано.",
+      );
     if (!/Поставщик|Покупател/i.test(operationKind))
       throw new InputError(
         `lines — для оплаты по договорам (оплата поставщику, оплата покупателя, возвраты); у «${operationKind}» строк по договорам нет. Ничего не записано.`,
@@ -4936,7 +4946,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       throw new InputError(
         `Сумма строк lines ${sum} не равна сумме документа ${a.amount}: суммы строк должны давать amount. Ничего не записано.`,
       );
-    const refs = a.lines.map((l) => l.contractRef.trim().replace(/[{}]/g, "").toLowerCase());
+    const refs = a.lines.map((l) => l.contractRef!.trim().replace(/[{}]/g, "").toLowerCase());
     if (a.contractRef && a.contractRef.trim().replace(/[{}]/g, "").toLowerCase() !== refs[0])
       throw new InputError(
         "contractRef — договор шапки: при lines это договор первой строки. Уберите contractRef или поставьте этот договор первым. Ничего не записано.",
