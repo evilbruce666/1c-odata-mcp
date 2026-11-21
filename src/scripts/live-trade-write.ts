@@ -317,7 +317,7 @@ async function main(): Promise<number> {
         ...(item ? { cashflowItem: item } : {}),
       },
     );
-    // Оплата несколькими строками (lines): поставщику — по двум закупкам, от клиента — по реализации и заказу.
+    // Оплата несколькими строками (settlementLines): поставщику — по двум закупкам, от клиента — по реализации и заказу.
     // Проведение разносит расчёты по объектам расчётов документов-оснований.
     const byObject = async (set: string, ref: string, register: string, bases: string[]) => {
       const objs = await Promise.all(
@@ -371,7 +371,7 @@ async function main(): Promise<number> {
           amount: 30,
           orgBankAccount: bankName,
           ...(item ? { cashflowItem: item } : {}),
-          lines: [
+          settlementLines: [
             { basisRef: pur, amount: 10 },
             { basisRef: pur2, amount: 20 },
           ],
@@ -404,7 +404,7 @@ async function main(): Promise<number> {
           amount: 15,
           orgBankAccount: bankName,
           ...(inItem ? { cashflowItem: inItem } : {}),
-          lines: [
+          settlementLines: [
             { basisRef: shipment, amount: 10 },
             { basisRef: order, amount: 5 },
           ],

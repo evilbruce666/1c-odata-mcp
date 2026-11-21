@@ -348,7 +348,7 @@ async function main(): Promise<number> {
           posted?.text.slice(0, 80) ?? "",
         );
       }
-      // Оплата поставщику по двум договорам (lines): проводка по расчётам — по каждой строке со своим договором;
+      // Оплата поставщику по двум договорам (settlementLines): проводка по расчётам — по каждой строке со своим договором;
       // затем сумма документа меняется и строки выравниваются по заданным суммам (lineAmounts).
       const multiCp = await flow("write.counterparty.create_counterparty", { name: `${tag} два договора` });
       const c1 = multiCp
@@ -370,12 +370,12 @@ async function main(): Promise<number> {
             operationKind: "ОплатаПоставщику",
             amount: 3,
             counterpartyRef: String(multiCp["ref"]),
-            lines: [
+            settlementLines: [
               { contractRef: String(c1["ref"]), amount: 2 },
               { contractRef: String(c2["ref"]), amount: 1 },
             ],
           },
-          "оплата поставщику по двум договорам (lines)",
+          "оплата поставщику по двум договорам (settlementLines)",
         );
         if (pay2) {
           const set = String(pay2["entitySet"]);
@@ -459,12 +459,12 @@ async function main(): Promise<number> {
           {
             amount: 3,
             counterpartyRef: String(multiCp["ref"]),
-            lines: [
+            settlementLines: [
               { contractRef: String(k1["ref"]), amount: 1 },
               { contractRef: String(k2["ref"]), amount: 2 },
             ],
           },
-          "оплата покупателя по двум договорам (lines)",
+          "оплата покупателя по двум договорам (settlementLines)",
         );
         if (inc) {
           const set = String(inc["entitySet"]);

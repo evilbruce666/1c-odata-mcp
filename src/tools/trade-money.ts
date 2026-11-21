@@ -137,7 +137,7 @@ export interface MoneyInput {
   date?: string | undefined;
   comment?: string | undefined;
   /** Несколько строк расшифровки по документам расчётов (1.1). */
-  lines?:
+  settlementLines?:
     Array<{ contractRef?: string | undefined; basisRef?: string | undefined; amount: number }> | undefined;
 }
 
@@ -163,24 +163,24 @@ async function settlementObjectRows(
   partner: unknown,
   org: string,
 ): Promise<Record<string, unknown>[]> {
-  const lines = input.lines!;
+  const lines = input.settlementLines!;
   const sets = LINE_BASIS[`${kind}:${input.operationKind}`];
   if (!sets)
     refuse(
-      `lines — для оплаты поставщику (списание безналичных) и поступления оплаты от клиента (поступление безналичных); у «${input.operationKind}» строк по документам нет.`,
+      `settlementLines — для оплаты поставщику (списание безналичных) и поступления оплаты от клиента (поступление безналичных); у «${input.operationKind}» строк по документам нет.`,
     );
   if (lines.some((l) => l.contractRef !== undefined || !l.basisRef))
     refuse(
-      "Управление торговлей: строки lines — по документам расчётов, в каждой basisRef (договор задаётся contractRef документа).",
+      "Управление торговлей: строки settlementLines — по документам расчётов, в каждой basisRef (договор задаётся contractRef документа).",
     );
   const sum = Math.round(lines.reduce((t, l) => t + l.amount, 0) * 100) / 100;
   if (Math.abs(sum - input.amount) >= 0.005)
     refuse(
-      `Сумма строк lines ${sum} не равна сумме документа ${input.amount}: суммы строк должны давать amount.`,
+      `Сумма строк settlementLines ${sum} не равна сумме документа ${input.amount}: суммы строк должны давать amount.`,
     );
   const refs = lines.map((l) => guidOf(l.basisRef!).toLowerCase());
   if (new Set(refs).size !== refs.length)
-    refuse("В lines документ повторяется: объедините суммы в одну строку.");
+    refuse("В settlementLines документ повторяется: объедините суммы в одну строку.");
   const available = await conn.available();
   if (!available.has("Catalog_ОбъектыРасчетов"))
     refuse(
@@ -497,10 +497,10 @@ export async function createTradeMoney(
   if ((kind === "bankIn" || kind === "bankOut" || kind === "request") && input.purpose)
     head["НазначениеПлатежа"] = input.purpose;
   if (kind === "request" && cf) head["СтатьяДвиженияДенежныхСредств_Key"] = cf;
-  const rows = input.lines
+  const rows = input.settlementLines
     ? await settlementObjectRows(conn, kind, input, row, head["Партнер_Key"], org)
     : [row];
-  if (input.lines)
+  if (input.settlementLines)
     notes.push(
       `Строк расшифровки: ${rows.length} — по объектам расчётов документов basisRef; проведение разнесёт оплату по ним.`,
     );

@@ -676,7 +676,7 @@ describe("Бухгалтерия: прочие операции денежных
     expect(s.fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
   });
 
-  it("1.1: оплата по нескольким договорам (lines) — строка на договор, договор шапки — первой строки", async () => {
+  it("1.1: оплата по нескольким договорам (settlementLines) — строка на договор, договор шапки — первой строки", async () => {
     const C1 = g("9", 1);
     const C2 = g("9", 2);
     const FOREIGN = g("9", 3);
@@ -690,7 +690,7 @@ describe("Бухгалтерия: прочие операции денежных
         ],
       },
     });
-    const lines = [
+    const settlementLines = [
       { contractRef: C1, amount: 60 },
       { contractRef: C2, amount: 40.5 },
     ];
@@ -698,7 +698,12 @@ describe("Бухгалтерия: прочие операции денежных
       ["write.money.create_bank_writeoff", "ОплатаПоставщику"],
       ["write.money.create_payment", "ОплатаПокупателя"],
     ] as const) {
-      const r = await s.call(tool, { operationKind: op, amount: 100.5, counterpartyRef: CP, lines });
+      const r = await s.call(tool, {
+        operationKind: op,
+        amount: 100.5,
+        counterpartyRef: CP,
+        settlementLines,
+      });
       expect(r.err, r.text).toBe(false);
       const p = payloadOf(r);
       expect(p["ДоговорКонтрагента_Key"]).toBe(C1);
@@ -722,14 +727,20 @@ describe("Бухгалтерия: прочие операции денежных
       expect(notes, tool).toContain("Строка 2:");
     }
     const bad: Array<[Record<string, unknown>, string]> = [
-      [{ lines: [lines[0], { contractRef: C2, amount: 40 }] }, "не равна сумме документа"],
-      [{ lines: [lines[0], { contractRef: C1.toUpperCase(), amount: 40.5 }] }, "повторяется"],
       [
-        { lines: [lines[0], { contractRef: FOREIGN, amount: 40.5 }] },
+        { settlementLines: [settlementLines[0], { contractRef: C2, amount: 40 }] },
+        "не равна сумме документа",
+      ],
+      [
+        { settlementLines: [settlementLines[0], { contractRef: C1.toUpperCase(), amount: 40.5 }] },
+        "повторяется",
+      ],
+      [
+        { settlementLines: [settlementLines[0], { contractRef: FOREIGN, amount: 40.5 }] },
         "Договор строки 2 — не договор этого контрагента",
       ],
-      [{ lines, contractRef: C2 }, "договор первой строки"],
-      [{ lines, counterpartyRef: undefined }, "укажите counterpartyRef"],
+      [{ settlementLines, contractRef: C2 }, "договор первой строки"],
+      [{ settlementLines, counterpartyRef: undefined }, "укажите counterpartyRef"],
     ];
     for (const [extra, text] of bad) {
       const r = await s.call("write.money.create_bank_writeoff", {
@@ -746,17 +757,17 @@ describe("Бухгалтерия: прочие операции денежных
       amount: 100.5,
       corrAccount: "91.02",
       otherItemRef: ITEM91,
-      lines,
+      settlementLines,
     });
     expect(other.err).toBe(true);
-    expect(other.text).toContain("lines — для оплаты по договорам");
+    expect(other.text).toContain("settlementLines — для оплаты по договорам");
     // С тем же договором первым contractRef допустим — регистр не важен.
     const same = await s.call("write.money.create_bank_writeoff", {
       operationKind: "ОплатаПоставщику",
       amount: 100.5,
       counterpartyRef: CP,
       contractRef: C1.toUpperCase(),
-      lines,
+      settlementLines,
     });
     expect(same.err, same.text).toBe(false);
     expect(s.fake.violations, "запросы к полям, которых нет в схеме БП 3.0").toEqual([]);

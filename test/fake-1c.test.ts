@@ -684,7 +684,9 @@ const OPTIONAL_OMIT: Record<string, string[]> = {
       [
         ...TRADE_MONEY_FIELDS,
         ...(n === "write.money.create_payment" ? ["purposeText", "comment"] : []),
-        ...(n === "write.money.create_payment" || n === "write.money.create_bank_writeoff" ? ["lines"] : []),
+        ...(n === "write.money.create_payment" || n === "write.money.create_bank_writeoff"
+          ? ["settlementLines"]
+          : []),
       ],
     ]),
   ),

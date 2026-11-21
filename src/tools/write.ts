@@ -4686,7 +4686,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       paymentDate: s("paymentDate"),
       date: s("date"),
       comment: s("comment"),
-      lines: a["lines"] as MoneyInput["lines"],
+      settlementLines: a["settlementLines"] as MoneyInput["settlementLines"],
     };
     return createTradeMoney(conn, kind, input, a.confirm);
   };
@@ -4748,7 +4748,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .describe(
             "Бухгалтерия, эквайринг («ПоступленияОтПродажПоПлатежнымКартамИБанковскимКредитам»): комиссия банка; amount — сумма, поступившая на счёт. При комиссии — corrAccount (счёт расходов, напр. «91.02») и otherItemRef",
           ),
-        lines: settlementLinesField,
+        settlementLines: settlementLinesField,
         ...tradeMoneyFields,
         confirm: confirmField,
       }),
@@ -4766,9 +4766,9 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         // Прочее поступление (проценты банка, возвраты, прочие доходы): без договора, счёт — corrAccount, строка
         // расшифровки — с суммой документа, как в документах рабочих баз БП 3.0 (Кт 91.01 со статьёй).
         if (operationKind === "ПрочееПоступление") {
-          if (a.lines)
+          if (a.settlementLines)
             throw new InputError(
-              "lines — для оплаты по договорам, у прочего поступления строк по договорам нет. Ничего не записано.",
+              "settlementLines — для оплаты по договорам, у прочего поступления строк по договорам нет. Ничего не записано.",
             );
           if (a.commission !== undefined)
             throw new InputError(
@@ -4817,9 +4817,9 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         // с банком она 60), комиссия — в «Сумме услуг» шапки и строки, её счёт (91.02 со статьёй) — в шапке. Так
         // заполнены документы рабочей БП 3.0; проводки Дт 51 Кт 57.03 и Дт 91.02 Кт 57.03.
         if (operationKind === ACQUIRING_KIND) {
-          if (a.purposeText !== undefined || a.lines)
+          if (a.purposeText !== undefined || a.settlementLines)
             throw new InputError(
-              "Эквайринг: purposeText и lines не поддержаны — одна строка по договору с банком. Ничего не записано.",
+              "Эквайринг: purposeText и settlementLines не поддержаны — одна строка по договору с банком. Ничего не записано.",
             );
           if (!a.counterpartyRef || !a.contractRef)
             throw new InputError(
@@ -4892,9 +4892,9 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           throw new InputError(
             "corrAccount, otherItemRef и cashflowItemRef — для operationKind «ПрочееПоступление»; у оплаты покупателя счёт подбирается по договору. Ничего не записано.",
           );
-        if (!a.counterpartyRef || (!a.contractRef && !a.lines))
+        if (!a.counterpartyRef || (!a.contractRef && !a.settlementLines))
           throw new InputError(
-            "Бухгалтерия: укажите counterpartyRef и contractRef — покупателя и договор (или lines — строки по договорам). Ничего не записано.",
+            "Бухгалтерия: укажите counterpartyRef и contractRef — покупателя и договор (или settlementLines — строки по договорам). Ничего не записано.",
           );
         const counterpartyRef: string = a.counterpartyRef;
         const set = await requireEntity(
@@ -4905,12 +4905,12 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const org = await resolveOrg(conn, organization);
         const bank = await resolveOrgBankAccount(conn, org.key, orgBankAccount);
         const cpSetMulti = resolveEntity(CATALOGS.counterparties, await conn.available());
-        if (a.lines) {
+        if (a.settlementLines) {
           const multi = await buildSettlementLines(conn, set, operationKind, "customer", org.key, {
             amount,
             counterpartyRef,
             contractRef: a.contractRef,
-            lines: a.lines,
+            settlementLines: a.settlementLines,
           });
           const payload = clean({
             Date: await docDate(conn, date),
@@ -5012,34 +5012,38 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       amount: number;
       counterpartyRef?: string | undefined;
       contractRef?: string | undefined;
-      lines: Array<{ contractRef?: string | undefined; basisRef?: string | undefined; amount: number }>;
+      settlementLines: Array<{
+        contractRef?: string | undefined;
+        basisRef?: string | undefined;
+        amount: number;
+      }>;
     },
   ): Promise<{ rows: Record<string, unknown>[]; notes: string[]; contractRef: string }> {
-    if (a.lines.some((l) => l.basisRef !== undefined || !l.contractRef))
+    if (a.settlementLines.some((l) => l.basisRef !== undefined || !l.contractRef))
       throw new InputError(
-        "Бухгалтерия: строки lines — по договорам, в каждой contractRef (basisRef — для Управления торговлей). Ничего не записано.",
+        "Бухгалтерия: строки settlementLines — по договорам, в каждой contractRef (basisRef — для Управления торговлей). Ничего не записано.",
       );
     if (!/Поставщик|Покупател/i.test(operationKind))
       throw new InputError(
-        `lines — для оплаты по договорам (оплата поставщику, оплата покупателя, возвраты); у «${operationKind}» строк по договорам нет. Ничего не записано.`,
+        `settlementLines — для оплаты по договорам (оплата поставщику, оплата покупателя, возвраты); у «${operationKind}» строк по договорам нет. Ничего не записано.`,
       );
     if (!a.counterpartyRef)
       throw new InputError(
-        "lines: укажите counterpartyRef — контрагента всех договоров. Ничего не записано.",
+        "settlementLines: укажите counterpartyRef — контрагента всех договоров. Ничего не записано.",
       );
-    const sum = roundMoney(a.lines.reduce((t, l) => t + l.amount, 0));
+    const sum = roundMoney(a.settlementLines.reduce((t, l) => t + l.amount, 0));
     if (Math.abs(sum - a.amount) >= 0.005)
       throw new InputError(
-        `Сумма строк lines ${sum} не равна сумме документа ${a.amount}: суммы строк должны давать amount. Ничего не записано.`,
+        `Сумма строк settlementLines ${sum} не равна сумме документа ${a.amount}: суммы строк должны давать amount. Ничего не записано.`,
       );
-    const refs = a.lines.map((l) => l.contractRef!.trim().replace(/[{}]/g, "").toLowerCase());
+    const refs = a.settlementLines.map((l) => l.contractRef!.trim().replace(/[{}]/g, "").toLowerCase());
     if (a.contractRef && a.contractRef.trim().replace(/[{}]/g, "").toLowerCase() !== refs[0])
       throw new InputError(
-        "contractRef — договор шапки: при lines это договор первой строки. Уберите contractRef или поставьте этот договор первым. Ничего не записано.",
+        "contractRef — договор шапки: при settlementLines это договор первой строки. Уберите contractRef или поставьте этот договор первым. Ничего не записано.",
       );
     if (new Set(refs).size !== refs.length)
       throw new InputError(
-        "В lines договор повторяется: объедините суммы в одну строку. Ничего не записано.",
+        "В settlementLines договор повторяется: объедините суммы в одну строку. Ничего не записано.",
       );
     const contracts = resolveEntity(CATALOGS.contracts, await conn.available());
     if (!contracts) throw new InputError("Справочник договоров не опубликован в OData. Ничего не записано.");
@@ -5052,7 +5056,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       );
       if (String(c["Owner_Key"] ?? "").toLowerCase() !== cp)
         throw new InputError(`Договор строки ${i + 1} — не договор этого контрагента. Ничего не записано.`);
-      const bd = (await buildSettlementRow(conn, operationKind, ref, a.lines[i]!.amount))!;
+      const bd = (await buildSettlementRow(conn, operationKind, ref, a.settlementLines[i]!.amount))!;
       const one = await withSettlementAccounts(
         conn,
         set,
@@ -5164,7 +5168,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .describe(
             "Бухгалтерия, «ПереводНаДругойСчет» (ОБЯЗАТЕЛЕН): счёт-получатель — банковский счёт той же организации, Ref_Key, номер или часть названия",
           ),
-        lines: settlementLinesField,
+        settlementLines: settlementLinesField,
         ...tradeMoneyFields,
         confirm: confirmField,
       }),
@@ -5203,11 +5207,11 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         if (refused) throw new InputError(`${refused} Ничего не записано.`);
         // Оплата поставщику или возврат покупателю без договора: расшифровка расчётов не собирается, и 1С такой
         // документ не проводит (нулевая строка расшифровки) — отказ с подсказкой, а не документ-тупик.
-        if (a.lines && !/Поставщик|Покупател/i.test(operationKind))
+        if (a.settlementLines && !/Поставщик|Покупател/i.test(operationKind))
           throw new InputError(
-            `lines — для оплаты по договорам (оплата поставщику, возврат покупателю); у «${operationKind}» строк по договорам нет. Ничего не записано.`,
+            `settlementLines — для оплаты по договорам (оплата поставщику, возврат покупателю); у «${operationKind}» строк по договорам нет. Ничего не записано.`,
           );
-        if (/Поставщик|Покупател/i.test(operationKind) && !contractRef && !a.lines)
+        if (/Поставщик|Покупател/i.test(operationKind) && !contractRef && !a.settlementLines)
           throw new InputError(
             `Для операции «${operationKind}» укажите contractRef — договор с контрагентом: по нему собирается расшифровка расчётов, без неё 1С документ не проведёт. Ничего не записано.`,
           );
@@ -5230,12 +5234,12 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
                   );
                 })()
               : undefined;
-        const multi = a.lines
+        const multi = a.settlementLines
           ? await buildSettlementLines(conn, set, operationKind, undefined, org.key, {
               amount,
               counterpartyRef,
               contractRef,
-              lines: a.lines,
+              settlementLines: a.settlementLines,
             })
           : undefined;
         const bd = multi ? undefined : await buildSettlementRow(conn, operationKind, contractRef, amount);

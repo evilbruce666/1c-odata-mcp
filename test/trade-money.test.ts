@@ -944,7 +944,7 @@ describe("1.1: оплата несколькими строками по док�
     const r = await s.call(BOUT, {
       ...bout,
       amount: 30,
-      lines: [
+      settlementLines: [
         { basisRef: P1, amount: 10 },
         { basisRef: P2.toUpperCase(), amount: 20 },
       ],
@@ -980,7 +980,7 @@ describe("1.1: оплата несколькими строками по док�
       orgBankAccount: BANK,
       counterpartyRef: CP,
       amount: 10,
-      lines: [
+      settlementLines: [
         { basisRef: ORDER, amount: 4 },
         { basisRef: P1, amount: 6 },
       ],
@@ -993,7 +993,7 @@ describe("1.1: оплата несколькими строками по док�
   it.each([
     [
       {
-        lines: [
+        settlementLines: [
           { basisRef: P1, amount: 10 },
           { basisRef: P2, amount: 10 },
         ],
@@ -1002,7 +1002,7 @@ describe("1.1: оплата несколькими строками по док�
     ],
     [
       {
-        lines: [
+        settlementLines: [
           { basisRef: P1, amount: 10 },
           { basisRef: P1, amount: 20 },
         ],
@@ -1011,7 +1011,7 @@ describe("1.1: оплата несколькими строками по док�
     ],
     [
       {
-        lines: [
+        settlementLines: [
           { basisRef: P1, amount: 10 },
           { basisRef: g("8", 4), amount: 20 },
         ],
@@ -1020,7 +1020,7 @@ describe("1.1: оплата несколькими строками по док�
     ],
     [
       {
-        lines: [
+        settlementLines: [
           { basisRef: P1, amount: 10 },
           { basisRef: g("8", 5), amount: 20 },
         ],
@@ -1029,7 +1029,7 @@ describe("1.1: оплата несколькими строками по док�
     ],
     [
       {
-        lines: [
+        settlementLines: [
           { basisRef: P1, amount: 10 },
           { contractRef: P2, amount: 20 },
         ],
@@ -1039,12 +1039,12 @@ describe("1.1: оплата несколькими строками по док�
     [
       {
         operationKind: "ВозвратОплатыКлиенту",
-        lines: [
+        settlementLines: [
           { basisRef: P1, amount: 10 },
           { basisRef: P2, amount: 20 },
         ],
       },
-      "lines — для оплаты поставщику",
+      "settlementLines — для оплаты поставщику",
     ],
   ] as const)("отказ без записи: %o", async (extra, text) => {
     const s = setup();
@@ -1060,12 +1060,12 @@ describe("1.1: оплата несколькими строками по док�
       operationKind: "ОплатаПоставщику",
       amount: 30,
       counterpartyRef: CP,
-      lines: [
+      settlementLines: [
         { basisRef: P1, amount: 10 },
         { basisRef: P2, amount: 20 },
       ],
     });
     expect(r.isError).toBe(true);
-    expect(r.text).toContain("строки lines — по договорам");
+    expect(r.text).toContain("строки settlementLines — по договорам");
   });
 });
