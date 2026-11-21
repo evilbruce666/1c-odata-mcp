@@ -1,4 +1,6 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { mkdir, open, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { createServer as createHttpServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
@@ -17,8 +19,28 @@ import { logger } from "./logger.js";
  * HTTP-транспорт для серверной установки. Без сессий: каждый запрос обслуживает новый McpServer над общим
  * ServerContext (сервер ничего не шлёт клиенту сам, состояния сессии у него нет). Защита: обязательный токен,
  * проверка Host и Origin от подмены DNS и запросов из браузера. TLS здесь нет: снаружи внутренней сети нужен
- * прокси. Только чтение: журнал записи и подтверждение человеком здесь не гарантированы (проверка в env.ts).
+ * прокси. По умолчанию только чтение; запись — при READ_ONLY=false с журналом на томе и инструментами поимённо
+ * (условия — в env.ts, доступность журнала — при старте ниже). Кто подтверждает запись — ответственность интеграции.
  */
+
+/**
+ * Каталог журнала записи доступен на запись: создать и удалить пробный файл. Без этого первое подтверждение
+ * упало бы уже после предпросмотра, а журнал без тома не переживает рестарт (#67).
+ */
+export async function assertWriteJournalWritable(dir: string): Promise<void> {
+  try {
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    const probe = join(dir, `.probe-${randomUUID()}`);
+    await (await open(probe, "wx", 0o600)).close();
+    await rm(probe, { force: true });
+  } catch (e) {
+    throw new Error(
+      `Запись по HTTP: каталог журнала ODATA_WRITE_JOURNAL_DIR недоступен на запись (${e instanceof Error ? e.message : String(e)}). ` +
+        "Подключите том с правом записи для пользователя контейнера или работайте только для чтения: READ_ONLY=true.",
+      { cause: e },
+    );
+  }
+}
 
 const MCP_PATH = "/mcp";
 /** Аргументы инструментов чтения невелики; больший запрос отклоняется до разбора. */
@@ -75,8 +97,9 @@ export async function startHttpServer(
 ): Promise<{ port: number; close: () => Promise<void> }> {
   // Адаптер нужен только этому режиму: установкам со stdio его зависимости не загружаются.
   const { toNodeHandler } = await import("@modelcontextprotocol/node");
-  // Ошибка настройки (опечатка в TOOLS_ALLOW) должна остановить запуск, а не первый запрос.
+  // Ошибка настройки (опечатка в TOOLS_ALLOW, журнал без права записи) должна остановить запуск, а не первый запрос.
   createServer(ctx);
+  if (!ctx.behavior.readOnly) await assertWriteJournalWritable(ctx.behavior.writeJournalDir);
   const handler = createHttpHandler(ctx, cfg);
   const node = toNodeHandler(handler, {
     // Адаптер читает тело до проверки токена: без этого чужой запрос занял бы 4 МиБ.

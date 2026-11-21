@@ -73,6 +73,11 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
           // Адрес базы нужен при настройке на своём компьютере; держателю токена и модели в сети он ни к чему.
           ...(conn.behavior.networkTransport ? {} : { baseUrl: conn.cfg.baseUrl }),
           readOnly: conn.behavior.readOnly,
+          // Режим записи этой базы (#67): включена ли запись и срок предпросмотра — видно и по HTTP.
+          writeEnabled: !conn.behavior.readOnly && conn.cfg.writable,
+          ...(!conn.behavior.readOnly && conn.cfg.writable && (conn.behavior.previewMaxAgeMs ?? 0) > 0
+            ? { previewMaxAgeMinutes: Math.round((conn.behavior.previewMaxAgeMs ?? 0) / 60_000) }
+            : {}),
           regulatedCurrency: {
             code: conn.behavior.regulatedCurrencyCode,
             source: conn.regulatedCurrencySource,
@@ -80,7 +85,8 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
           ...(journal
             ? {
                 writeJournal: {
-                  dir: journal.dir,
+                  // Путь на сервере держателю токена в сети ни к чему — как и адрес базы.
+                  ...(conn.behavior.networkTransport ? {} : { dir: journal.dir }),
                   writable: journal.writable,
                   uncertainOperations: journal.uncertain.length,
                   ...(journal.uncertain.length ? { uncertainIds: journal.uncertain.slice(0, 20) } : {}),

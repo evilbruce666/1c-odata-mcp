@@ -184,6 +184,12 @@
           "readOnly": {
             "type": "boolean"
           },
+          "writeEnabled": {
+            "type": "boolean"
+          },
+          "previewMaxAgeMinutes": {
+            "type": "number"
+          },
           "regulatedCurrency": {
             "type": "object",
             "properties": {
@@ -231,7 +237,6 @@
               }
             },
             "required": [
-              "dir",
               "writable",
               "uncertainOperations",
               "note"

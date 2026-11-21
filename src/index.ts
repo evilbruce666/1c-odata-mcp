@@ -37,7 +37,12 @@ async function main(): Promise<void> {
 async function runHttp(ctx: ServerContext, http: HttpTransport): Promise<void> {
   const { startHttpServer } = await import("./http.js");
   const { port, close } = await startHttpServer(ctx, http);
-  logger.info({ host: http.host, port }, "1c-odata-mcp запущен (http, только чтение)");
+  logger.info(
+    { host: http.host, port, readOnly: ctx.behavior.readOnly },
+    ctx.behavior.readOnly
+      ? "1c-odata-mcp запущен (http, только чтение)"
+      : "1c-odata-mcp запущен (http, запись включена)",
+  );
   for (const signal of ["SIGTERM", "SIGINT"] as const) {
     process.once(signal, () => {
       // Запрос к 1С может идти минуты: контейнер не должен ждать его дольше обычного срока остановки.

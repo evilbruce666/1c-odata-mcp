@@ -801,6 +801,26 @@ export function createServer(ctx: ServerContext): McpServer {
         });
         if (checked.isError) return checked;
         if (replay) return replay;
+        // Срок предпросмотра (#67): интеграция может подтвердить давний предпросмотр, а документ получил бы дату и
+        // данные того дня. Выполненные операции выше уже отданы из журнала; сюда доходит только неподтверждённая.
+        const maxAge = ctx.behavior.previewMaxAgeMs ?? 0;
+        if (maxAge > 0) {
+          let stale: CallToolResult | undefined;
+          const aged = await guard(name, async () => {
+            const conn = ctx.db(typeof args.database === "string" ? args.database : undefined);
+            const entry = await conn.client.operationEntry(operationId);
+            const age = entry?.state === "prepared" ? Date.now() - Date.parse(entry.createdAt) : 0;
+            if (age > maxAge)
+              stale = fail(
+                `Предпросмотр сделан ${Math.floor(age / 60_000)} мин назад — дольше срока ODATA_WRITE_PREVIEW_MAX_AGE ` +
+                  `(${Math.round(maxAge / 60_000)} мин): данные в 1С могли измениться. Сделайте новый предпросмотр и ` +
+                  "подтвердите его operationId. Ничего не записано.",
+              );
+            return ok({});
+          });
+          if (aged.isError) return aged;
+          if (stale) return stale;
+        }
       }
       return withWriteOperation(token, requestHash, async () => {
         const result = await cb(args, extra);

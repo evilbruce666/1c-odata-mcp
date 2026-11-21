@@ -208,10 +208,12 @@ export const healthCheckResultSchema = z
     entityCount: z.number(),
     baseUrl: z.string().optional(),
     readOnly: z.boolean(),
+    writeEnabled: z.boolean().optional(),
+    previewMaxAgeMinutes: z.number().optional(),
     regulatedCurrency: z.object({ code: z.string(), source: z.enum(["database", "global", "default"]) }),
     writeJournal: z
       .object({
-        dir: z.string(),
+        dir: z.string().optional(),
         writable: z.boolean(),
         uncertainOperations: z.number(),
         uncertainIds: z.array(z.string()).optional(),

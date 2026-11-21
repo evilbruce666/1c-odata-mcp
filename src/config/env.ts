@@ -58,6 +58,12 @@ export interface Behavior {
   queueTimeoutMs: number;
   /** Общий лимит времени на вызов инструмента чтения, мс; 0 — без лимита (по умолчанию). */
   toolDeadlineMs: number;
+  /**
+   * Срок предпросмотра записи, мс: подтверждение более старого предпросмотра — отказ «сделайте новый предпросмотр».
+   * 0 — без срока (stdio по умолчанию: подтверждает человек сразу). В HTTP с записью по умолчанию 15 минут:
+   * интеграция может подтвердить старый предпросмотр, а документ получил бы дату и цены того дня.
+   */
+  previewMaxAgeMs?: number;
   /** Предел текста ответа инструмента чтения, символов: только уменьшение нормы для клиентов с малым контекстом. */
   maxResponseChars: number;
   /** Сервер доступен по сети: ответы не раскрывают адрес базы. */
@@ -123,6 +129,11 @@ const BehaviorSchema = z.object({
   ODATA_MAX_CONCURRENT_REQUESTS: z.coerce.number().int().min(0).max(64).default(0),
   ODATA_QUEUE_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
   ODATA_TOOL_DEADLINE_MS: z.coerce.number().int().min(0).default(0),
+  // Срок предпросмотра записи, минут: подтверждение старше — отказ. Пусто — в stdio без срока, в HTTP с записью 15.
+  ODATA_WRITE_PREVIEW_MAX_AGE: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.coerce.number().int().min(0).max(10_080).optional(),
+  ),
   ODATA_MAX_RESPONSE_CHARS: z.preprocess(
     (v) => (v === "" ? undefined : v),
     z.coerce.number().int().min(10_000).max(45_000).default(45_000),
@@ -239,16 +250,38 @@ function httpIssues(b: z.infer<typeof BehaviorSchema>): string[] {
       `MCP_HTTP_TOKEN обязателен при MCP_TRANSPORT=http: не короче ${MIN_TOKEN_LENGTH} символов, латиница и цифры, без пробелов и кавычек`,
     );
   }
-  if (b.TOOLS_PROFILE === "all" || toolList(b.TOOLS_ALLOW)?.some((name) => !name.startsWith("read."))) {
-    issues.push("MCP_TRANSPORT=http работает только для чтения: инструменты записи подключить нельзя");
+  // Запись по HTTP (#67): рубильник — READ_ONLY=false, и тогда обязательны журнал на томе и инструменты записи
+  // поимённо. Кто подтверждает — ответственность интеграции: ядро не отличает человека от программы.
+  const writeTools = toolList(b.TOOLS_ALLOW)?.filter((name) => !name.startsWith("read.")) ?? [];
+  const readOnly = b.READ_ONLY === "true";
+  if (b.TOOLS_PROFILE === "all") {
+    issues.push(
+      "MCP_TRANSPORT=http: TOOLS_PROFILE=all не задаётся — запись подключается только поимённо в TOOLS_ALLOW, иначе сервер работает только для чтения",
+    );
+  } else if (readOnly && writeTools.length) {
+    issues.push(
+      "MCP_TRANSPORT=http при READ_ONLY=true работает только для чтения: инструменты записи в TOOLS_ALLOW — только вместе с READ_ONLY=false и журналом записи",
+    );
+  }
+  if (!readOnly) {
+    const missing = [
+      !b.ODATA_WRITE_JOURNAL_DIR
+        ? "ODATA_WRITE_JOURNAL_DIR (каталог на томе: журнал переживает рестарт, повтор не создаёт дубль)"
+        : "",
+      !writeTools.length ? "инструменты записи поимённо в TOOLS_ALLOW" : "",
+      writeTools.length && !writeTools.includes("write.operation.status")
+        ? "write.operation.status в TOOLS_ALLOW (сверка операций с неизвестным исходом)"
+        : "",
+    ].filter(Boolean);
+    if (missing.length)
+      issues.push(
+        `запись по HTTP (READ_ONLY=false) требует: ${missing.join("; ")}. Иначе работайте только для чтения: READ_ONLY=true`,
+      );
   }
   for (const host of toolList(b.MCP_HTTP_ALLOWED_HOSTS) ?? []) {
     if (!/^(\[[0-9a-f:]+\]|[a-z0-9.-]+)$/i.test(host)) {
       issues.push(`MCP_HTTP_ALLOWED_HOSTS: «${host}» — нужно только имя, без схемы и порта`);
     }
-  }
-  if (b.READ_ONLY !== "true") {
-    issues.push("MCP_TRANSPORT=http работает только для чтения: задайте READ_ONLY=true");
   }
   if (!LOOPBACK_HOSTS.has(b.MCP_HTTP_HOST) && !toolList(b.MCP_HTTP_ALLOWED_HOSTS)) {
     issues.push(
@@ -323,6 +356,18 @@ export function parseConfig(env: Env): RuntimeConfig {
     connections.push(parsed.data);
   }
 
+  // Запись по HTTP без единой базы на запись — включённый режим, которым ничего не записать: отказ с причиной.
+  if (
+    behaviorParsed.success &&
+    behaviorParsed.data.MCP_TRANSPORT === "http" &&
+    behaviorParsed.data.READ_ONLY !== "true" &&
+    connections.length &&
+    !connections.some((c) => c.writable)
+  )
+    issues.push(
+      "запись по HTTP (READ_ONLY=false): ни одна база не открыта на запись — задайте ODATA_WRITABLE=true или ODATA_DB_<ИМЯ>_WRITABLE=true",
+    );
+
   if (issues.length > 0) {
     throw new Error(`Некорректная конфигурация (.env):\n${issues.map((s) => `  • ${s}`).join("\n")}`);
   }
@@ -357,9 +402,12 @@ export function parseConfig(env: Env): RuntimeConfig {
       maxConcurrentRequests: b.ODATA_MAX_CONCURRENT_REQUESTS,
       queueTimeoutMs: b.ODATA_QUEUE_TIMEOUT_MS,
       toolDeadlineMs: b.ODATA_TOOL_DEADLINE_MS,
+      previewMaxAgeMs:
+        (b.ODATA_WRITE_PREVIEW_MAX_AGE ?? (b.MCP_TRANSPORT === "http" && b.READ_ONLY !== "true" ? 15 : 0)) *
+        60_000,
       maxResponseChars: b.ODATA_MAX_RESPONSE_CHARS,
       networkTransport: b.MCP_TRANSPORT === "http",
-      // Записывать по HTTP нельзя: описания записи занимали бы контекст и вели в тупик.
+      // По HTTP по умолчанию только чтение: запись — только поимённо в TOOLS_ALLOW (тогда профиль не действует).
       toolsProfile: b.TOOLS_PROFILE ?? (b.MCP_TRANSPORT === "http" ? "read" : "all"),
       toolsAllow: toolList(b.TOOLS_ALLOW),
       regulatedCurrencyCode: b.ODATA_REGULATED_CURRENCY_CODE ?? "643",
