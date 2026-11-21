@@ -809,10 +809,13 @@ export function createServer(ctx: ServerContext): McpServer {
           const aged = await guard(name, async () => {
             const conn = ctx.db(typeof args.database === "string" ? args.database : undefined);
             const entry = await conn.client.operationEntry(operationId);
-            const age = entry?.state === "prepared" ? Date.now() - Date.parse(entry.createdAt) : 0;
+            // Нечитаемая или будущая дата предпросмотра (журнал правили, часы ушли назад) — как устаревшая.
+            const created = entry?.state === "prepared" ? Date.parse(entry.createdAt) : Date.now();
+            const age =
+              Number.isFinite(created) && created <= Date.now() + 60_000 ? Date.now() - created : Infinity;
             if (age > maxAge)
               stale = fail(
-                `Предпросмотр сделан ${Math.floor(age / 60_000)} мин назад — дольше срока ODATA_WRITE_PREVIEW_MAX_AGE ` +
+                `${Number.isFinite(age) ? `Предпросмотр сделан ${Math.floor(age / 60_000)} мин назад` : "Дата предпросмотра в журнале нечитаема или в будущем"} — дольше срока ODATA_WRITE_PREVIEW_MAX_AGE ` +
                   `(${Math.round(maxAge / 60_000)} мин): данные в 1С могли измениться. Сделайте новый предпросмотр и ` +
                   "подтвердите его operationId. Ничего не записано.",
               );

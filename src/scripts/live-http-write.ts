@@ -109,7 +109,7 @@ async function main(): Promise<number> {
 
   const rows: Array<[string, boolean, string]> = [];
   const check = (name: string, ok: boolean, detail = "") => rows.push([name, ok, detail]);
-  const comment = `ZZ-TEST live http ${new Date().toISOString().slice(0, 16)}`;
+  const comment = `ZZ-TEST live http ${new Date().toISOString().slice(0, 19)} ${randomBytes(3).toString("hex")}`;
   const args = { priceKind, lines: [{ itemRef: item, price: Number(arg("price") ?? 123.45) }], comment };
 
   await start();

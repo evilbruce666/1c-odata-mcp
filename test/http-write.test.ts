@@ -117,6 +117,8 @@ describe("запись по HTTP: условия старта", () => {
     ["профиль all", { TOOLS_PROFILE: "all", TOOLS_ALLOW: undefined }, /TOOLS_PROFILE=all/],
     ["инструменты записи не перечислены", { TOOLS_ALLOW: "read.system.health_check" }, /поимённо/],
     ["нет write.operation.status", { TOOLS_ALLOW: CREATE }, /write\.operation\.status/],
+    ["только write.operation.status", { TOOLS_ALLOW: "write.operation.status" }, /поимённо/],
+    ["журнал из пробелов", { ODATA_WRITE_JOURNAL_DIR: "   " }, /ODATA_WRITE_JOURNAL_DIR/],
     ["база без WRITABLE", { ODATA_WRITABLE: "false" }, /ни одна база не открыта на запись/],
     ["запись в TOOLS_ALLOW при READ_ONLY=true", { READ_ONLY: "true" }, /только для чтения/],
   ])("%s — отказ при старте", (_n, extra, message) => {
@@ -309,6 +311,52 @@ describe("запись по HTTP: гарантии журнала", () => {
     const replay = await s.call(CREATE, { ...args, confirm: true, operationId: id2 });
     expect(replay.structuredContent).toMatchObject({ replayed: true });
     expect(posts(s.f)).toBe(1);
+    await s.stop();
+  });
+
+  it("ревью #67: журнал перестал быть доступен на запись — путь к нему не уходит клиенту ни в health_check, ни в ошибке", async () => {
+    const journal = mkdtempSync(join(tmpdir(), "1c-odata-hw-"));
+    const s = await serve(journal);
+    const args = { name: "ZZ-TEST HTTP журнал сломался" };
+    const p = await s.call(CREATE, args);
+    chmodSync(journal, 0o500);
+    const inner = readdirSync(journal).map((d) => join(journal, d));
+    for (const d of inner) chmodSync(d, 0o500);
+    try {
+      const h = await s.call("read.system.health_check", {});
+      expect(JSON.stringify(h)).not.toContain(journal);
+      const c = await s.call(CREATE, {
+        ...args,
+        confirm: true,
+        operationId: p.structuredContent["operationId"],
+      });
+      expect(c.isError).toBe(true);
+      expect(JSON.stringify(c)).not.toContain(journal);
+      expect(posts(s.f)).toBe(0);
+    } finally {
+      for (const d of inner) chmodSync(d, 0o700);
+      chmodSync(journal, 0o700);
+    }
+    await s.stop();
+  });
+
+  it("ревью #67: нечитаемая или будущая дата предпросмотра — как устаревшая, без POST", async () => {
+    const journal = mkdtempSync(join(tmpdir(), "1c-odata-hw-"));
+    const s = await serve(journal);
+    for (const createdAt of ["not-a-date", new Date(Date.now() + 86_400_000).toISOString()]) {
+      const args = { name: `ZZ-TEST HTTP дата ${createdAt.slice(0, 4)}` };
+      const p = await s.call(CREATE, args);
+      const id = String(p.structuredContent["operationId"]);
+      const file = readdirSync(journal, { recursive: true })
+        .map(String)
+        .find((f) => f.endsWith(`${id}.json`))!;
+      const entry = JSON.parse(readFileSync(join(journal, file), "utf8")) as Record<string, unknown>;
+      writeFileSync(join(journal, file), JSON.stringify({ ...entry, createdAt }));
+      const r = await s.call(CREATE, { ...args, confirm: true, operationId: id });
+      expect(r.isError, createdAt).toBe(true);
+      expect(r.content[0]!.text).toContain("Сделайте новый предпросмотр");
+    }
+    expect(posts(s.f)).toBe(0);
     await s.stop();
   });
 });

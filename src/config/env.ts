@@ -265,10 +265,12 @@ function httpIssues(b: z.infer<typeof BehaviorSchema>): string[] {
   }
   if (!readOnly) {
     const missing = [
-      !b.ODATA_WRITE_JOURNAL_DIR
+      !b.ODATA_WRITE_JOURNAL_DIR?.trim()
         ? "ODATA_WRITE_JOURNAL_DIR (каталог на томе: журнал переживает рестарт, повтор не создаёт дубль)"
         : "",
-      !writeTools.length ? "инструменты записи поимённо в TOOLS_ALLOW" : "",
+      !writeTools.some((name) => name !== "write.operation.status")
+        ? "инструменты записи поимённо в TOOLS_ALLOW"
+        : "",
       writeTools.length && !writeTools.includes("write.operation.status")
         ? "write.operation.status в TOOLS_ALLOW (сверка операций с неизвестным исходом)"
         : "",

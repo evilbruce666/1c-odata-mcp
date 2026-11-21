@@ -76,9 +76,20 @@ export const ERROR_KIND_META = "odata-1c/errorKind";
  * Ошибка инструмента: помечаем isError, отдаём понятный текст вместо падения. kind: виды ODataError либо
  * refused (отказ инструмента по содержанию запроса), input, not_published, overflow, internal.
  */
+/**
+ * Пути на сервере, которые не уходят клиенту по сети (#67): каталог журнала записи. Сообщения ошибок файловой системы
+ * Node содержат абсолютный путь — при сбое журнала во время работы он попал бы держателю токена.
+ */
+const redacted: string[] = [];
+export function redactInResponses(path: string): void {
+  if (path && !redacted.includes(path)) redacted.push(path);
+}
+export const redact = (text: string): string =>
+  redacted.reduce((t, p) => t.split(p).join("<ODATA_WRITE_JOURNAL_DIR>"), text);
+
 export function fail(message: string, kind = "refused"): CallToolResult {
   return {
-    content: [{ type: "text", text: message }],
+    content: [{ type: "text", text: redact(message) }],
     isError: true,
     _meta: { [ERROR_KIND_META]: kind },
   };
