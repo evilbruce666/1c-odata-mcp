@@ -348,6 +348,156 @@ async function main(): Promise<number> {
           posted?.text.slice(0, 80) ?? "",
         );
       }
+      // Оплата поставщику по двум договорам (lines): проводка по расчётам — по каждой строке со своим договором;
+      // затем сумма документа меняется и строки выравниваются по заданным суммам (lineAmounts).
+      const multiCp = await flow("write.counterparty.create_counterparty", { name: `${tag} два договора` });
+      const c1 = multiCp
+        ? await flow("write.catalog.create_contract", {
+            counterpartyRef: String(multiCp["ref"]),
+            kind: "СПоставщиком",
+          })
+        : undefined;
+      const c2 = multiCp
+        ? await flow("write.catalog.create_contract", {
+            counterpartyRef: String(multiCp["ref"]),
+            kind: "СПоставщиком",
+          })
+        : undefined;
+      if (multiCp && c1 && c2) {
+        const pay2 = await flow(
+          "write.money.create_bank_writeoff",
+          {
+            operationKind: "ОплатаПоставщику",
+            amount: 3,
+            counterpartyRef: String(multiCp["ref"]),
+            lines: [
+              { contractRef: String(c1["ref"]), amount: 2 },
+              { contractRef: String(c2["ref"]), amount: 1 },
+            ],
+          },
+          "оплата поставщику по двум договорам (lines)",
+        );
+        if (pay2) {
+          const set = String(pay2["entitySet"]);
+          const ref = String(pay2["ref"]);
+          const byContract = async () => {
+            const recs = (
+              await client.getCollection(
+                `AccountingRegister_Хозрасчетный/RecordsWithExtDimensions?$format=json&$filter=${encodeURIComponent(`Recorder eq cast(guid'${ref}', '${set}')`)}`,
+              )
+            ).value;
+            const sums = new Map<string, number>();
+            for (const r of recs)
+              for (const k of ["ExtDimensionDr1", "ExtDimensionDr2", "ExtDimensionDr3"]) {
+                const v = String(r[k] ?? "");
+                if (v === String(c1["ref"]) || v === String(c2["ref"]))
+                  sums.set(v, Math.round(((sums.get(v) ?? 0) + Number(r["Сумма"])) * 100) / 100);
+              }
+            return [sums.get(String(c1["ref"])), sums.get(String(c2["ref"]))];
+          };
+          let p = await run("write.document.post_document", {
+            entitySet: set,
+            ref,
+            post: true,
+            confirm: true,
+          });
+          let got = p.err ? [] : await byContract();
+          if (!p.err)
+            await run("write.document.post_document", { entitySet: set, ref, post: false, confirm: true });
+          check(
+            "две строки: проводки по расчётам по каждому договору",
+            !p.err && got[0] === 2 && got[1] === 1,
+            p.err ? p.text.slice(0, 120) : `по договорам ${JSON.stringify(got)}`,
+          );
+          const upd = await run("write.entity.update_entity", {
+            entitySet: set,
+            ref,
+            fields: { СуммаДокумента: 5 },
+            confirm: true,
+          });
+          const version = String(
+            (await client.getEntity(`${set}(guid'${ref}')?$format=json&$select=DataVersion`))["DataVersion"],
+          );
+          const al = upd.err
+            ? upd
+            : await edit(
+                "write.document.align_bank_payment_amounts",
+                { entitySet: set, ref, expectedDataVersion: version, lineAmounts: [3, 2] },
+                "две строки: выравнивание по lineAmounts",
+              ).then((x) =>
+                x ? { err: false, sc: {}, text: "" } : { err: true, sc: {}, text: "выравнивание не прошло" },
+              );
+          p = al.err
+            ? al
+            : await run("write.document.post_document", { entitySet: set, ref, post: true, confirm: true });
+          got = p.err ? [] : await byContract();
+          if (!p.err)
+            await run("write.document.post_document", { entitySet: set, ref, post: false, confirm: true });
+          check(
+            "две строки после смены суммы: проводки 3 и 2",
+            !p.err && got[0] === 3 && got[1] === 2,
+            p.err ? p.text.slice(0, 160) : `по договорам ${JSON.stringify(got)}`,
+          );
+        }
+      }
+      // Оплата покупателя по двум договорам — та же проверка для поступления на расчётный счёт.
+      const k1 = multiCp
+        ? await flow("write.catalog.create_contract", {
+            counterpartyRef: String(multiCp["ref"]),
+            kind: "СПокупателем",
+          })
+        : undefined;
+      const k2 = multiCp
+        ? await flow("write.catalog.create_contract", {
+            counterpartyRef: String(multiCp["ref"]),
+            kind: "СПокупателем",
+          })
+        : undefined;
+      if (multiCp && k1 && k2) {
+        const inc = await flow(
+          "write.money.create_payment",
+          {
+            amount: 3,
+            counterpartyRef: String(multiCp["ref"]),
+            lines: [
+              { contractRef: String(k1["ref"]), amount: 1 },
+              { contractRef: String(k2["ref"]), amount: 2 },
+            ],
+          },
+          "оплата покупателя по двум договорам (lines)",
+        );
+        if (inc) {
+          const set = String(inc["entitySet"]);
+          const ref = String(inc["ref"]);
+          const p = await run("write.document.post_document", {
+            entitySet: set,
+            ref,
+            post: true,
+            confirm: true,
+          });
+          const recs = p.err
+            ? []
+            : (
+                await client.getCollection(
+                  `AccountingRegister_Хозрасчетный/RecordsWithExtDimensions?$format=json&$filter=${encodeURIComponent(`Recorder eq cast(guid'${ref}', '${set}')`)}`,
+                )
+              ).value;
+          if (!p.err)
+            await run("write.document.post_document", { entitySet: set, ref, post: false, confirm: true });
+          const sumBy = (c: string) =>
+            recs
+              .filter((r) =>
+                ["ExtDimensionCr1", "ExtDimensionCr2", "ExtDimensionCr3"].some((k) => r[k] === c),
+              )
+              .reduce((t, r) => t + Number(r["Сумма"]), 0);
+          const got = [sumBy(String(k1["ref"])), sumBy(String(k2["ref"]))];
+          check(
+            "поступление по двум договорам: проводки по каждому",
+            !p.err && got[0] === 1 && got[1] === 2,
+            p.err ? p.text.slice(0, 120) : `по договорам ${JSON.stringify(got)}`,
+          );
+        }
+      }
       // Перевод между своими счетами: нужна организация с двумя счетами в одной валюте. Проводка — Дт 51 по
       // счёту-получателю, Кт 51 по счёту-отправителю (или Дт 57.01 Кт 51 — если 1С ведёт перевод через 57.01).
       const accounts = (

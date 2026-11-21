@@ -668,6 +668,9 @@ const TRADE_MONEY_FIELDS = [
 const OPTIONAL_OMIT: Record<string, string[]> = {
   "read.analytics.get_deal_history": ["dealKey"], // взаимоисключающий с contractRef
   "write.document.copy_document": ["lines"], // правки строк по номеру, не новые строки
+  // Строки по нескольким договорам и суммы строк — свои тесты на схеме БП 3.0 (bp-other-operations,
+  // existing-bank-settlement): синтетический массив здесь не проходит схему аргументов.
+  "write.document.align_bank_payment_amounts": ["lineAmounts"],
   // Поля денежных документов Управления торговлей: в Бухгалтерии — отказ, здесь проверяется схема Бухгалтерии.
   ...Object.fromEntries(
     [
@@ -678,7 +681,11 @@ const OPTIONAL_OMIT: Record<string, string[]> = {
       "write.money.create_payment_request",
     ].map((n) => [
       n,
-      [...TRADE_MONEY_FIELDS, ...(n === "write.money.create_payment" ? ["purposeText", "comment"] : [])],
+      [
+        ...TRADE_MONEY_FIELDS,
+        ...(n === "write.money.create_payment" ? ["purposeText", "comment"] : []),
+        ...(n === "write.money.create_payment" || n === "write.money.create_bank_writeoff" ? ["lines"] : []),
+      ],
     ]),
   ),
 };

@@ -93,17 +93,19 @@ function setup(
     },
     {
       data: (q) =>
-        q.fn || o.plainChart
+        q.fn
           ? undefined
           : o.extra?.[q.base]
             ? o.extra[q.base]
-            : q.base === "ChartOfAccounts_Хозрасчетный"
-              ? ACCOUNTS
-              : q.base === "ChartOfCharacteristicTypes_ВидыСубконтоХозрасчетные"
-                ? o.kinds500
-                  ? []
-                  : KINDS
-                : undefined,
+            : o.plainChart
+              ? undefined
+              : q.base === "ChartOfAccounts_Хозрасчетный"
+                ? ACCOUNTS
+                : q.base === "ChartOfCharacteristicTypes_ВидыСубконтоХозрасчетные"
+                  ? o.kinds500
+                    ? []
+                    : KINDS
+                  : undefined,
     },
   );
   const tools = (
@@ -671,6 +673,93 @@ describe("Бухгалтерия: прочие операции денежных
     });
     expect(upd.err).toBe(true);
     expect(upd.text).toContain("правкой нельзя");
+    expect(s.fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
+  });
+
+  it("1.1: оплата по нескольким договорам (lines) — строка на договор, договор шапки — первой строки", async () => {
+    const C1 = g("9", 1);
+    const C2 = g("9", 2);
+    const FOREIGN = g("9", 3);
+    const s = setup({
+      plainChart: true,
+      extra: {
+        Catalog_ДоговорыКонтрагентов: [
+          { Ref_Key: C1, Owner_Key: CP, Description: "Д1" },
+          { Ref_Key: C2, Owner_Key: CP, Description: "Д2" },
+          { Ref_Key: FOREIGN, Owner_Key: g("c", 9), Description: "Чужой" },
+        ],
+      },
+    });
+    const lines = [
+      { contractRef: C1, amount: 60 },
+      { contractRef: C2, amount: 40.5 },
+    ];
+    for (const [tool, op] of [
+      ["write.money.create_bank_writeoff", "ОплатаПоставщику"],
+      ["write.money.create_payment", "ОплатаПокупателя"],
+    ] as const) {
+      const r = await s.call(tool, { operationKind: op, amount: 100.5, counterpartyRef: CP, lines });
+      expect(r.err, r.text).toBe(false);
+      const p = payloadOf(r);
+      expect(p["ДоговорКонтрагента_Key"]).toBe(C1);
+      expect(p["СуммаДокумента"]).toBe(100.5);
+      expect(p["РасшифровкаПлатежа"]).toMatchObject([
+        {
+          LineNumber: 1,
+          ДоговорКонтрагента_Key: C1,
+          СуммаПлатежа: 60,
+          СпособПогашенияЗадолженности: "Автоматически",
+        },
+        {
+          LineNumber: 2,
+          ДоговорКонтрагента_Key: C2,
+          СуммаПлатежа: 40.5,
+          СпособПогашенияЗадолженности: "Автоматически",
+        },
+      ]);
+      const notes = JSON.stringify(r.sc["notes"] ?? []);
+      expect(notes, tool).toContain("Строка 1:");
+      expect(notes, tool).toContain("Строка 2:");
+    }
+    const bad: Array<[Record<string, unknown>, string]> = [
+      [{ lines: [lines[0], { contractRef: C2, amount: 40 }] }, "не равна сумме документа"],
+      [{ lines: [lines[0], { contractRef: C1.toUpperCase(), amount: 40.5 }] }, "повторяется"],
+      [
+        { lines: [lines[0], { contractRef: FOREIGN, amount: 40.5 }] },
+        "Договор строки 2 — не договор этого контрагента",
+      ],
+      [{ lines, contractRef: C2 }, "договор первой строки"],
+      [{ lines, counterpartyRef: undefined }, "укажите counterpartyRef"],
+    ];
+    for (const [extra, text] of bad) {
+      const r = await s.call("write.money.create_bank_writeoff", {
+        operationKind: "ОплатаПоставщику",
+        amount: 100.5,
+        counterpartyRef: CP,
+        ...extra,
+      });
+      expect(r.err, text).toBe(true);
+      expect(r.text).toContain(text);
+    }
+    const other = await s.call("write.money.create_bank_writeoff", {
+      operationKind: "ПрочееСписание",
+      amount: 100.5,
+      corrAccount: "91.02",
+      otherItemRef: ITEM91,
+      lines,
+    });
+    expect(other.err).toBe(true);
+    expect(other.text).toContain("lines — для оплаты по договорам");
+    // С тем же договором первым contractRef допустим — регистр не важен.
+    const same = await s.call("write.money.create_bank_writeoff", {
+      operationKind: "ОплатаПоставщику",
+      amount: 100.5,
+      counterpartyRef: CP,
+      contractRef: C1.toUpperCase(),
+      lines,
+    });
+    expect(same.err, same.text).toBe(false);
+    expect(s.fake.violations, "запросы к полям, которых нет в схеме БП 3.0").toEqual([]);
     expect(s.fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
   });
 });

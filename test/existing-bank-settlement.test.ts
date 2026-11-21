@@ -1151,6 +1151,84 @@ describe("align_bank_payment_amounts и запрет проведения при
     expect(f.writes).toHaveLength(0);
   });
 
+  it("1.1: несколько строк — суммы строк сходятся с документом: взаиморасчёты и НДС по каждой строке", async () => {
+    const f = await broken();
+    const r0 = rowOf(f);
+    f.setDoc({
+      [ROWS]: [
+        { ...r0, СуммаПлатежа: 100 },
+        { ...r0, LineNumber: "2", СуммаПлатежа: 50 },
+      ],
+    });
+    const p = await f.run({}, ALIGN);
+    expect(p.isError, JSON.stringify(p.content)).toBeFalsy();
+    const changes = data(p).changes as Array<{ field: string; to: unknown }>;
+    expect(changes).toEqual(
+      expect.arrayContaining([
+        { field: `${ROWS}[1].СуммаВзаиморасчетов`, from: 0, to: 100 },
+        { field: `${ROWS}[2].СуммаВзаиморасчетов`, from: 0, to: 50 },
+        { field: `${ROWS}[2].СуммаНДС`, from: 0, to: 8.33 },
+      ]),
+    );
+    expect(changes.some((c) => c.field.endsWith("СуммаПлатежа"))).toBe(false);
+    await f.run({ confirm: true, operationId: data(p).operationId }, ALIGN);
+    const rows = f.doc()[ROWS] as ODataEntity[];
+    expect(rows.map((r) => [r.СуммаПлатежа, r.СуммаВзаиморасчетов, r.Субконто])).toEqual([
+      [100, 100, "preserved"],
+      [50, 50, "preserved"],
+    ]);
+    expect(f.writes).toHaveLength(1);
+  });
+
+  it("1.1: несколько строк — lineAmounts разносят сумму; без них при расхождении, с неверными — отказ", async () => {
+    const f = await broken();
+    const r0 = rowOf(f);
+    f.setDoc({
+      [ROWS]: [
+        { ...r0, СуммаПлатежа: 100 },
+        { ...r0, LineNumber: "2", СуммаПлатежа: 40 },
+      ],
+    });
+    const bad = await f.run({}, ALIGN);
+    expect(bad.isError).toBe(true);
+    expect(JSON.stringify(bad.content)).toContain("lineAmounts");
+    for (const [lineAmounts, text] of [
+      [[150], "по одной сумме на строку"],
+      [[100, 40], "суммы строк должны давать сумму документа"],
+    ] as const) {
+      const r = await f.run({ lineAmounts }, ALIGN);
+      expect(r.isError, JSON.stringify(lineAmounts)).toBe(true);
+      expect(JSON.stringify(r.content)).toContain(text);
+    }
+    const ok = await f.run({ lineAmounts: [90, 60] }, ALIGN);
+    expect(ok.isError, JSON.stringify(ok.content)).toBeFalsy();
+    await f.run({ lineAmounts: [90, 60], confirm: true, operationId: data(ok).operationId }, ALIGN);
+    const rows = f.doc()[ROWS] as ODataEntity[];
+    expect(rows.map((r) => [r.СуммаПлатежа, r.СуммаВзаиморасчетов])).toEqual([
+      [90, 90],
+      [60, 60],
+    ]);
+    // Строка без договора среди нескольких — отказ, а не «только сумма платежа».
+    const g = await broken();
+    const g0 = rowOf(g);
+    g.setDoc({
+      ВидОперации: "ПрочееСписание",
+      [ROWS]: [
+        { ...g0, СуммаПлатежа: 100 },
+        {
+          ...g0,
+          LineNumber: "2",
+          СуммаПлатежа: 50,
+          ДоговорКонтрагента_Key: "00000000-0000-0000-0000-000000000000",
+        },
+      ],
+    });
+    const x = await g.run({}, ALIGN);
+    expect(x.isError).toBe(true);
+    expect(JSON.stringify(x.content)).toContain("В строке 2 не указан договор");
+    expect(g.writes).toHaveLength(0);
+  });
+
   it("строка без договора у операции без расчётов (прочее списание): только сумма платежа и НДС; у оплаты — отказ", async () => {
     const EMPTY = "00000000-0000-0000-0000-000000000000";
     const f = await broken();

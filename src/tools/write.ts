@@ -1465,6 +1465,21 @@ export async function withSettlementAccounts(
   return { payload: next, notes };
 }
 
+/** Оплата по нескольким договорам (1.1): строки расшифровки задаёт пользователь, сумма не разносится сама. */
+const settlementLinesField = z
+  .array(
+    z.object({
+      contractRef: z.string().min(1).describe("Ref_Key договора строки"),
+      amount: z.number().positive().describe("Сумма строки"),
+    }),
+  )
+  .min(2)
+  .max(50)
+  .optional()
+  .describe(
+    "Бухгалтерия: оплата по нескольким договорам одного контрагента — строки расшифровки {contractRef, amount}, сумма строк = amount. Как разнести сумму, решает пользователь — не угадывать. Счета расчётов — по настройке договора каждой строки",
+  );
+
 const TRANSFER_NOTE =
   "Схему перевода выбирает 1С: проверьте проводки после проведения (read.accounting.get_document_postings). " +
   "Дт 51 Кт 51 между счетами — перевод отражён этим документом, поступление на счёт-получатель не создавайте. " +
@@ -4623,13 +4638,15 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     a: Record<string, unknown> & { operationKind?: string; amount: number; confirm: boolean },
   ) => {
     if (!(await tradeMoneySet(conn, kind))) return undefined;
-    const bpOnly = ["corrAccount", "otherItemRef", "targetBankAccount"].filter((k) => a[k] !== undefined);
+    const bpOnly = ["corrAccount", "otherItemRef", "targetBankAccount", "lines"].filter(
+      (k) => a[k] !== undefined,
+    );
     if (bpOnly.length)
       throw new InputError(
         `Параметры ${bpOnly.join(", ")} — только для Бухгалтерии` +
-          (bpOnly.includes("targetBankAccount") && bpOnly.length === 1
-            ? ". Ничего не записано."
-            : ": в Управлении торговлей статья задаётся incomeItem или expenseItem. Ничего не записано."),
+          (bpOnly.some((k) => k === "corrAccount" || k === "otherItemRef")
+            ? ": в Управлении торговлей статья задаётся incomeItem или expenseItem. Ничего не записано."
+            : ". Ничего не записано."),
       );
     if (!a.operationKind)
       throw new InputError(
@@ -4714,6 +4731,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .string()
           .optional()
           .describe("Бухгалтерия, «ПрочееПоступление»: Ref_Key статьи ДДС"),
+        lines: settlementLinesField,
         ...tradeMoneyFields,
         confirm: confirmField,
       }),
@@ -4731,6 +4749,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         // Прочее поступление (проценты банка, возвраты, прочие доходы): без договора, счёт — corrAccount, строка
         // расшифровки — с суммой документа, как в документах рабочих баз БП 3.0 (Кт 91.01 со статьёй).
         if (operationKind === "ПрочееПоступление") {
+          if (a.lines)
+            throw new InputError(
+              "lines — для оплаты по договорам, у прочего поступления строк по договорам нет. Ничего не записано.",
+            );
           if (a.purposeText !== undefined)
             throw new InputError("purposeText — только для Управления торговлей. Ничего не записано.");
           const set = await requireEntity(
@@ -4778,12 +4800,11 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           throw new InputError(
             "corrAccount, otherItemRef и cashflowItemRef — для operationKind «ПрочееПоступление»; у оплаты покупателя счёт подбирается по договору. Ничего не записано.",
           );
-        if (!a.counterpartyRef || !a.contractRef)
+        if (!a.counterpartyRef || (!a.contractRef && !a.lines))
           throw new InputError(
-            "Бухгалтерия: укажите counterpartyRef и contractRef — покупателя и договор. Ничего не записано.",
+            "Бухгалтерия: укажите counterpartyRef и contractRef — покупателя и договор (или lines — строки по договорам). Ничего не записано.",
           );
         const counterpartyRef: string = a.counterpartyRef;
-        const contractRef: string = a.contractRef;
         const set = await requireEntity(
           conn,
           WRITE_DOCUMENTS.bankIn,
@@ -4791,6 +4812,29 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         );
         const org = await resolveOrg(conn, organization);
         const bank = await resolveOrgBankAccount(conn, org.key, orgBankAccount);
+        const cpSetMulti = resolveEntity(CATALOGS.counterparties, await conn.available());
+        if (a.lines) {
+          const multi = await buildSettlementLines(conn, set, operationKind, "customer", org.key, {
+            amount,
+            counterpartyRef,
+            contractRef: a.contractRef,
+            lines: a.lines,
+          });
+          const payload = clean({
+            Date: await docDate(conn, date),
+            Posted: false,
+            ВидОперации: operationKind,
+            Организация_Key: org.key,
+            СчетОрганизации_Key: bank,
+            Контрагент: counterpartyRef,
+            ...(cpSetMulti ? { Контрагент_Type: `StandardODATA.${cpSetMulti}` } : {}),
+            ДоговорКонтрагента_Key: multi.contractRef,
+            СуммаДокумента: amount,
+            РасшифровкаПлатежа: multi.rows,
+          });
+          return createOrPreview(conn, set, payload, confirm, multi.notes, { keepSettlement: true });
+        }
+        const contractRef: string = a.contractRef!;
         const codes = conn.cfg?.accounting?.strictDefaults
           ? new Map<AccountDefault, string | undefined>()
           : await resolveDefaultAccounts(conn, ["receivable", "receivableAdvance"]);
@@ -4859,6 +4903,75 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         СчетУчетаРасчетовПоАвансам_Key: advance,
       }),
     };
+  }
+
+  /**
+   * Строки расшифровки по нескольким договорам: каждая — как единственная строка (buildSettlementRow), счета расчётов —
+   * по настройке своего договора (withSettlementAccounts на одну строку). Договор шапки — первой строки. Проверено
+   * проведением на рабочей БП 3.0: проводки по расчётам — по каждой строке со своим договором.
+   */
+  async function buildSettlementLines(
+    conn: Connection,
+    set: string,
+    operationKind: string,
+    side: SettlementSide | undefined,
+    orgKey: string,
+    a: {
+      amount: number;
+      counterpartyRef?: string | undefined;
+      contractRef?: string | undefined;
+      lines: Array<{ contractRef: string; amount: number }>;
+    },
+  ): Promise<{ rows: Record<string, unknown>[]; notes: string[]; contractRef: string }> {
+    if (!/Поставщик|Покупател/i.test(operationKind))
+      throw new InputError(
+        `lines — для оплаты по договорам (оплата поставщику, оплата покупателя, возвраты); у «${operationKind}» строк по договорам нет. Ничего не записано.`,
+      );
+    if (!a.counterpartyRef)
+      throw new InputError(
+        "lines: укажите counterpartyRef — контрагента всех договоров. Ничего не записано.",
+      );
+    const sum = roundMoney(a.lines.reduce((t, l) => t + l.amount, 0));
+    if (Math.abs(sum - a.amount) >= 0.005)
+      throw new InputError(
+        `Сумма строк lines ${sum} не равна сумме документа ${a.amount}: суммы строк должны давать amount. Ничего не записано.`,
+      );
+    const refs = a.lines.map((l) => l.contractRef.trim().replace(/[{}]/g, "").toLowerCase());
+    if (a.contractRef && a.contractRef.trim().replace(/[{}]/g, "").toLowerCase() !== refs[0])
+      throw new InputError(
+        "contractRef — договор шапки: при lines это договор первой строки. Уберите contractRef или поставьте этот договор первым. Ничего не записано.",
+      );
+    if (new Set(refs).size !== refs.length)
+      throw new InputError(
+        "В lines договор повторяется: объедините суммы в одну строку. Ничего не записано.",
+      );
+    const contracts = resolveEntity(CATALOGS.contracts, await conn.available());
+    if (!contracts) throw new InputError("Справочник договоров не опубликован в OData. Ничего не записано.");
+    const cp = a.counterpartyRef.trim().replace(/[{}]/g, "").toLowerCase();
+    const rows: Record<string, unknown>[] = [];
+    const notes: string[] = [];
+    for (const [i, ref] of refs.entries()) {
+      const c = await conn.client.getEntity<ODataEntity>(
+        `${contracts}(${odataGuid(ref)})${buildQuery({ select: ["Ref_Key", "Owner_Key"] })}`,
+      );
+      if (String(c["Owner_Key"] ?? "").toLowerCase() !== cp)
+        throw new InputError(`Договор строки ${i + 1} — не договор этого контрагента. Ничего не записано.`);
+      const bd = (await buildSettlementRow(conn, operationKind, ref, a.lines[i]!.amount))!;
+      const one = await withSettlementAccounts(
+        conn,
+        set,
+        {
+          ВидОперации: operationKind,
+          Организация_Key: orgKey,
+          ДоговорКонтрагента_Key: ref,
+          [PAYMENT_ROWS]: [{ ...bd.row, LineNumber: i + 1 }],
+        },
+        side,
+      );
+      rows.push((one.payload[PAYMENT_ROWS] as Record<string, unknown>[])[0]!);
+      notes.push(...one.notes.map((n) => `Строка ${i + 1}: ${n}`));
+    }
+    return { rows, notes, contractRef: refs[0]! };
   }
 
   const cpTypeOf = async (conn: Connection): Promise<Record<string, string>> => {
@@ -4955,6 +5068,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .describe(
             "Бухгалтерия, «ПереводНаДругойСчет» (ОБЯЗАТЕЛЕН): счёт-получатель — банковский счёт той же организации, Ref_Key, номер или часть названия",
           ),
+        lines: settlementLinesField,
         ...tradeMoneyFields,
         confirm: confirmField,
       }),
@@ -4993,7 +5107,11 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         if (refused) throw new InputError(`${refused} Ничего не записано.`);
         // Оплата поставщику или возврат покупателю без договора: расшифровка расчётов не собирается, и 1С такой
         // документ не проводит (нулевая строка расшифровки) — отказ с подсказкой, а не документ-тупик.
-        if (/Поставщик|Покупател/i.test(operationKind) && !contractRef)
+        if (a.lines && !/Поставщик|Покупател/i.test(operationKind))
+          throw new InputError(
+            `lines — для оплаты по договорам (оплата поставщику, возврат покупателю); у «${operationKind}» строк по договорам нет. Ничего не записано.`,
+          );
+        if (/Поставщик|Покупател/i.test(operationKind) && !contractRef && !a.lines)
           throw new InputError(
             `Для операции «${operationKind}» укажите contractRef — договор с контрагентом: по нему собирается расшифровка расчётов, без неё 1С документ не проведёт. Ничего не записано.`,
           );
@@ -5016,7 +5134,15 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
                   );
                 })()
               : undefined;
-        const bd = await buildSettlementRow(conn, operationKind, contractRef, amount);
+        const multi = a.lines
+          ? await buildSettlementLines(conn, set, operationKind, undefined, org.key, {
+              amount,
+              counterpartyRef,
+              contractRef,
+              lines: a.lines,
+            })
+          : undefined;
+        const bd = multi ? undefined : await buildSettlementRow(conn, operationKind, contractRef, amount);
         const payload = clean({
           Date: await docDate(conn, date),
           Posted: false,
@@ -5024,7 +5150,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           Организация_Key: org.key,
           СчетОрганизации_Key: bank,
           ...(counterpartyRef ? { Контрагент: counterpartyRef, ...(await cpTypeOf(conn)) } : {}),
-          ДоговорКонтрагента_Key: contractRef,
+          ДоговорКонтрагента_Key: multi ? multi.contractRef : contractRef,
           СуммаДокумента: amount,
           НазначениеПлатежа: purposeText,
           СтатьяДвиженияДенежныхСредств_Key: cashflowItemRef,
@@ -5034,13 +5160,16 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           // Без договорной строки 1С при записи добавляет строку расшифровки с нулевой суммой, и проведение
           // останавливала проверка суммы: у видов без расчётов из белого списка (проверены проведением на рабочей
           // БП 3.0) отправляем строку с суммой документа; расчётным видам — как раньше.
-          ...(bd
-            ? { РасшифровкаПлатежа: [bd.row] }
-            : NO_SETTLEMENT_KINDS.has(operationKind)
-              ? { РасшифровкаПлатежа: [{ LineNumber: 1, СуммаПлатежа: amount }] }
-              : {}),
+          ...(multi
+            ? { РасшифровкаПлатежа: multi.rows }
+            : bd
+              ? { РасшифровкаПлатежа: [bd.row] }
+              : NO_SETTLEMENT_KINDS.has(operationKind)
+                ? { РасшифровкаПлатежа: [{ LineNumber: 1, СуммаПлатежа: amount }] }
+                : {}),
         });
         if (transfer) return createOrPreview(conn, set, payload, confirm, [TRANSFER_NOTE]);
+        if (multi) return createOrPreview(conn, set, payload, confirm, multi.notes, { keepSettlement: true });
         return other
           ? createOrPreview(conn, set, payload, confirm, other.notes, {
               keepSettlement: true,
