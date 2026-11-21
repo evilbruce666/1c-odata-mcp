@@ -4554,6 +4554,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Документ НЕПРОВЕДЁННЫЙ; при проведении проводка Дт 51 Кт 62 (счёт расчётов — по настройке договора, источник виден в предпросмотре). " +
         "Сумма взаиморасчётов для рублёвого договора заполняется сама; для договора в валюте или у.е. " +
         "курс укажите в 1С, иначе 1С проведёт оплату без проводок. " +
+        "Бухгалтерия, operationKind=«ПрочееПоступление» — прочее поступление без договора: корреспондирующий счёт " +
+        "corrAccount (напр. «91.01») обязателен, субконто — otherItemRef, counterpartyRef, contractRef, cashflowItemRef. " +
         "Банковский счёт организации берётся по названию или первый. dry-run/confirm.",
       inputSchema: z.object({
         database: databaseField,
@@ -4574,7 +4576,24 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         orgBankAccount: orgBankAccountField,
         date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         purposeText: z.string().optional().describe("Управление торговлей: назначение платежа (текст)"),
-        comment: z.string().optional().describe("Управление торговлей: комментарий"),
+        comment: z
+          .string()
+          .optional()
+          .describe("Комментарий (в Бухгалтерии — только для «ПрочееПоступление»)"),
+        corrAccount: z
+          .string()
+          .optional()
+          .describe(
+            "Бухгалтерия, «ПрочееПоступление»: корреспондирующий счёт — код, напр. «91.01» (ОБЯЗАТЕЛЕН, не угадывать)",
+          ),
+        otherItemRef: z
+          .string()
+          .optional()
+          .describe("Бухгалтерия: Ref_Key статьи прочих доходов и расходов — субконто счёта 91"),
+        cashflowItemRef: z
+          .string()
+          .optional()
+          .describe("Бухгалтерия, «ПрочееПоступление»: Ref_Key статьи ДДС"),
         ...tradeMoneyFields,
         confirm: confirmField,
       }),
@@ -4586,11 +4605,54 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const trade = await tradeMoney(conn, "bankIn", a);
         if (trade) return trade;
         noTradeMoney(a);
+        const { organization, operationKind, amount, orgBankAccount, date, confirm } = a;
+        // Прочее поступление (проценты банка, возвраты, прочие доходы): без договора, счёт — corrAccount, строка
+        // расшифровки — с суммой документа, как в документах рабочих баз БП 3.0 (Кт 91.01 со статьёй).
+        if (operationKind === "ПрочееПоступление") {
+          if (a.purposeText !== undefined)
+            throw new InputError("purposeText — только для Управления торговлей. Ничего не записано.");
+          const set = await requireEntity(
+            conn,
+            WRITE_DOCUMENTS.bankIn,
+            "Документ «Поступление на расчётный счёт»",
+          );
+          const other = (await otherOperationFields(conn, operationKind, a, [
+            "cashflowItemRef",
+            "counterpartyRef",
+            "contractRef",
+          ]))!;
+          const org = await resolveOrg(conn, organization);
+          const bank = await resolveOrgBankAccount(conn, org.key, orgBankAccount);
+          const cpSet = resolveEntity(CATALOGS.counterparties, await conn.available());
+          const payload = clean({
+            Date: await docDate(conn, date),
+            Posted: false,
+            ВидОперации: operationKind,
+            Организация_Key: org.key,
+            СчетОрганизации_Key: bank,
+            ...(a.counterpartyRef
+              ? {
+                  Контрагент: a.counterpartyRef,
+                  ...(cpSet ? { Контрагент_Type: `StandardODATA.${cpSet}` } : {}),
+                }
+              : {}),
+            ДоговорКонтрагента_Key: a.contractRef,
+            СуммаДокумента: amount,
+            СтатьяДвиженияДенежныхСредств_Key: a.cashflowItemRef,
+            Комментарий: a.comment,
+            ...other.fields,
+            РасшифровкаПлатежа: [{ LineNumber: 1, СуммаПлатежа: amount }],
+          });
+          return createOrPreview(conn, set, payload, confirm, other.notes, { keepSettlement: true });
+        }
         if (a.purposeText !== undefined || a.comment !== undefined)
           throw new InputError(
-            "purposeText и comment — только для Управления торговлей. Ничего не записано.",
+            "purposeText и comment — только для Управления торговлей (comment в Бухгалтерии — у «ПрочееПоступление»). Ничего не записано.",
           );
-        const { organization, operationKind, amount, orgBankAccount, date, confirm } = a;
+        if (a.corrAccount !== undefined || a.otherItemRef !== undefined || a.cashflowItemRef !== undefined)
+          throw new InputError(
+            "corrAccount, otherItemRef и cashflowItemRef — для operationKind «ПрочееПоступление»; у оплаты покупателя счёт подбирается по договору. Ничего не записано.",
+          );
         if (!a.counterpartyRef || !a.contractRef)
           throw new InputError(
             "Бухгалтерия: укажите counterpartyRef и contractRef — покупателя и договор. Ничего не записано.",

@@ -31,6 +31,7 @@ export const OTHER_OPERATIONS: Readonly<Record<string, { side: "Дт" | "Кт"; 
   ПрочийПриход: { side: "Кт", required: true },
   ПрочийРасход: { side: "Дт", required: true },
   ПрочееСписание: { side: "Дт", required: true },
+  ПрочееПоступление: { side: "Кт", required: true },
   ПеречислениеНалога: { side: "Дт", required: true },
   КомиссияБанка: { side: "Дт", required: false },
   Депозит: { side: "Дт", required: false },

@@ -52,6 +52,13 @@ const ACCOUNTS = [
   },
 ];
 ACCOUNTS.push({
+  Ref_Key: g("a", 6),
+  Code: "91.01",
+  Description: "Прочие доходы",
+  ЗапретитьИспользоватьВПроводках: false,
+  ExtDimensionTypes: [{ LineNumber: "1", ExtDimensionType_Key: K_OTHER }],
+});
+ACCOUNTS.push({
   Ref_Key: g("a", 4),
   Code: "68.90",
   Description: "Прочие налоги",
@@ -346,5 +353,44 @@ describe("Бухгалтерия: прочие операции денежных
       cashflowItemRef: cf,
     });
     expect(payloadOf(w)).toMatchObject({ СубконтоДт1: cf, СтатьяДвиженияДенежныхСредств_Key: cf });
+  });
+
+  it("поступление на счёт «Прочее поступление»: Кт 91.01 со статьёй, строка с суммой, без договора; corrAccount у оплаты — отказ", async () => {
+    const s = setup();
+    const cf = g("c", 8);
+    const r = await s.call("write.money.create_payment", {
+      operationKind: "ПрочееПоступление",
+      amount: 12,
+      corrAccount: "91.01",
+      otherItemRef: ITEM91,
+      cashflowItemRef: cf,
+      comment: "ZZ",
+    });
+    expect(r.err, r.text).toBe(false);
+    const p = payloadOf(r);
+    expect(p).toMatchObject({
+      ВидОперации: "ПрочееПоступление",
+      СчетУчетаРасчетовСКонтрагентом_Key: g("a", 6),
+      СубконтоКт1: ITEM91,
+      СубконтоКт1_Type: "StandardODATA.Catalog_ПрочиеДоходыИРасходы",
+      СтатьяДвиженияДенежныхСредств_Key: cf,
+      Комментарий: "ZZ",
+      РасшифровкаПлатежа: [{ LineNumber: 1, СуммаПлатежа: 12 }],
+    });
+    expect(p).not.toHaveProperty("ДоговорКонтрагента_Key");
+    expect(s.fake.violations).toEqual([]);
+    for (const [args, text] of [
+      [{ operationKind: "ПрочееПоступление", amount: 1 }, "укажите корреспондирующий счёт"],
+      [
+        { amount: 1, counterpartyRef: CP, contractRef: CTR, corrAccount: "91.01" },
+        "для operationKind «ПрочееПоступление»",
+      ],
+      [{ amount: 1, counterpartyRef: CP, contractRef: CTR, comment: "x" }, "comment"],
+      [{ amount: 1 }, "укажите counterpartyRef и contractRef"],
+    ] as const) {
+      const bad = await s.call("write.money.create_payment", args);
+      expect(bad.err, JSON.stringify(args)).toBe(true);
+      expect(bad.text).toContain(text);
+    }
   });
 });
