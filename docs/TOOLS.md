@@ -71,11 +71,11 @@
 | `write.sales.create_act` | Реализация услуг (акт) |
 | `write.sales.create_services_act` | Акт об оказании услуг (доходы/расходы по номенклатурной группе) |
 | `write.money.create_payment` / `write.money.create_payout_order` | Оплата от покупателя (поступление на р/с) / платёжное поручение |
-| `write.money.create_bank_writeoff` | Списание с расчётного счёта (исходящий платёж, вид операции обязателен) |
+| `write.money.create_bank_writeoff` | Списание с расчётного счёта (исходящий платёж, вид операции обязателен; «Прочее списание» — с корреспондирующим счётом `corrAccount`) |
 | `write.money.create_payment_request` | Управление торговлей: заявка на расходование денежных средств — согласование будущей оплаты (поставщику, прочей выдачи, возврата клиенту, в бюджет); по умолчанию «Не согласована» |
 | `write.sales.create_customer_order` | Управление торговлей: заказ клиента — товары, склад, соглашение; по умолчанию «К обеспечению» |
 | `write.purchase.create_supplier_order` | Управление торговлей: заказ поставщику — товары, склад; по умолчанию «Не согласован»; приём на комиссию — operationKind |
-| `write.money.create_cash_receipt` / `write.money.create_cash_payment` | Приходный / расходный кассовый ордер (ПКО / РКО) |
+| `write.money.create_cash_receipt` / `write.money.create_cash_payment` | Приходный / расходный кассовый ордер (ПКО / РКО); прочий приход и расход — с корреспондирующим счётом `corrAccount` и субконто |
 | `write.sales.create_issued_invoice` / `write.purchase.create_received_invoice` | Счёт-фактура выданный / полученный (на основании реализации / поступления) |
 | `write.entity.create_folder` / `write.entity.move_to_folder` | Папка (группа) справочника / перемещение в папку |
 | `write.counterparty.update_counterparty` / `write.catalog.update_nomenclature` / `write.entity.update_entity` | Изменение реквизитов (PATCH) |

@@ -232,9 +232,28 @@ async function main(): Promise<number> {
           amount: 1,
         })
       : undefined;
-    await flow("write.money.create_bank_writeoff", { operationKind: "ПрочееСписание", amount: 1 });
-    await flow("write.money.create_cash_receipt", { operationKind: "ПрочийПриход", amount: 1 });
-    await flow("write.money.create_cash_payment", { operationKind: "ПрочийРасход", amount: 1 });
+    // Прочие операции: корреспондирующий счёт обязателен — 91.01/91.02 со статьёй прочих доходов и расходов базы.
+    const otherItem = await first(
+      "Catalog_ПрочиеДоходыИРасходы",
+      "&$filter=IsFolder%20eq%20false%20and%20DeletionMark%20eq%20false",
+    ).catch(() => undefined);
+    const other = (corrAccount: string) =>
+      otherItem ? { corrAccount, otherItemRef: String(otherItem["Ref_Key"]) } : {};
+    await flow("write.money.create_bank_writeoff", {
+      operationKind: "ПрочееСписание",
+      amount: 1,
+      ...other("91.02"),
+    });
+    await flow("write.money.create_cash_receipt", {
+      operationKind: "ПрочийПриход",
+      amount: 1,
+      ...other("91.01"),
+    });
+    await flow("write.money.create_cash_payment", {
+      operationKind: "ПрочийРасход",
+      amount: 1,
+      ...other("91.02"),
+    });
     if (ship) await flow("write.sales.create_issued_invoice", { baseDocumentRef: String(ship["ref"]) });
     if (pur) await flow("write.purchase.create_received_invoice", { baseDocumentRef: String(pur["ref"]) });
     await flow("write.counterparty.create_bank_account", {

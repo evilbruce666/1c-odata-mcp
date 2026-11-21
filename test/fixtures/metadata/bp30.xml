@@ -32551,6 +32551,79 @@
 						Type="Edm.String"
 						Nullable="true"/>
 			</ComplexType>
+			<EntityType Name="ChartOfCharacteristicTypes_ВидыСубконтоХозрасчетные">
+				<Key>
+					<PropertyRef Name="Ref_Key"/>
+				</Key>
+				<Property Name="Ref_Key"
+						Type="Edm.Guid"
+						Nullable="false"/>
+				<Property Name="Predefined"
+						Type="Edm.Boolean"
+						Nullable="true"/>
+				<Property Name="PredefinedDataName"
+						Type="Edm.String"
+						Nullable="true"/>
+				<Property Name="DataVersion"
+						Type="Edm.String"
+						Nullable="true"/>
+				<Property Name="Description"
+						Type="Edm.String"
+						Nullable="true"/>
+				<Property Name="Code"
+						Type="Edm.String"
+						Nullable="true"/>
+				<Property Name="DeletionMark"
+						Type="Edm.Boolean"
+						Nullable="true"/>
+				<Property Name="ValueType"
+						Type="StandardODATA.TypeDescription"
+						Nullable="true"/>
+			</EntityType>
+			<EntityType Name="Catalog_ПрочиеДоходыИРасходы">
+				<Key>
+					<PropertyRef Name="Ref_Key"/>
+				</Key>
+				<Property Name="Ref_Key"
+						Type="Edm.Guid"
+						Nullable="false"/>
+				<Property Name="Predefined"
+						Type="Edm.Boolean"
+						Nullable="true"/>
+				<Property Name="PredefinedDataName"
+						Type="Edm.String"
+						Nullable="true"/>
+				<Property Name="DataVersion"
+						Type="Edm.String"
+						Nullable="true"/>
+				<Property Name="Description"
+						Type="Edm.String"
+						Nullable="true"/>
+				<Property Name="Code"
+						Type="Edm.String"
+						Nullable="true"/>
+				<Property Name="Parent_Key"
+						Type="Edm.Guid"
+						Nullable="true"/>
+				<Property Name="IsFolder"
+						Type="Edm.Boolean"
+						Nullable="true"/>
+				<Property Name="DeletionMark"
+						Type="Edm.Boolean"
+						Nullable="true"/>
+				<Property Name="ВидПрочихДоходовИРасходов"
+						Type="Edm.String"
+						Nullable="true"/>
+				<Property Name="ВидДеятельностиДляНалоговогоУчетаЗатрат"
+						Type="Edm.String"
+						Nullable="true"/>
+				<Property Name="ПринятиеКНалоговомуУчету"
+						Type="Edm.Boolean"
+						Nullable="true"/>
+				<Property Name="РеквизитДопУпорядочивания"
+						Type="Edm.Int64"
+						Nullable="true"/>
+			</EntityType>
 			<EntityContainer Name="EnterpriseV8"
 					m:IsDefaultEntityContainer="true">
 				<EntitySet Name="AccountingRegister_Хозрасчетный"
@@ -33111,6 +33184,10 @@
 					<Parameter Name="Period"
 							Type="Edm.DateTime"/>
 				</FunctionImport>
+				<EntitySet Name="ChartOfCharacteristicTypes_ВидыСубконтоХозрасчетные"
+						EntityType="StandardODATA.ChartOfCharacteristicTypes_ВидыСубконтоХозрасчетные"/>
+				<EntitySet Name="Catalog_ПрочиеДоходыИРасходы"
+						EntityType="StandardODATA.Catalog_ПрочиеДоходыИРасходы"/>
 			</EntityContainer>
 		</Schema>
 	</edmx:DataServices>

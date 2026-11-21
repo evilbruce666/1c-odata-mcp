@@ -12009,6 +12009,14 @@
             "description": "Комментарий",
             "type": "string"
           },
+          "corrAccount": {
+            "description": "Бухгалтерия, прочие операции (ПрочийПриход, ПрочийРасход, ПрочееСписание): корреспондирующий счёт — код, напр. «91.02», «76.09» (ОБЯЗАТЕЛЕН для них, не угадывать). Субконто счёта — из counterpartyRef, contractRef, cashflowItemRef, otherItemRef",
+            "type": "string"
+          },
+          "otherItemRef": {
+            "description": "Бухгалтерия: Ref_Key статьи прочих доходов и расходов — субконто счёта 91",
+            "type": "string"
+          },
           "cash": {
             "description": "Управление торговлей: касса — название, код или Ref_Key (одна у организации — сама)",
             "type": "string"
@@ -12222,6 +12230,14 @@
             "description": "Комментарий",
             "type": "string"
           },
+          "corrAccount": {
+            "description": "Бухгалтерия, прочие операции (ПрочийПриход, ПрочийРасход, ПрочееСписание): корреспондирующий счёт — код, напр. «91.02», «76.09» (ОБЯЗАТЕЛЕН для них, не угадывать). Субконто счёта — из counterpartyRef, contractRef, cashflowItemRef, otherItemRef",
+            "type": "string"
+          },
+          "otherItemRef": {
+            "description": "Бухгалтерия: Ref_Key статьи прочих доходов и расходов — субконто счёта 91",
+            "type": "string"
+          },
           "cash": {
             "description": "Управление торговлей: касса — название, код или Ref_Key (одна у организации — сама)",
             "type": "string"
@@ -12433,6 +12449,14 @@
           },
           "comment": {
             "description": "Комментарий",
+            "type": "string"
+          },
+          "corrAccount": {
+            "description": "Бухгалтерия, прочие операции (ПрочийПриход, ПрочийРасход, ПрочееСписание): корреспондирующий счёт — код, напр. «91.02», «76.09» (ОБЯЗАТЕЛЕН для них, не угадывать). Субконто счёта — из counterpartyRef, contractRef, cashflowItemRef, otherItemRef",
+            "type": "string"
+          },
+          "otherItemRef": {
+            "description": "Бухгалтерия: Ref_Key статьи прочих доходов и расходов — субконто счёта 91",
             "type": "string"
           },
           "cash": {

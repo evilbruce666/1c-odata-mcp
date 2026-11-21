@@ -1,3 +1,4 @@
+import { otherOperationFields } from "../odata/corr-account.js";
 import {
   ALIGN_HINT,
   bankPostingBlocker,
@@ -4501,6 +4502,11 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     a: Record<string, unknown> & { operationKind?: string; amount: number; confirm: boolean },
   ) => {
     if (!(await tradeMoneySet(conn, kind))) return undefined;
+    const bpOnly = ["corrAccount", "otherItemRef"].filter((k) => a[k] !== undefined);
+    if (bpOnly.length)
+      throw new InputError(
+        `Параметры ${bpOnly.join(", ")} — только для Бухгалтерии: в Управлении торговлей статья задаётся incomeItem или expenseItem. Ничего не записано.`,
+      );
     if (!a.operationKind)
       throw new InputError(
         `Управление торговлей: укажите operationKind — хозяйственную операцию: ${Object.keys(MONEY_OPS[kind]).join(", ")}. Ничего не записано.`,
@@ -4741,6 +4747,16 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         orgBankAccount: orgBankAccountField,
         date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
         comment: z.string().optional().describe("Комментарий"),
+        corrAccount: z
+          .string()
+          .optional()
+          .describe(
+            "Бухгалтерия, прочие операции (ПрочийПриход, ПрочийРасход, ПрочееСписание): корреспондирующий счёт — код, напр. «91.02», «76.09» (ОБЯЗАТЕЛЕН для них, не угадывать). Субконто счёта — из counterpartyRef, contractRef, cashflowItemRef, otherItemRef",
+          ),
+        otherItemRef: z
+          .string()
+          .optional()
+          .describe("Бухгалтерия: Ref_Key статьи прочих доходов и расходов — субконто счёта 91"),
         ...tradeMoneyFields,
         confirm: confirmField,
       }),
@@ -4772,6 +4788,9 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           WRITE_DOCUMENTS.bankOut,
           "Документ «Списание с расчётного счёта»",
         );
+        // Прочее списание: корреспондирующий счёт и субконто в шапке; строку расшифровки 1С при записи добавляет
+        // сама с нулевой суммой — отправляем её с суммой документа, как в документах, проведённых из формы.
+        const other = await otherOperationFields(conn, operationKind, a);
         const org = await resolveOrg(conn, organization);
         const bank = await resolveOrgBankAccount(conn, org.key, orgBankAccount);
         const bd = await buildSettlementRow(conn, operationKind, contractRef, amount);
@@ -4788,8 +4807,13 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           СтатьяДвиженияДенежныхСредств_Key: cashflowItemRef,
           Комментарий: comment,
           ...(bd ? { РасшифровкаПлатежа: [bd.row] } : {}),
+          ...(other
+            ? { ...other.fields, РасшифровкаПлатежа: [{ LineNumber: 1, СуммаПлатежа: amount }] }
+            : {}),
         });
-        return createOrPreview(conn, set, payload, confirm);
+        return other
+          ? createOrPreview(conn, set, payload, confirm, other.notes, { keepSettlement: true })
+          : createOrPreview(conn, set, payload, confirm);
       }),
   );
 
@@ -4805,6 +4829,16 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     cashflowItemRef: z.string().optional().describe("Ref_Key статьи ДДС"),
     date: z.string().optional().describe("Дата YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
     comment: z.string().optional().describe("Комментарий"),
+    corrAccount: z
+      .string()
+      .optional()
+      .describe(
+        "Бухгалтерия, прочие операции (ПрочийПриход, ПрочийРасход, ПрочееСписание): корреспондирующий счёт — код, напр. «91.02», «76.09» (ОБЯЗАТЕЛЕН для них, не угадывать). Субконто счёта — из counterpartyRef, contractRef, cashflowItemRef, otherItemRef",
+      ),
+    otherItemRef: z
+      .string()
+      .optional()
+      .describe("Бухгалтерия: Ref_Key статьи прочих доходов и расходов — субконто счёта 91"),
     ...tradeMoneyFields,
     confirm: confirmField,
   };
@@ -4822,23 +4856,46 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       cashflowItemRef?: string;
       date?: string;
       comment?: string;
+      corrAccount?: string;
+      otherItemRef?: string;
     },
-  ): Promise<Record<string, unknown>> => {
+  ): Promise<{ payload: Record<string, unknown>; other?: { notes: string[] } }> => {
+    // Прочий приход и расход: контрагент и договор — субконто корреспондирующего счёта, в шапке их нет (так
+    // заполнены документы рабочих баз БП 3.0).
+    const other = await otherOperationFields(conn, a.operationKind, a);
+    if (other)
+      return {
+        payload: clean({
+          Date: await docDate(conn, a.date),
+          Posted: false,
+          ВидОперации: a.operationKind,
+          Организация_Key: org.key,
+          СчетКасса_Key: a.cashRef,
+          СуммаДокумента: a.amount,
+          Основание: a.basis,
+          СтатьяДвиженияДенежныхСредств_Key: a.cashflowItemRef,
+          Комментарий: a.comment,
+          ...other.fields,
+        }),
+        other,
+      };
     const bd = await buildSettlementRow(conn, a.operationKind, a.contractRef, a.amount);
-    return clean({
-      Date: await docDate(conn, a.date),
-      Posted: false,
-      ВидОперации: a.operationKind,
-      Организация_Key: org.key,
-      СчетКасса_Key: a.cashRef,
-      ...(a.counterpartyRef ? { Контрагент: a.counterpartyRef, ...(await cpTypeOf(conn)) } : {}),
-      ДоговорКонтрагента_Key: a.contractRef,
-      СуммаДокумента: a.amount,
-      Основание: a.basis,
-      СтатьяДвиженияДенежныхСредств_Key: a.cashflowItemRef,
-      Комментарий: a.comment,
-      ...(bd ? { РасшифровкаПлатежа: [bd.row] } : {}),
-    });
+    return {
+      payload: clean({
+        Date: await docDate(conn, a.date),
+        Posted: false,
+        ВидОперации: a.operationKind,
+        Организация_Key: org.key,
+        СчетКасса_Key: a.cashRef,
+        ...(a.counterpartyRef ? { Контрагент: a.counterpartyRef, ...(await cpTypeOf(conn)) } : {}),
+        ДоговорКонтрагента_Key: a.contractRef,
+        СуммаДокумента: a.amount,
+        Основание: a.basis,
+        СтатьяДвиженияДенежныхСредств_Key: a.cashflowItemRef,
+        Комментарий: a.comment,
+        ...(bd ? { РасшифровкаПлатежа: [bd.row] } : {}),
+      }),
+    };
   };
 
   server.registerTool(
@@ -4862,8 +4919,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         noTradeMoney(a);
         const set = await requireEntity(conn, WRITE_DOCUMENTS.cashIn, "Документ «Приходный кассовый ордер»");
         const org = await resolveOrg(conn, a.organization);
-        const payload = await buildCashPayload(conn, org, a);
-        return createOrPreview(conn, set, payload, a.confirm);
+        const { payload, other } = await buildCashPayload(conn, org, a);
+        return other
+          ? createOrPreview(conn, set, payload, a.confirm, other.notes, { keepSettlement: true })
+          : createOrPreview(conn, set, payload, a.confirm);
       }),
   );
 
@@ -4888,8 +4947,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         noTradeMoney(a);
         const set = await requireEntity(conn, WRITE_DOCUMENTS.cashOut, "Документ «Расходный кассовый ордер»");
         const org = await resolveOrg(conn, a.organization);
-        const payload = await buildCashPayload(conn, org, a);
-        return createOrPreview(conn, set, payload, a.confirm);
+        const { payload, other } = await buildCashPayload(conn, org, a);
+        return other
+          ? createOrPreview(conn, set, payload, a.confirm, other.notes, { keepSettlement: true })
+          : createOrPreview(conn, set, payload, a.confirm);
       }),
   );
 
