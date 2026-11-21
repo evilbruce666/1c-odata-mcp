@@ -476,32 +476,45 @@ export async function alignBankPaymentAmounts(
     throw new InputError(
       "Документ не в валюте регламентированного учёта: курс не угадываем, изменение запрещено.",
     );
-  const contractRef = exactRef.parse(row[CONTRACT]);
-  if (contractRef === EMPTY_GUID)
+  const rawContract = String(row[CONTRACT] ?? EMPTY_GUID).toLowerCase();
+  // Строка без договора — операция без расчётов с контрагентом (прочее списание, налог, комиссия): после смены суммы
+  // документа выравнивается только сумма платежа (и НДС по ставке), курса и взаиморасчётов у неё нет (ревью
+  // выпуска 5: иначе исправить сумму можно было только в 1С).
+  // Оплата покупателя или поставщику без договора — это незаполненный документ, а не операция без расчётов.
+  const noContract = rawContract === EMPTY_GUID || rawContract === "";
+  if (noContract && /Поставщик|Покупател/i.test(String(doc.ВидОперации ?? "")))
     throw new InputError("В строке не указан договор — сначала apply_bank_settlement_settings.");
   const contracts = resolveEntity(CATALOGS.contracts, available);
-  if (!contracts) throw new InputError("Договоры не опубликованы.");
-  const contract = await conn.client.getEntity(`${contracts}(${odataGuid(contractRef)})?$format=json`);
-  if (
-    contract.РасчетыВУсловныхЕдиницах !== false ||
-    String(contract.ВалютаВзаиморасчетов_Key).toLowerCase() !== currency
-  )
-    throw new InputError(
-      "Договор в условных единицах или в другой валюте: курс не угадываем, изменение запрещено.",
-    );
+  if (!noContract) {
+    if (!contracts) throw new InputError("Договоры не опубликованы.");
+    const contractRef = exactRef.parse(row[CONTRACT]);
+    const contract = await conn.client.getEntity(`${contracts}(${odataGuid(contractRef)})?$format=json`);
+    if (
+      contract.РасчетыВУсловныхЕдиницах !== false ||
+      String(contract.ВалютаВзаиморасчетов_Key).toLowerCase() !== currency
+    )
+      throw new InputError(
+        "Договор в условных единицах или в другой валюте: курс не угадываем, изменение запрещено.",
+      );
+  }
   const percent = vatPercent(row.СтавкаНДС);
   if (percent === undefined)
     throw new InputError(`Ставка НДС строки «${String(row.СтавкаНДС)}» не поддержана.`);
 
-  const round2 = (n: number) => Math.round(n * 100) / 100;
+  // Копейки «половина вверх»: 0.57 × 20 / 120 = 0.095 → 0.10 (двоичная дробь давала 0.09).
+  const round2 = (n: number) => Math.round(Number((n * 100).toFixed(6))) / 100;
   // Число — в том виде, в каком его отдаёт 1С: Int64 (кратность) приходит строкой «1». Иначе «1» → 1
   // выглядело бы изменением, а контрольное чтение после записи не совпало бы с отправленным.
   const asObserved = (field: string, n: number) => (typeof row[field] === "string" ? String(n) : n);
   const numeric: Record<string, number> = {
     СуммаПлатежа: total,
-    СуммаВзаиморасчетов: total,
-    ...(rowTypes.has("КурсВзаиморасчетов") ? { КурсВзаиморасчетов: 1 } : {}),
-    ...(rowTypes.has("КратностьВзаиморасчетов") ? { КратностьВзаиморасчетов: 1 } : {}),
+    ...(noContract
+      ? {}
+      : {
+          СуммаВзаиморасчетов: total,
+          ...(rowTypes.has("КурсВзаиморасчетов") ? { КурсВзаиморасчетов: 1 } : {}),
+          ...(rowTypes.has("КратностьВзаиморасчетов") ? { КратностьВзаиморасчетов: 1 } : {}),
+        }),
     ...(rowTypes.has("СуммаНДС") ? { СуммаНДС: round2((total * percent) / (100 + percent)) } : {}),
   };
   const aligned: ODataEntity = {

@@ -6,15 +6,34 @@ import { accountsByCode } from "./accounting.js";
 import { buildQuery, odataGuid } from "./query.js";
 
 /**
- * Прочие операции денежных документов Бухгалтерии: корреспондирующий счёт — в шапке
- * (СчетУчетаРасчетовСКонтрагентом), субконто — по видам субконто этого счёта. Без счёта 1С документ не проводит
- * («Не заполнен счёт кредита/дебета»), а угадать его нельзя: на рабочих базах БП 3.0 у таких документов 76.03,
- * 91.02, 66.01, 55.03, 57.03 — счёт задаёт пользователь (corrAccount), значения субконто — из аргументов.
+ * Операции денежных документов Бухгалтерии с корреспондирующим счётом в шапке (СчетУчетаРасчетовСКонтрагентом) и
+ * субконто по видам субконто этого счёта. Угадать счёт нельзя — на рабочих базах БП 3.0 у таких документов 76.03,
+ * 91.02, 66.01, 55.03, 57.01, 68.90, 69.06 и другие: его задаёт пользователь (corrAccount), субконто — из аргументов.
+ * required — без счёта 1С документ не проводит («Не заполнен счёт дебета/кредита»: прочие операции, налог);
+ * проверено проведением на рабочей БП 3.0 21.11.2026. Комиссию банка (91.02) и депозит (55.03) 1С проводит со своим
+ * счётом — corrAccount у них можно задать, чтобы указать счёт и статью.
  */
-export const OTHER_OPERATIONS: Readonly<Record<string, "Дт" | "Кт">> = {
-  ПрочийПриход: "Кт",
-  ПрочийРасход: "Дт",
-  ПрочееСписание: "Дт",
+/**
+ * Виды списания с расчётного счёта, которые коннектор не может собрать верно: на рабочей БП 3.0 (21.11.2026) 1С
+ * проводила их без единой проводки или с проводкой Дт 51 Кт 51 — и со счётом в шапке тоже. Отказ с причиной, а не
+ * документ, который проведётся неверно.
+ */
+export const WRITEOFF_REFUSED: Readonly<Record<string, string>> = {
+  ПеречислениеЗП:
+    "Перечисление зарплаты 1С проводит по ведомости на выплату зарплаты: без неё документ проведётся без проводок. Создайте списание по ведомости в 1С.",
+  СнятиеНаличных:
+    "Снятие наличных 1С проводит без проводок, если документ записан через OData (проверено и со счётом 57.01). Оформите его в 1С.",
+  ПереводНаДругойСчет:
+    "Перевод на другой счёт требует счёта-получателя: без него 1С ставит в документ счёт 51 и проводит Дт 51 Кт 51. Оформите перевод в 1С.",
+};
+
+export const OTHER_OPERATIONS: Readonly<Record<string, { side: "Дт" | "Кт"; required: boolean }>> = {
+  ПрочийПриход: { side: "Кт", required: true },
+  ПрочийРасход: { side: "Дт", required: true },
+  ПрочееСписание: { side: "Дт", required: true },
+  ПеречислениеНалога: { side: "Дт", required: true },
+  КомиссияБанка: { side: "Дт", required: false },
+  Депозит: { side: "Дт", required: false },
 };
 
 const EMPTY = "00000000-0000-0000-0000-000000000000";
@@ -54,18 +73,23 @@ export async function otherOperationFields(
   /** Что документ и так пишет в шапку (статья ДДС — всегда; у списания — ещё контрагент и договор). */
   inHeader: ReadonlyArray<keyof OtherArgs> = ["cashflowItemRef"],
 ): Promise<{ fields: Record<string, unknown>; notes: string[] } | undefined> {
-  const side = OTHER_OPERATIONS[operationKind];
-  if (!side) {
+  const spec = OTHER_OPERATIONS[operationKind];
+  if (!spec) {
     if (a.corrAccount || a.otherItemRef)
       throw new InputError(
-        `corrAccount и otherItemRef — только для прочих операций (${Object.keys(OTHER_OPERATIONS).join(", ")}); у «${operationKind}» счёт расчётов подбирается по договору. Ничего не записано.`,
+        `corrAccount и otherItemRef — только для операций ${Object.keys(OTHER_OPERATIONS).join(", ")}; у «${operationKind}» счёт 1С подбирает сама (по договору или по виду операции). Ничего не записано.`,
       );
     return undefined;
   }
-  if (!a.corrAccount)
+  const side = spec.side;
+  if (!a.corrAccount) {
+    if (!spec.required && !a.otherItemRef) return undefined;
     throw new InputError(
-      `Для операции «${operationKind}» укажите корреспондирующий счёт corrAccount (код, напр. «91.02», «76.09») — без него 1С документ не проведёт. Ничего не записано.`,
+      spec.required
+        ? `Для операции «${operationKind}» укажите корреспондирующий счёт corrAccount (код, напр. «91.02», «68.90», «57.01») — без него 1С документ не проведёт или проведёт без верных проводок. Ничего не записано.`
+        : `otherItemRef для «${operationKind}» — вместе с corrAccount (счёт, к субконто которого относится статья). Ничего не записано.`,
     );
+  }
   const code = a.corrAccount.trim();
   const ref = (await accountsByCode(conn, [code])).get(code);
   if (!ref) throw new InputError(`Счёт «${code}» не найден в плане счетов. Ничего не записано.`);
@@ -106,7 +130,9 @@ export async function otherOperationFields(
     }
     const value = a[src.arg];
     if (!value || value === EMPTY) {
-      missing.push(src.label);
+      // Статья ДДС стоит и в шапке документа: субконто по ней в документах рабочих баз пустое (57.01, 55.03) — не
+      // требуем (проверено на рабочей БП 3.0, ревью выпуска 5).
+      if (src.arg !== "cashflowItemRef") missing.push(src.label);
       continue;
     }
     fields[field] = value;

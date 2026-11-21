@@ -1151,6 +1151,25 @@ describe("align_bank_payment_amounts и запрет проведения при
     expect(f.writes).toHaveLength(0);
   });
 
+  it("строка без договора у операции без расчётов (прочее списание): только сумма платежа и НДС; у оплаты — отказ", async () => {
+    const EMPTY = "00000000-0000-0000-0000-000000000000";
+    const f = await broken();
+    f.setDoc({ ВидОперации: "ПрочееСписание", [ROWS]: [{ ...rowOf(f), ДоговорКонтрагента_Key: EMPTY }] });
+    const p = await f.run({}, ALIGN);
+    expect(p.isError, JSON.stringify(p.content)).toBeFalsy();
+    const fields = (data(p).changes as Array<{ field: string }>).map((c) => c.field).sort();
+    expect(fields).toEqual(["СуммаНДС", "СуммаПлатежа"]);
+    await f.run({ confirm: true, operationId: data(p).operationId }, ALIGN);
+    expect(rowOf(f)).toMatchObject({ СуммаПлатежа: 150, СуммаВзаиморасчетов: 0, КурсВзаиморасчетов: 0 });
+    // Оплата поставщику без договора — незаполненный документ: выравнивать нельзя, сначала договор.
+    const g = await broken();
+    g.setDoc({ ВидОперации: "ОплатаПоставщику", [ROWS]: [{ ...rowOf(g), ДоговорКонтрагента_Key: EMPTY }] });
+    const r = await g.run({}, ALIGN);
+    expect(r.isError).toBe(true);
+    expect(JSON.stringify(r.content)).toContain("не указан договор");
+    expect(g.writes).toHaveLength(0);
+  });
+
   it("Int64 строкой, как отдаёт 1С: «1» не считается изменением и отправляется строкой", async () => {
     const f = await broken();
     f.setDoc({ [ROWS]: [{ ...rowOf(f), КратностьВзаиморасчетов: "1", КурсВзаиморасчетов: 1 }] });

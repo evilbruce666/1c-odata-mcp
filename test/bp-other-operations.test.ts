@@ -51,6 +51,13 @@ const ACCOUNTS = [
     ],
   },
 ];
+ACCOUNTS.push({
+  Ref_Key: g("a", 4),
+  Code: "68.90",
+  Description: "Прочие налоги",
+  ЗапретитьИспользоватьВПроводках: false,
+  ExtDimensionTypes: [],
+});
 const KINDS = [
   { Ref_Key: K_OTHER, PredefinedDataName: "ПрочиеДоходыИРасходы", Description: "Прочие доходы и расходы" },
   { Ref_Key: K_CP, PredefinedDataName: "Контрагенты", Description: "Контрагенты" },
@@ -173,8 +180,8 @@ describe("Бухгалтерия: прочие операции денежных
     [{ operationKind: "ПрочийПриход", amount: 1, corrAccount: "91.02" }, "статья прочих доходов и расходов"],
     [{ operationKind: "ПрочийПриход", amount: 1, corrAccount: "91", otherItemRef: ITEM91 }, "группа"],
     [{ operationKind: "ПрочийПриход", amount: 1, corrAccount: "99.99" }, "не найден"],
-    [{ operationKind: "ОплатаПокупателя", amount: 1, corrAccount: "91.02" }, "только для прочих операций"],
-    [{ operationKind: "ОплатаПокупателя", amount: 1, otherItemRef: ITEM91 }, "только для прочих операций"],
+    [{ operationKind: "ОплатаПокупателя", amount: 1, corrAccount: "91.02" }, "только для операций"],
+    [{ operationKind: "ОплатаПокупателя", amount: 1, otherItemRef: ITEM91 }, "только для операций"],
   ])("отказ до записи: %j", async (args, text) => {
     const s = setup();
     const r = await s.call("write.money.create_cash_receipt", { ...args, confirm: false });
@@ -246,5 +253,98 @@ describe("Бухгалтерия: прочие операции денежных
     expect(emptySettlementWarning(created, withHeader)).toBeUndefined();
     // Обычная оплата по договору без счёта — предупреждение, как раньше.
     expect(emptySettlementWarning(created, { ДоговорКонтрагента_Key: CTR })).toContain("пуст счёт расчётов");
+  });
+
+  it("списание: налог — счёт обязателен; зарплата, снятие наличных, перевод — отказ; комиссия и депозит — счёт по желанию; строка с суммой у любого вида без договора", async () => {
+    const s = setup();
+    const noAcc = await s.call("write.money.create_bank_writeoff", {
+      operationKind: "ПеречислениеНалога",
+      amount: 1,
+    });
+    expect(noAcc.err).toBe(true);
+    expect(noAcc.text).toContain("укажите корреспондирующий счёт");
+    // Зарплата, снятие наличных, перевод на другой счёт: 1С проводила их без проводок или Дт 51 Кт 51 — отказ,
+    // и со счётом тоже.
+    for (const [op, text] of [
+      ["ПеречислениеЗП", "по ведомости"],
+      ["СнятиеНаличных", "без проводок"],
+      ["ПереводНаДругойСчет", "счёта-получателя"],
+    ] as const) {
+      const r = await s.call("write.money.create_bank_writeoff", {
+        operationKind: op,
+        amount: 1,
+        corrAccount: "68.90",
+      });
+      expect(r.err, op).toBe(true);
+      expect(r.text).toContain(text);
+    }
+    const tax = await s.call("write.money.create_bank_writeoff", {
+      operationKind: "ПеречислениеНалога",
+      amount: 5,
+      corrAccount: "68.90",
+    });
+    expect(tax.err, tax.text).toBe(false);
+    expect(payloadOf(tax)).toMatchObject({
+      СчетУчетаРасчетовСКонтрагентом_Key: g("a", 4),
+      РасшифровкаПлатежа: [{ LineNumber: 1, СуммаПлатежа: 5 }],
+    });
+    // Комиссия банка без счёта — как раньше (1С ставит 91.02 сама), но строка уже с суммой.
+    const fee = await s.call("write.money.create_bank_writeoff", {
+      operationKind: "КомиссияБанка",
+      amount: 3,
+    });
+    expect(fee.err, fee.text).toBe(false);
+    expect(payloadOf(fee)).not.toHaveProperty("СчетУчетаРасчетовСКонтрагентом_Key");
+    expect(payloadOf(fee)).toMatchObject({ РасшифровкаПлатежа: [{ LineNumber: 1, СуммаПлатежа: 3 }] });
+    const feeItem = await s.call("write.money.create_bank_writeoff", {
+      operationKind: "КомиссияБанка",
+      amount: 3,
+      corrAccount: "91.02",
+      otherItemRef: ITEM91,
+    });
+    expect(payloadOf(feeItem)).toMatchObject({
+      СчетУчетаРасчетовСКонтрагентом_Key: A9102,
+      СубконтоДт1: ITEM91,
+    });
+    const lonely = await s.call("write.money.create_bank_writeoff", {
+      operationKind: "КомиссияБанка",
+      amount: 3,
+      otherItemRef: ITEM91,
+    });
+    expect(lonely.err).toBe(true);
+    expect(lonely.text).toContain("вместе с corrAccount");
+    expect(s.fake.violations).toEqual([]);
+  });
+
+  it("статья ДДС как субконто счёта не обязательна — она и в шапке (57.01 в документах рабочих баз без субконто)", async () => {
+    ACCOUNTS.push({
+      Ref_Key: g("a", 5),
+      Code: "57.01",
+      Description: "Переводы в пути",
+      ЗапретитьИспользоватьВПроводках: false,
+      ExtDimensionTypes: [{ LineNumber: "1", ExtDimensionType_Key: g("b", 5) }],
+    });
+    KINDS.push({
+      Ref_Key: g("b", 5),
+      PredefinedDataName: "СтатьиДвиженияДенежныхСредств",
+      Description: "Статьи ДДС",
+    });
+    const s = setup();
+    const r = await s.call("write.money.create_bank_writeoff", {
+      operationKind: "Депозит",
+      amount: 1,
+      corrAccount: "57.01",
+    });
+    expect(r.err, r.text).toBe(false);
+    expect(payloadOf(r)).toMatchObject({ СчетУчетаРасчетовСКонтрагентом_Key: g("a", 5) });
+    expect(payloadOf(r)).not.toHaveProperty("СубконтоДт1");
+    const cf = g("c", 9);
+    const w = await s.call("write.money.create_bank_writeoff", {
+      operationKind: "Депозит",
+      amount: 1,
+      corrAccount: "57.01",
+      cashflowItemRef: cf,
+    });
+    expect(payloadOf(w)).toMatchObject({ СубконтоДт1: cf, СтатьяДвиженияДенежныхСредств_Key: cf });
   });
 });

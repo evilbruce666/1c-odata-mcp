@@ -1,4 +1,4 @@
-import { otherOperationFields } from "../odata/corr-account.js";
+import { WRITEOFF_REFUSED, otherOperationFields } from "../odata/corr-account.js";
 import {
   ALIGN_HINT,
   bankPostingBlocker,
@@ -4733,7 +4733,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       description:
         "Создаёт документ «Списание с расчётного счёта» (исходящий платёж с банка). НЕПРОВЕДЁННЫЙ; " +
         "провести — post_document. Вид операции ОБЯЗАТЕЛЕН и не угадывается (напр. «ОплатаПоставщику», " +
-        "«ПеречислениеНалога», «ПеречислениеЗП», «ПереводНаДругойСчет», «ПрочееСписание»). " +
+        "«ПеречислениеНалога», «ПрочееСписание», «КомиссияБанка»; «ПеречислениеЗП», «СнятиеНаличных» и «ПереводНаДругойСчет» — отказ: их оформляют в 1С). " +
         "Для оплаты поставщику с договором заполняется расшифровка: счёт расчётов — по настройке договора, источник виден в предпросмотре (обычно 60), сумма взаиморасчётов — для рублёвого договора. dry-run/confirm.",
       inputSchema: z.object({
         database: databaseField,
@@ -4741,7 +4741,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         operationKind: z
           .string()
           .describe(
-            "Вид операции (ОБЯЗАТЕЛЬНО, не угадывать): ОплатаПоставщику / ПеречислениеНалога / ПеречислениеЗП / ПереводНаДругойСчет / ПрочееСписание …",
+            "Вид операции (ОБЯЗАТЕЛЬНО, не угадывать): ОплатаПоставщику / ПеречислениеНалога / ПрочееСписание / КомиссияБанка / Депозит …",
           ),
         amount: z.number().positive().describe("Сумма списания"),
         counterpartyRef: z.string().optional().describe("Ref_Key контрагента (для расчётов)"),
@@ -4755,7 +4755,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .string()
           .optional()
           .describe(
-            "Бухгалтерия, прочие операции (ПрочийПриход, ПрочийРасход, ПрочееСписание): корреспондирующий счёт — код, напр. «91.02», «76.09» (ОБЯЗАТЕЛЕН для них, не угадывать). Субконто счёта — из counterpartyRef, contractRef, cashflowItemRef, otherItemRef",
+            "Бухгалтерия: корреспондирующий счёт — код, напр. «91.02», «76.09», «68.90», «57.01» (не угадывать). ОБЯЗАТЕЛЕН для ПрочийПриход, ПрочийРасход, ПрочееСписание, ПеречислениеНалога; для КомиссияБанка и Депозит — по желанию. Субконто счёта — из counterpartyRef, contractRef, cashflowItemRef, otherItemRef",
           ),
         otherItemRef: z
           .string()
@@ -4792,6 +4792,11 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           WRITE_DOCUMENTS.bankOut,
           "Документ «Списание с расчётного счёта»",
         );
+        // Виды, которые 1С из OData-записи проводит неверно (без проводок или Дт 51 Кт 51), — отказ с причиной.
+        const refused = Object.hasOwn(WRITEOFF_REFUSED, operationKind)
+          ? WRITEOFF_REFUSED[operationKind]
+          : undefined;
+        if (refused) throw new InputError(`${refused} Ничего не записано.`);
         // Прочее списание: корреспондирующий счёт и субконто в шапке; строку расшифровки 1С при записи добавляет
         // сама с нулевой суммой — отправляем её с суммой документа, как в документах, проведённых из формы.
         const other = await otherOperationFields(conn, operationKind, a, [
@@ -4814,10 +4819,11 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           НазначениеПлатежа: purposeText,
           СтатьяДвиженияДенежныхСредств_Key: cashflowItemRef,
           Комментарий: comment,
-          ...(bd ? { РасшифровкаПлатежа: [bd.row] } : {}),
-          ...(other
-            ? { ...other.fields, РасшифровкаПлатежа: [{ LineNumber: 1, СуммаПлатежа: amount }] }
-            : {}),
+          ...(other ? other.fields : {}),
+          // Без договорной строки 1С при записи добавляет строку расшифровки с нулевой суммой, и проведение
+          // останавливала проверка суммы — у любого вида операции без договора (проверено на рабочей БП 3.0):
+          // отправляем строку с суммой документа, как в документах, проведённых из формы.
+          РасшифровкаПлатежа: bd ? [bd.row] : [{ LineNumber: 1, СуммаПлатежа: amount }],
         });
         return other
           ? createOrPreview(conn, set, payload, confirm, other.notes, { keepSettlement: true })
@@ -4841,7 +4847,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       .string()
       .optional()
       .describe(
-        "Бухгалтерия, прочие операции (ПрочийПриход, ПрочийРасход, ПрочееСписание): корреспондирующий счёт — код, напр. «91.02», «76.09» (ОБЯЗАТЕЛЕН для них, не угадывать). Субконто счёта — из counterpartyRef, contractRef, cashflowItemRef, otherItemRef",
+        "Бухгалтерия: корреспондирующий счёт — код, напр. «91.02», «76.09», «68.90», «57.01» (не угадывать). ОБЯЗАТЕЛЕН для ПрочийПриход, ПрочийРасход, ПрочееСписание, ПеречислениеНалога; для КомиссияБанка и Депозит — по желанию. Субконто счёта — из counterpartyRef, contractRef, cashflowItemRef, otherItemRef",
       ),
     otherItemRef: z
       .string()
