@@ -9,6 +9,8 @@ const OPERATION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f
 const TERMINAL_RETENTION_MS = 90 * 24 * 60 * 60 * 1_000;
 const UNCERTAIN_RETENTION_MS = 365 * 24 * 60 * 60 * 1_000;
 const STALE_FILE_MS = 24 * 60 * 60 * 1_000;
+/** Возраст блокировки без «executing», после которого она считается брошенной упавшим процессом. */
+const STALE_LOCK_MS = 60_000;
 const PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
 
 export type OperationState = "prepared" | "executing" | "succeeded" | "rejected" | "outcome_unknown";
@@ -126,7 +128,17 @@ export class WriteOperationJournal {
       this.assertMatches(entry, entitySet, payload, requestHash);
       const racedResult = this.resultForExisting<T>(entry);
       if (racedResult !== undefined) return racedResult;
-      throw this.unknownResult(operationId);
+      // Блокировка при «prepared» старше минуты — процесс упал между захватом и записью «executing»: запрос в 1С не
+      // уходил (executing пишется до отправки). Живой держатель пишет executing через миллисекунды после захвата.
+      if (entry.state !== "prepared" || !(await this.staleLock(lockPath)))
+        throw this.unknownResult(operationId);
+      await rm(lockPath, { force: true });
+      try {
+        lock = await open(lockPath, "wx", 0o600);
+      } catch (again) {
+        if (isNodeError(again, "EEXIST")) throw this.unknownResult(operationId);
+        throw again;
+      }
     }
 
     let requestStarted = false;
@@ -458,6 +470,15 @@ export class WriteOperationJournal {
         }
       }),
     );
+  }
+
+  /** Блокировка старше STALE_LOCK_MS: держатель её не дописал — процесс упал до отправки. */
+  private async staleLock(lockPath: string): Promise<boolean> {
+    try {
+      return Date.now() - (await stat(lockPath)).mtimeMs > STALE_LOCK_MS;
+    } catch {
+      return false;
+    }
   }
 
   private recordPath(operationId: string): string {

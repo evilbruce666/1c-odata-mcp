@@ -1459,10 +1459,22 @@ export async function withSettlementAccounts(
   return { payload: next, notes };
 }
 
+/**
+ * Вид списания, который 1С из OData-записи проводит неверно (WRITEOFF_REFUSED), — отказ и в копии, и при смене вида
+ * операции через update_entity, не только при создании (ревью выпуска 5).
+ */
+function writeoffKindRefusal(entitySet: string, kind: unknown): string | undefined {
+  if (!(WRITE_DOCUMENTS.bankOut as readonly string[]).includes(entitySet) || typeof kind !== "string")
+    return undefined;
+  return Object.hasOwn(WRITEOFF_REFUSED, kind) ? `${WRITEOFF_REFUSED[kind]} Ничего не записано.` : undefined;
+}
+
 /** После записи: счёт расчётов пуст — 1С проведёт документ без проводок по расчётам, молча. */
 export function emptySettlementWarning(
   created: ODataEntity,
   payload: Record<string, unknown>,
+  /** Счёт шапки задан пользователем (corrAccount), а не настройкой договора или строгими умолчаниями. */
+  corrAccountGiven = false,
 ): string | undefined {
   // Без договора расчётов с контрагентом нет (налог, зарплата, прочее списание) — пустой счёт законен.
   const contract = payload["ДоговорКонтрагента_Key"];
@@ -1471,6 +1483,7 @@ export function emptySettlementWarning(
   // проведением прочего списания по договору на рабочей БП 3.0. Счёт шапки из настройки договора — не повод молчать.
   const header = payload[SETTLE_FIELD];
   if (
+    corrAccountGiven &&
     NO_SETTLEMENT_KINDS.has(String(payload["ВидОперации"] ?? "")) &&
     typeof header === "string" &&
     header &&
@@ -1568,18 +1581,21 @@ async function createOrPreview(
   confirm: boolean,
   notes?: string[],
   /** keepSettlement — счета расчётов уже заданы (копия документа): настройку договора не применять. */
-  opts?: { keepSettlement?: boolean; settlementSide?: SettlementSide },
+  opts?: { keepSettlement?: boolean; settlementSide?: SettlementSide; corrAccountGiven?: boolean },
 ) {
   // Подстановки Бухгалтерии: договор по умолчанию и счета расчётов. Общее создание — createCore.
   const contract = await withDefaultContract(conn, entitySet, payload);
   const settlement = opts?.keepSettlement
     ? { payload: contract.payload, notes: [] }
     : await withSettlementAccounts(conn, entitySet, contract.payload, opts?.settlementSide);
-  return createCore(conn, entitySet, settlement.payload, confirm, [
-    ...(notes ?? []),
-    ...contract.notes,
-    ...settlement.notes,
-  ]);
+  return createCore(
+    conn,
+    entitySet,
+    settlement.payload,
+    confirm,
+    [...(notes ?? []), ...contract.notes, ...settlement.notes],
+    (created, sent) => emptySettlementWarning(created, sent, opts?.corrAccountGiven === true),
+  );
 }
 
 /**
@@ -2901,6 +2917,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           return updateTradeMoney(conn, entitySet, ref, fields, confirm, (f) =>
             patchOrPreview(conn, entitySet, ref, f, confirm),
           );
+        const refusedKind = writeoffKindRefusal(entitySet, fields["ВидОперации"]);
+        if (refusedKind) return fail(refusedKind);
         return patchOrPreview(conn, entitySet, ref, fields, confirm);
       }),
   );
@@ -4160,6 +4178,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         }
         // Реквизиты шапки применяем последними — явное указание важнее пересчёта.
         Object.assign(payload, fields ?? {});
+        const refusedKind = writeoffKindRefusal(entitySet, payload["ВидОперации"]);
+        if (refusedKind) return fail(refusedKind);
         // Копия сохраняет счета расчётов исходного документа (бухгалтер мог поставить их вручную).
         // Настройку договора применяем, только если в fields сменили договор и счета не заданы явно.
         const has = (k: string) => !!fields && Object.hasOwn(fields, k);
@@ -4611,7 +4631,9 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const trade = await tradeMoney(conn, "bankIn", a);
         if (trade) return trade;
         noTradeMoney(a);
-        const { organization, operationKind, amount, orgBankAccount, date, confirm } = a;
+        const { organization, amount, orgBankAccount, date, confirm } = a;
+        // Вид операции с учётом настройки базы: «ПрочееПоступление» из operationKinds.customerPayment — тот же путь.
+        const operationKind = configuredOperationKind(conn.cfg, "customerPayment", a.operationKind);
         // Прочее поступление (проценты банка, возвраты, прочие доходы): без договора, счёт — corrAccount, строка
         // расшифровки — с суммой документа, как в документах рабочих баз БП 3.0 (Кт 91.01 со статьёй).
         if (operationKind === "ПрочееПоступление") {
@@ -4649,7 +4671,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
             ...other.fields,
             РасшифровкаПлатежа: [{ LineNumber: 1, СуммаПлатежа: amount }],
           });
-          return createOrPreview(conn, set, payload, confirm, other.notes, { keepSettlement: true });
+          return createOrPreview(conn, set, payload, confirm, other.notes, {
+            keepSettlement: true,
+            corrAccountGiven: true,
+          });
         }
         if (a.purposeText !== undefined || a.comment !== undefined)
           throw new InputError(
@@ -4681,7 +4706,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const payload = clean({
           Date: await docDate(conn, date),
           Posted: false,
-          ВидОперации: configuredOperationKind(conn.cfg, "customerPayment", operationKind),
+          ВидОперации: operationKind,
           Организация_Key: org.key,
           СчетОрганизации_Key: bank,
           Контрагент: counterpartyRef,
@@ -4865,6 +4890,12 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           ? WRITEOFF_REFUSED[operationKind]
           : undefined;
         if (refused) throw new InputError(`${refused} Ничего не записано.`);
+        // Оплата поставщику или возврат покупателю без договора: расшифровка расчётов не собирается, и 1С такой
+        // документ не проводит (нулевая строка расшифровки) — отказ с подсказкой, а не документ-тупик.
+        if (/Поставщик|Покупател/i.test(operationKind) && !contractRef)
+          throw new InputError(
+            `Для операции «${operationKind}» укажите contractRef — договор с контрагентом: по нему собирается расшифровка расчётов, без неё 1С документ не проведёт. Ничего не записано.`,
+          );
         // Прочее списание: корреспондирующий счёт и субконто в шапке; строку расшифровки 1С при записи добавляет
         // сама с нулевой суммой — отправляем её с суммой документа, как в документах, проведённых из формы.
         const other = await otherOperationFields(conn, operationKind, a, [
@@ -4898,7 +4929,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
               : {}),
         });
         return other
-          ? createOrPreview(conn, set, payload, confirm, other.notes, { keepSettlement: true })
+          ? createOrPreview(conn, set, payload, confirm, other.notes, {
+              keepSettlement: true,
+              corrAccountGiven: true,
+            })
           : createOrPreview(conn, set, payload, confirm);
       }),
   );
@@ -5007,7 +5041,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const org = await resolveOrg(conn, a.organization);
         const { payload, other } = await buildCashPayload(conn, org, a);
         return other
-          ? createOrPreview(conn, set, payload, a.confirm, other.notes, { keepSettlement: true })
+          ? createOrPreview(conn, set, payload, a.confirm, other.notes, {
+              keepSettlement: true,
+              corrAccountGiven: true,
+            })
           : createOrPreview(conn, set, payload, a.confirm);
       }),
   );
@@ -5035,7 +5072,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const org = await resolveOrg(conn, a.organization);
         const { payload, other } = await buildCashPayload(conn, org, a);
         return other
-          ? createOrPreview(conn, set, payload, a.confirm, other.notes, { keepSettlement: true })
+          ? createOrPreview(conn, set, payload, a.confirm, other.notes, {
+              keepSettlement: true,
+              corrAccountGiven: true,
+            })
           : createOrPreview(conn, set, payload, a.confirm);
       }),
   );

@@ -501,4 +501,57 @@ describe("journal summary (health_check)", () => {
       await chmod(locked, 0o700);
     }
   });
+
+  it("брошенная блокировка при «prepared» (процесс упал до отправки): старше минуты — снимается, запись идёт один раз", async () => {
+    const root = await mkdtemp(join(tmpdir(), "1c-odata-write-journal-"));
+    const journal = new WriteOperationJournal(root, database, baseUrl);
+    const operationId = randomUUID();
+    await journal.prepare(operationId, entitySet, payload, requestHash);
+    const { readdir, writeFile, utimes } = await import("node:fs/promises");
+    const [ns] = await readdir(root);
+    const lock = join(root, ns!, `${operationId}.lock`);
+    let sends = 0;
+    const send = async () => {
+      sends += 1;
+      return { Ref_Key: "ref-1" };
+    };
+    // Свежая блокировка — живой держатель: исход неизвестен, запроса нет.
+    await writeFile(lock, "");
+    await expect(journal.execute(operationId, entitySet, payload, requestHash, send)).rejects.toThrow(
+      /неизвестен/,
+    );
+    expect(sends).toBe(0);
+    // Та же блокировка через две минуты — брошенная: снимается, запрос уходит один раз, повтор — из журнала.
+    const old = new Date(Date.now() - 120_000);
+    await utimes(lock, old, old);
+    await expect(journal.execute(operationId, entitySet, payload, requestHash, send)).resolves.toMatchObject({
+      Ref_Key: "ref-1",
+    });
+    await journal.execute(operationId, entitySet, payload, requestHash, send);
+    expect(sends).toBe(1);
+  });
+
+  it("брошенная блокировка при «executing» не снимается: запрос мог уйти — исход неизвестен", async () => {
+    const root = await mkdtemp(join(tmpdir(), "1c-odata-write-journal-"));
+    const journal = new WriteOperationJournal(root, database, baseUrl);
+    const operationId = randomUUID();
+    await journal.prepare(operationId, entitySet, payload, requestHash);
+    const { readdir, readFile, writeFile, utimes } = await import("node:fs/promises");
+    const [ns] = await readdir(root);
+    const record = join(root, ns!, `${operationId}.json`);
+    const entry = JSON.parse(await readFile(record, "utf8")) as Record<string, unknown>;
+    await writeFile(record, JSON.stringify({ ...entry, state: "executing" }));
+    const lock = join(root, ns!, `${operationId}.lock`);
+    await writeFile(lock, "");
+    const old = new Date(Date.now() - 120_000);
+    await utimes(lock, old, old);
+    let sends = 0;
+    await expect(
+      journal.execute(operationId, entitySet, payload, requestHash, async () => {
+        sends += 1;
+        return { Ref_Key: "x" };
+      }),
+    ).rejects.toThrow(/неизвестен/);
+    expect(sends).toBe(0);
+  });
 });

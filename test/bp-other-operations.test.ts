@@ -76,12 +76,13 @@ const KINDS = [
   },
 ];
 
-function setup(o: { kinds500?: boolean; plainChart?: boolean } = {}) {
+function setup(o: { kinds500?: boolean; plainChart?: boolean; env?: Record<string, string> } = {}) {
   const fake = fake1C(
     {
       READ_ONLY: "false",
       ODATA_WRITABLE: "true",
       ODATA_WRITE_JOURNAL_DIR: mkdtempSync(join(tmpdir(), "1c-odata-other-")),
+      ...o.env,
     },
     {
       data: (q) =>
@@ -261,7 +262,11 @@ describe("Бухгалтерия: прочие операции денежных
       ДоговорКонтрагента_Key: CTR,
       СчетУчетаРасчетовСКонтрагентом_Key: A7609,
     };
-    expect(emptySettlementWarning(created, withHeader)).toBeUndefined();
+    expect(emptySettlementWarning(created, withHeader, true)).toBeUndefined();
+    // Тот же счёт шапки без corrAccount (строгие умолчания, депозит по договору) — предупреждение, как в 0.17.0.
+    expect(emptySettlementWarning(created, { ...withHeader, ВидОперации: "Депозит" })).toContain(
+      "пуст счёт расчётов",
+    );
     // Обычная оплата по договору без счёта — предупреждение, как раньше.
     expect(emptySettlementWarning(created, { ДоговорКонтрагента_Key: CTR })).toContain("пуст счёт расчётов");
   });
@@ -427,6 +432,60 @@ describe("Бухгалтерия: прочие операции денежных
       СчетУчетаРасчетовСКонтрагентом_Key: A7609,
     };
     expect(emptySettlementWarning(created, payload)).toContain("пуст счёт расчётов");
-    expect(emptySettlementWarning(created, { ...payload, ВидОперации: "ПрочееСписание" })).toBeUndefined();
+    expect(
+      emptySettlementWarning(created, { ...payload, ВидОперации: "ПрочееСписание" }, true),
+    ).toBeUndefined();
+  });
+
+  it("хвосты: оплата поставщику без договора — отказ; запрещённый вид — отказ и в копии, и в update_entity", async () => {
+    const s = setup({ plainChart: true });
+    for (const op of ["ОплатаПоставщику", "ВозвратПокупателю"]) {
+      const r = await s.call("write.money.create_bank_writeoff", {
+        operationKind: op,
+        amount: 1,
+        counterpartyRef: CP,
+      });
+      expect(r.err, op).toBe(true);
+      expect(r.text).toContain("укажите contractRef");
+    }
+    const SET = "Document_СписаниеСРасчетногоСчета";
+    const ref = g("d", 1);
+    const copy = await s.call("write.document.copy_document", {
+      entitySet: SET,
+      ref,
+      fields: { ВидОперации: "ПеречислениеЗП" },
+    });
+    expect(copy.err).toBe(true);
+    expect(copy.text).toContain("по ведомости");
+    const upd = await s.call("write.entity.update_entity", {
+      entitySet: SET,
+      ref,
+      fields: { ВидОперации: "СнятиеНаличных" },
+    });
+    expect(upd.err).toBe(true);
+    expect(upd.text).toContain("без проводок");
+    expect(s.fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
+  });
+
+  it("хвосты: «ПрочееПоступление» из настройки базы (operationKinds.customerPayment) — путь прочего поступления", async () => {
+    const s = setup({
+      env: {
+        ODATA_ACCOUNTING_CONFIG: JSON.stringify({ operationKinds: { customerPayment: "ПрочееПоступление" } }),
+      },
+    });
+    const r = await s.call("write.money.create_payment", {
+      amount: 1,
+      counterpartyRef: CP,
+      contractRef: CTR,
+    });
+    expect(r.err).toBe(true);
+    expect(r.text).toContain("укажите корреспондирующий счёт");
+    const ok = await s.call("write.money.create_payment", {
+      amount: 1,
+      corrAccount: "91.01",
+      otherItemRef: ITEM91,
+    });
+    expect(ok.err, ok.text).toBe(false);
+    expect(payloadOf(ok)).toMatchObject({ ВидОперации: "ПрочееПоступление", СубконтоКт1: ITEM91 });
   });
 });

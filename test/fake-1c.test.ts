@@ -112,7 +112,7 @@ const OVERRIDES: Record<string, Record<string, unknown>> = {
     nomenclatureGroupRef: id,
     lines: [{ name: "Тест", quantity: 1, price: 100, nomenclatureRef: id, vatRate: "БезНДС" }],
   },
-  "write.money.create_bank_writeoff": { operationKind: "ОплатаПоставщику", amount: 1 },
+  "write.money.create_bank_writeoff": { operationKind: "КомиссияБанка", amount: 1 },
   "write.money.create_cash_payment": { operationKind: "ОплатаПоставщику", amount: 1 },
   "write.document.apply_bank_settlement_settings": {
     entitySet: "Document_ПоступлениеНаРасчетныйСчет",
