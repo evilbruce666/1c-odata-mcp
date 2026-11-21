@@ -205,6 +205,37 @@ describe("WriteOperationJournal", () => {
     expect((await journal.lookup(operationId))?.state).toBe("rejected");
   });
 
+  it.each([
+    ['Значение "УТ-00008193" поля "Код" не уникально'],
+    ["Оприходование излишков товаров от 01.01.0001 невозможно поместить в запрещенный период."],
+  ])("records 1С 500 «%s» as a rejection: the object was not written", async (value) => {
+    const journal = await createJournal();
+    const operationId = randomUUID();
+    await journal.prepare(operationId, entitySet, payload, requestHash);
+    const body = JSON.stringify({ "odata.error": { code: "-1", message: { lang: "ru", value } } });
+    await expect(
+      journal.execute(operationId, entitySet, payload, requestHash, async () => {
+        throw fromHttpStatus(500, "url", body);
+      }),
+    ).rejects.toThrow(/Ничего не записано/);
+    expect((await journal.lookup(operationId))?.state).toBe("rejected");
+  });
+
+  it("keeps a non-unique Ref_Key (Ссылка) as an unknown outcome: the object may already exist", async () => {
+    const journal = await createJournal();
+    const operationId = randomUUID();
+    await journal.prepare(operationId, entitySet, payload, requestHash);
+    const body = JSON.stringify({
+      "odata.error": { code: "-1", message: { lang: "ru", value: 'Значение поля "Ссылка" не уникально' } },
+    });
+    await expect(
+      journal.execute(operationId, entitySet, payload, requestHash, async () => {
+        throw fromHttpStatus(500, "url", body);
+      }),
+    ).rejects.toThrow();
+    expect((await journal.lookup(operationId))?.state).toBe("outcome_unknown");
+  });
+
   it("atomically allows only one concurrent POST for the same operationId", async () => {
     const journal = await createJournal();
     const operationId = randomUUID();

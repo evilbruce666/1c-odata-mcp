@@ -61,6 +61,45 @@ async function seriesCheck(
   return withNote(result, seriesSavedNote(sent, await readDoc(conn, entitySet, ref)));
 }
 
+const ROW_CHECK = ["Номенклатура_Key", "Количество", "КоличествоУпаковок", "Цена", "Сумма"] as const;
+const same = (a: unknown, b: unknown) =>
+  typeof a === "number" || typeof b === "number"
+    ? Math.abs(Number(a) - Number(b)) < 1e-6
+    : String(a) === String(b);
+
+/**
+ * Сверка строк после правки: перечитанные строки совпадают с отправленными по позиции, количеству и цене. Общая
+ * проверка правки табличные части не сверяет (verified=false) — для документа УТ сверяем сами.
+ */
+async function rowsCheck(
+  conn: Connection,
+  entitySet: string,
+  ref: string,
+  sent: readonly Row[],
+  result: CallToolResult,
+): Promise<CallToolResult> {
+  const sc = result.structuredContent as Record<string, unknown> | undefined;
+  if (result.isError || !sc || sc["dryRun"] || sc["replayed"]) return result;
+  const stored = rowsOf(await readDoc(conn, entitySet, ref), "Товары");
+  const mismatches: string[] = [];
+  if (stored.length !== sent.length)
+    mismatches.push(`строк в 1С ${stored.length}, отправлено ${sent.length}`);
+  sent.forEach((row, i) => {
+    for (const k of ROW_CHECK)
+      if (k in row && !same(row[k], stored[i]?.[k])) mismatches.push(`строка ${i + 1}: ${k}`);
+  });
+  if (mismatches.length)
+    return {
+      ...result,
+      structuredContent: {
+        ...sc,
+        verified: false,
+        note: `1С сохранила строки не так, как отправлено: ${mismatches.slice(0, 10).join("; ")}. Проверьте документ в 1С.`,
+      },
+    };
+  return { ...result, structuredContent: { ...sc, verified: true } };
+}
+
 function priceRefusal(kind: StockKind, lines: readonly StockLine[]): string | undefined {
   if (kind === "surplus") {
     const missing = lines.map((l, i) => (l.price ? 0 : i + 1)).filter(Boolean);
@@ -92,7 +131,13 @@ export async function replaceTradeLines(
   // Как у Бухгалтерии: замена строк — без журнала операций (у инструмента нет operationId), сохранённое
   // перечитывается.
   const result = await patchOrPreview(conn, entitySet, ref, fields, confirm);
-  return seriesCheck(conn, entitySet, ref, built.Серии?.length ?? 0, result);
+  return seriesCheck(
+    conn,
+    entitySet,
+    ref,
+    built.Серии?.length ?? 0,
+    await rowsCheck(conn, entitySet, ref, built.Товары, result),
+  );
 }
 
 /** Добавление строки: прежние строки остаются со всеми полями, которые заполнила 1С. */
@@ -114,11 +159,17 @@ export async function addTradeLine(
   const fields: Row = { Товары: renumber([...before, ...built.Товары]) };
   const series = rowsOf(doc, "Серии");
   if (built.Серии) fields["Серии"] = renumber([...series, ...built.Серии]);
-  const result = await patchLinesOrPreview(conn, entitySet, ref, fields, confirm, {
-    section: "Товары",
-    before: before.length,
-    expected: before.length + 1,
-  });
+  const result = await rowsCheck(
+    conn,
+    entitySet,
+    ref,
+    fields["Товары"] as Row[],
+    await patchLinesOrPreview(conn, entitySet, ref, fields, confirm, {
+      section: "Товары",
+      before: before.length,
+      expected: before.length + 1,
+    }),
+  );
   return seriesCheck(conn, entitySet, ref, built.Серии ? series.length + built.Серии.length : 0, result);
 }
 
@@ -153,11 +204,17 @@ export async function removeTradeLine(
       );
     fields["Серии"] = renumber(series.filter((s) => String(s["Номенклатура_Key"]) !== item));
   }
-  return patchLinesOrPreview(conn, entitySet, ref, fields, confirm, {
-    section: "Товары",
-    before: rows.length,
-    expected: kept.length,
-  });
+  return rowsCheck(
+    conn,
+    entitySet,
+    ref,
+    fields["Товары"] as Row[],
+    await patchLinesOrPreview(conn, entitySet, ref, fields, confirm, {
+      section: "Товары",
+      before: rows.length,
+      expected: kept.length,
+    }),
+  );
 }
 
 /** Поля шапки, которые можно менять (update_entity) и задавать копии (copy_document): белый список по документу. */

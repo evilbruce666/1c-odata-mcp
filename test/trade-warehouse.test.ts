@@ -741,6 +741,8 @@ describe("складские документы в Управлении торг
       Товары: [{ LineNumber: 1, Номенклатура_Key: ITEM, Количество: 3, КоличествоУпаковок: 3 }],
       Серии: [],
     });
+    // Строки перечитаны и совпали — verified, хотя общая проверка табличные части не сверяет.
+    expect(r.sc).toMatchObject({ updated: true, verified: true });
     expect(s.fake.violations).toEqual([]);
   });
 
@@ -810,6 +812,27 @@ describe("складские документы в Управлении торг
     expect(body["Серии"]).toEqual([
       { LineNumber: 1, Номенклатура_Key: ITEM_SERIES, Серия_Key: SERIES, Количество: 2 },
     ]);
+  });
+
+  it("1С сохранила строку иначе (другое количество) — verified=false с названием поля", async () => {
+    const s = setup();
+    const ref = await made(s);
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      if ((init?.method ?? "GET") === "PATCH") {
+        const b = JSON.parse(String(init!.body)) as Record<string, unknown>;
+        for (const row of b["Товары"] as Record<string, unknown>[]) row["Количество"] = 99;
+        return inner(input, { ...init, body: JSON.stringify(b) });
+      }
+      return inner(input, init);
+    });
+    const r = await twice(s, "write.document.update_document_lines", {
+      entitySet: SET,
+      ref,
+      lines: [line(3, { price: 1 })],
+    });
+    expect(r.sc).toMatchObject({ updated: true, verified: false });
+    expect(String(r.sc["note"])).toContain("строка 1: Количество");
   });
 
   it("1С не сохранила серии при правке — заметка в ответе", async () => {
