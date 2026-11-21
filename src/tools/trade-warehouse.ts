@@ -98,10 +98,15 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /**
  * Позиции, вид которых ведёт серии, а серия не указана. Не отказ: нужна ли серия, решает политика учёта серий на
- * складе (на копии рабочей базы у одного вида — разные политики по складам); откажет, если нужно, сама 1С при
- * проведении. Схема без видов номенклатуры — проверки нет.
+ * складе (на копии рабочей базы у одного вида — разные политики по складам). Проверено на копии: без серии 1С
+ * проводит документ без отказа — учёт серий остаётся неполным, поэтому предупреждение. Схема без видов — проверки нет.
  */
-async function seriesNotes(conn: Connection, lines: readonly StockLine[]): Promise<string[]> {
+async function seriesNotes(
+  conn: Connection,
+  lines: readonly StockLine[],
+  /** Что посоветовать: в перемещении — указать серию, в оприходовании и списании — оформить в 1С. */
+  advice = "укажите seriesRef в строке, если склад их учитывает.",
+): Promise<string[]> {
   const without = [...new Set(lines.filter((l) => !l.seriesRef).map((l) => guidOf(l.nomenclatureRef)))];
   const available = await conn.available();
   if (!without.length || !available.has(KINDS)) return [];
@@ -138,10 +143,63 @@ async function seriesNotes(conn: Connection, lines: readonly StockLine[]): Promi
     .map((i) => `«${i["Description"]}»`);
   return names.length
     ? [
-        `Вид номенклатуры ведёт серии, а серия не указана: ${names.join(", ")}. Если склад учитывает серии, 1С ` +
-          "не проведёт документ — укажите seriesRef в строке.",
+        `Вид номенклатуры ведёт серии, а серия не указана: ${names.join(", ")}. 1С проведёт документ и без ` +
+          `серии, но учёт серий на складе останется неполным — ${advice}`,
       ]
     : [];
+}
+
+const VAT_ACTIVITY = "ПеремещениеПодДеятельность";
+const SERIES_IN_1C =
+  "серии в этом документе коннектор пока не пишет; если склад их учитывает, оформите документ в 1С.";
+const SERIES_IN_TABLE = {
+  СтатусУказанияСерий: 2,
+  СтатусУказанияСерийОтправитель: 2,
+  СтатусУказанияСерийПолучатель: 2,
+} as const;
+
+/**
+ * Серии в оприходовании и списании УТ не поддержаны: на копии рабочей базы нет ни одной такой строки с серией, а без
+ * верного статуса указания серий 1С очищает серию при записи — она потерялась бы молча.
+ */
+function refuseSeries(lines: readonly StockLine[], what: string): void {
+  if (lines.some((l) => l.seriesRef))
+    throw new InputError(
+      `Серии в ${what} Управления торговлей пока не поддержаны: 1С сбросила бы серию без ошибки. Серию можно ` +
+        "указать в перемещении; здесь — уберите seriesRef или оформите документ в 1С. Ничего не записано.",
+    );
+}
+
+/**
+ * Налогообложение НДС перемещения. При записи через OData 1С его не заполняет (у списания — заполняет сама), а у
+ * организации оно одно во всех перемещениях копии рабочей базы. Берётся из последнего проведённого перемещения той
+ * же организации, с заметкой; нет такого — поле пустое, тоже с заметкой (решение владельца, 21.11.2026).
+ */
+async function transferVatActivity(conn: Connection, org: string): Promise<{ value?: string; note: string }> {
+  const meta = await conn.getMetadata();
+  if (!meta.entities.get(STOCK_DOCS.transfer)?.properties.some((p) => p.name === VAT_ACTIVITY))
+    return { note: "Налогообложение НДС перемещения в этой схеме не опубликовано — не заполняется." };
+  const last = (
+    await conn.client.getCollection<ODataEntity>(
+      `${STOCK_DOCS.transfer}${buildQuery({
+        filter: `${cmp("Организация_Key", "eq", odataGuid(org))} and Posted eq true and DeletionMark eq false`,
+        orderby: "Date desc",
+        top: 1,
+        select: ["Number", "Date", VAT_ACTIVITY],
+      })}`,
+    )
+  ).value[0];
+  const value = String(last?.[VAT_ACTIVITY] ?? "");
+  if (!last || !value)
+    return {
+      note:
+        "Налогообложение НДС перемещения («ПеремещениеПодДеятельность») не заполнено: у организации нет проведённых " +
+        "перемещений, откуда его взять. Проверьте документ в 1С.",
+    };
+  return {
+    value,
+    note: `Налогообложение НДС «${value}» — как в последнем проведённом перемещении организации № ${String(last["Number"])} от ${String(last["Date"]).slice(0, 10)}.`,
+  };
 }
 
 export interface TransferInput {
@@ -166,10 +224,14 @@ export async function createTradeTransfer(
   const notes = await seriesNotes(conn, input.lines);
   if (input.lines.some((l) => l.price))
     notes.push("Цена в перемещении Управления торговлей не указывается: 1С берёт себестоимость сама.");
+  const org = await resolveOrgRef(conn, input.organization);
+  const activity = await transferVatActivity(conn, org);
+  notes.push(activity.note);
   const payload = {
     Date: await docDate(conn, input.date),
     Posted: false,
-    Организация_Key: await resolveOrgRef(conn, input.organization),
+    Организация_Key: org,
+    ...(activity.value ? { ПеремещениеПодДеятельность: activity.value } : {}),
     СкладОтправитель_Key: input.from,
     СкладПолучатель_Key: input.to,
     ХозяйственнаяОперация: "ПеремещениеТоваров",
@@ -182,6 +244,9 @@ export async function createTradeTransfer(
       // Форма 1С показывает и правит количество упаковок; без упаковки оно равно количеству (так у всех
       // перемещений копии рабочей базы).
       КоличествоУпаковок: l.quantity,
+      // Без статуса указания серий 1С при записи очищает таблицу «Серии» (проверено на копии). У перемещений с
+      // сериями в базе статус везде 2 — серии указаны в таблице «Серии».
+      ...(l.seriesRef ? SERIES_IN_TABLE : {}),
     })),
     // Серии перемещения — в своей табличной части, как в документах, созданных в 1С.
     ...(series.length
@@ -195,7 +260,13 @@ export async function createTradeTransfer(
         }
       : {}),
   };
-  return createCore(conn, STOCK_DOCS.transfer, payload, confirm, notes, () => undefined);
+  return createCore(conn, STOCK_DOCS.transfer, payload, confirm, notes, (created) => {
+    // Молчаливую потерю серий видно сразу: 1С возвращает записанный документ.
+    const saved = (created["Серии"] as unknown[] | undefined)?.length ?? 0;
+    return series.length && saved !== series.length
+      ? `1С сохранила серий ${saved} из ${series.length}. Проверьте документ в 1С, прежде чем проводить.`
+      : undefined;
+  });
 }
 
 export interface SurplusInput {
@@ -215,6 +286,7 @@ export async function createTradeSurplus(
   input: SurplusInput,
   confirm: boolean,
 ): Promise<CallToolResult> {
+  refuseSeries(input.lines, "оприходовании");
   const [kind, item, currency] = [
     await resolveCatalogItem(conn, ["Catalog_ВидыЦен"], "Вид цены", input.priceKind),
     await resolveCatalogItem(conn, [INCOME_ITEMS], "Статья доходов", input.incomeItem),
@@ -236,17 +308,10 @@ export async function createTradeSurplus(
       Количество: l.quantity,
       Цена: l.price ?? 0,
       Сумма: round2(l.quantity * (l.price ?? 0)),
-      ...(l.seriesRef ? { Серия_Key: l.seriesRef } : {}),
     })),
   };
-  return createCore(
-    conn,
-    STOCK_DOCS.surplus,
-    payload,
-    confirm,
-    await seriesNotes(conn, input.lines),
-    () => undefined,
-  );
+  const notes = await seriesNotes(conn, input.lines, SERIES_IN_1C);
+  return createCore(conn, STOCK_DOCS.surplus, payload, confirm, notes, () => undefined);
 }
 
 export interface WriteoffInput {
@@ -266,7 +331,8 @@ export async function createTradeWriteoff(
   confirm: boolean,
 ): Promise<CallToolResult> {
   const item = await resolveCatalogItem(conn, [EXPENSE_ITEMS], "Статья расходов", input.expenseItem);
-  const notes = await seriesNotes(conn, input.lines);
+  refuseSeries(input.lines, "списании");
+  const notes = await seriesNotes(conn, input.lines, SERIES_IN_1C);
   if (input.lines.some((l) => l.price))
     notes.push("Цена в списании Управления торговлей не указывается: 1С списывает по себестоимости.");
   const payload = {
@@ -283,7 +349,6 @@ export async function createTradeWriteoff(
       LineNumber: i + 1,
       Номенклатура_Key: l.nomenclatureRef,
       Количество: l.quantity,
-      ...(l.seriesRef ? { Серия_Key: l.seriesRef } : {}),
     })),
   };
   return createCore(conn, STOCK_DOCS.writeoff, payload, confirm, notes, () => undefined);

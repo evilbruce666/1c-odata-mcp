@@ -3234,7 +3234,9 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         seriesRef: z
           .string()
           .optional()
-          .describe("Управление торговлей: Ref_Key серии номенклатуры, если вид номенклатуры ведёт серии"),
+          .describe(
+            "Управление торговлей, только перемещение: Ref_Key серии номенклатуры, если вид номенклатуры ведёт серии",
+          ),
       }),
     )
     .min(1)

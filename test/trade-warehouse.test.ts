@@ -98,6 +98,10 @@ function setup(
     spoil?: (moves: Record<string, unknown>[]) => Record<string, unknown>[];
     /** После отмены проведения движения остались. */
     keepOnUnpost?: boolean;
+    /** Как 1С без статуса указания серий: таблица «Серии» при записи очищается. */
+    dropSeriesWithoutStatus?: boolean;
+    /** Последнее проведённое перемещение организации: откуда берётся налогообложение НДС. */
+    lastTransfer?: Record<string, unknown>;
   } = {},
 ) {
   const posts: { set: string; body: Record<string, unknown> }[] = [];
@@ -121,6 +125,12 @@ function setup(
     {
       schema: o.schema ?? "ut11",
       data: (q: FakeQuery) => {
+        if (
+          q.base === "Document_ПеремещениеТоваров" &&
+          !q.fn &&
+          (q.params.get("$filter") ?? "").includes("Posted eq true")
+        )
+          return o.lastTransfer ? [o.lastTransfer] : [];
         const rows = TABLES[q.base];
         return rows && !q.fn ? pick(rows, q.params.get("$filter") ?? "") : undefined;
       },
@@ -141,6 +151,8 @@ function setup(
         if (!res.ok) return res;
         const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
         posts.push({ set, body });
+        const rows = (body["Товары"] as Record<string, unknown>[] | undefined) ?? [];
+        if (o.dropSeriesWithoutStatus && rows.every((r) => !r["СтатусУказанияСерий"])) body["Серии"] = [];
         docs.set(String(body["Ref_Key"]).toLowerCase(), { set, body, posted: false, moves: [], version: 1 });
         return json(201, { ...body, Number: "0000-000001", DataVersion: "v1" });
       }
@@ -237,6 +249,9 @@ describe("складские документы в Управлении торг
       Товары: [{ LineNumber: 1, Номенклатура_Key: ITEM, Количество: 2, КоличествоУпаковок: 2 }],
     });
     expect(JSON.stringify(payloadOf(preview))).not.toContain("СчетУчета");
+    // Проведённых перемещений у организации нет — налогообложение пустое, с заметкой.
+    expect(payloadOf(preview)).not.toHaveProperty("ПеремещениеПодДеятельность");
+    expect(JSON.stringify(preview.sc["notes"])).toContain("нет проведённых перемещений");
     expect(s.posts).toHaveLength(1);
     expect(s.posts[0]!.body).toMatchObject({ ...payloadOf(preview), Ref_Key: ref });
     expect(s.fake.violations).toEqual([]);
@@ -255,9 +270,94 @@ describe("складские документы в Управлении торг
     expect(payloadOf(r)).toMatchObject({
       Статус: "Отгружено",
       Серии: [{ LineNumber: 1, Номенклатура_Key: ITEM_SERIES, Серия_Key: SERIES, Количество: 1 }],
+      // Статус «серии в таблице» — как у перемещений с сериями в базе: без него 1С очищает «Серии» при записи.
+      Товары: [
+        { СтатусУказанияСерий: 2, СтатусУказанияСерийОтправитель: 2, СтатусУказанияСерийПолучатель: 2 },
+      ],
     });
     expect(JSON.stringify(payloadOf(r)["Товары"])).not.toContain("Цена");
     expect(JSON.stringify(r.sc["notes"])).toContain("Цена в перемещении");
+  });
+
+  it("перемещение: налогообложение НДС — из последнего проведённого перемещения организации, с заметкой", async () => {
+    for (const value of ["ПродажаОблагаетсяНДС", "ЛьготноеНалогообложениеНДСНаУСН"]) {
+      const s = setup({
+        lastTransfer: {
+          Number: "0000-000007",
+          Date: "2026-11-01T10:00:00",
+          ПеремещениеПодДеятельность: value,
+        },
+      });
+      const r = await s.call(T, {
+        organization: "ТЕСТ",
+        fromWarehouse: "Основной",
+        toWarehouse: "Брак",
+        lines: [line(1)],
+      });
+      expect(r.isError, r.text).toBeFalsy();
+      expect(payloadOf(r)["ПеремещениеПодДеятельность"]).toBe(value);
+      expect(JSON.stringify(r.sc["notes"])).toContain("№ 0000-000007 от 2026-11-01");
+      // Отбор — по организации документа и только проведённые.
+      expect(s.fake.violations).toEqual([]);
+    }
+  });
+
+  it("перемещение: 1С не сохранила серии — заметка сразу после создания; со статусом серии сохраняются", async () => {
+    const s = setup({ dropSeriesWithoutStatus: true });
+    const args = {
+      organization: "ТЕСТ",
+      fromWarehouse: "Основной",
+      toWarehouse: "Брак",
+      lines: [line(1, { nomenclatureRef: ITEM_SERIES, seriesRef: SERIES })],
+    };
+    const { done } = await s.create(T, args);
+    expect(JSON.stringify(done.sc["notes"] ?? [])).not.toContain("сохранила серий");
+    // Без статуса (как раньше) — потеря видна в ответе.
+    s.posts.length = 0;
+    const plain = setup({ dropSeriesWithoutStatus: true });
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      if (init?.body && String(init.body).includes("СтатусУказанияСерий")) {
+        const b = JSON.parse(String(init.body)) as Record<string, unknown>;
+        for (const r of b["Товары"] as Record<string, unknown>[]) delete r["СтатусУказанияСерий"];
+        return inner(input, { ...init, body: JSON.stringify(b) });
+      }
+      return inner(input, init);
+    });
+    const lost = await plain.create(T, args);
+    expect(JSON.stringify(lost.done.sc["notes"])).toContain("сохранила серий 0 из 1");
+  });
+
+  it("оприходование и списание с серией — отказ без записи: 1С сбросила бы серию молча", async () => {
+    const s = setup();
+    const lines = [line(1, { nomenclatureRef: ITEM_SERIES, seriesRef: SERIES })];
+    const sur = await s.call(S, {
+      organization: "ТЕСТ",
+      warehouse: "Основной",
+      priceKind: PRICE_KIND,
+      incomeItem: "1",
+      lines,
+    });
+    const wo = await s.call(W, {
+      organization: "ТЕСТ",
+      warehouse: "Брак",
+      expenseItem: "Списание брака",
+      lines,
+    });
+    for (const r of [sur, wo]) {
+      expect(r.isError).toBe(true);
+      expect(r.text).toContain("пока не поддержаны");
+    }
+    expect(s.posts).toEqual([]);
+    // Без серии — проходит, но с предупреждением: серии здесь оформляются в 1С.
+    const plain = await s.call(W, {
+      organization: "ТЕСТ",
+      warehouse: "Брак",
+      expenseItem: "Списание брака",
+      lines: [line(1, { nomenclatureRef: ITEM_SERIES })],
+    });
+    expect(plain.isError, plain.text).toBeFalsy();
+    expect(JSON.stringify(plain.sc["notes"])).toContain("оформите документ в 1С");
   });
 
   it("перемещение на тот же склад и без склада при нескольких — отказ, записей нет", async () => {
@@ -300,7 +400,7 @@ describe("складские документы в Управлении торг
     expect(s.fake.violations).toEqual([]);
   });
 
-  it("оприходование: вид цены по ссылке и пересчёт-основание; серия — в строке", async () => {
+  it("оприходование: вид цены по ссылке и пересчёт-основание", async () => {
     const s = setup();
     const r = await s.call(S, {
       organization: "ТЕСТ",
@@ -308,14 +408,13 @@ describe("складские документы в Управлении торг
       priceKind: PRICE_KIND,
       incomeItem: "1",
       inventoryRef: g("9", 9),
-      lines: [line(1, { nomenclatureRef: ITEM_SERIES, seriesRef: SERIES })],
+      lines: [line(1)],
     });
     expect(r.isError, r.text).toBeFalsy();
     expect(payloadOf(r)).toMatchObject({
       ВидЦены_Key: PRICE_KIND,
       СтатьяДоходов_Key: INCOME,
       ПересчетТоваров_Key: g("9", 9),
-      Товары: [{ Серия_Key: SERIES }],
     });
   });
 
@@ -367,12 +466,12 @@ describe("складские документы в Управлении торг
 
   it("вид номенклатуры ведёт серии, а серии нет — предупреждение в предпросмотре, не отказ; с серией и у обычного товара — без него", async () => {
     const s = setup();
-    const args = { organization: "ТЕСТ", warehouse: "Брак", expenseItem: "Списание брака" };
-    const warn = await s.call(W, { ...args, lines: [line(1, { nomenclatureRef: ITEM_SERIES })] });
+    const args = { organization: "ТЕСТ", fromWarehouse: "Основной", toWarehouse: "Брак" };
+    const warn = await s.call(T, { ...args, lines: [line(1, { nomenclatureRef: ITEM_SERIES })] });
     expect(warn.isError, warn.text).toBeFalsy();
     expect(JSON.stringify(warn.sc["notes"])).toContain("«Телефон»");
     for (const lines of [[line(1, { nomenclatureRef: ITEM_SERIES, seriesRef: SERIES })], [line(1)]]) {
-      const r = await s.call(W, { ...args, lines });
+      const r = await s.call(T, { ...args, lines });
       expect(r.isError, r.text).toBeFalsy();
       expect(JSON.stringify(r.sc["notes"] ?? [])).not.toContain("ведёт серии");
     }
