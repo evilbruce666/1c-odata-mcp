@@ -104,6 +104,8 @@ function setup(
     lastVatBySet?: Record<string, string>;
     spoil?: (reg: string, rows: Record<string, unknown>[]) => Record<string, unknown>[];
     basePosted?: boolean;
+    /** Флаги ордерной схемы основного склада. */
+    orderScheme?: Record<string, unknown>;
   } = {},
 ) {
   const posts: { set: string; body: Record<string, unknown> }[] = [];
@@ -155,6 +157,11 @@ function setup(
                   НалогообложениеНДС: o.lastVat ?? "ПродажаНеОблагаетсяНДС",
                 },
               ];
+        if (q.base === "Catalog_Склады" && o.orderScheme)
+          return pick(
+            TABLES["Catalog_Склады"]!.map((w) => ({ ...w, ...o.orderScheme })),
+            f,
+          );
         const rows = TABLES[q.base];
         return rows ? pick(rows, f) : undefined;
       },
@@ -590,6 +597,49 @@ describe("продажи и закупки УТ: проведение со св�
       expect(p.sc).toMatchObject({ verified: false, movementsVerified: false });
       expect(JSON.stringify(p.sc["movements"])).toContain(text);
     }
+  });
+
+  it("ордерный склад: склад и серии не сверяются (их меняют ордера), расчёты сверяются; схема с более поздней даты — сверка", async () => {
+    // Как при ордерной схеме: документ «в наличии» не меняет и серий не двигает.
+    const spoil = (r: string, rows: Record<string, unknown>[]) =>
+      r === "ТоварыНаСкладах" || r === "ДвиженияСерийТоваров" ? [] : rows;
+    const flagOut = {
+      ИспользоватьОрдернуюСхемуПриОтгрузке: true,
+      ДатаНачалаОрдернойСхемыПриОтгрузке: "2026-01-01T00:00:00",
+    };
+    const s = setup({ spoil, orderScheme: flagOut });
+    const { ref } = await s.create(SHIP, {
+      ...base,
+      date: "2026-11-21",
+      lines: [line(2, 50, { seriesRef: SERIES })],
+    });
+    const p = await s.post("Document_РеализацияТоваровУслуг", ref);
+    expect(p.sc).toMatchObject({ done: true, verified: true, movementsVerified: true });
+    expect(String(p.sc["movementsNote"])).toContain("ордерной схемой («Основной»)");
+    expect(String(p.sc["movementsNote"])).toContain("расчёты сверены");
+    // Расчёты по-прежнему сверяются: порча суммы видна и на ордерном складе.
+    const bad = setup({
+      orderScheme: flagOut,
+      spoil: (r, rows) =>
+        r === "РасчетыСКлиентами" ? rows.map((x) => ({ ...x, Сумма: 1 })) : spoil(r, rows),
+    });
+    const b = await bad.create(SHIP, { ...base, date: "2026-11-21", lines: [line()] });
+    expect((await bad.post("Document_РеализацияТоваровУслуг", b.ref)).sc).toMatchObject({ verified: false });
+    // Приобретение смотрит флаг поступления, а не отгрузки: отгрузочная схема его не выключает.
+    const pur = setup({ spoil, orderScheme: flagOut });
+    const c = await pur.create(PUR, { ...base, date: "2026-11-21", contractRef: CONTRACT, lines: [line()] });
+    expect((await pur.post("Document_ПриобретениеТоваровУслуг", c.ref)).sc).toMatchObject({
+      verified: false,
+    });
+    // Схема с 01.12 — на дату документа её нет: сверка идёт и видит пустой склад.
+    const later = setup({
+      spoil,
+      orderScheme: { ...flagOut, ДатаНачалаОрдернойСхемыПриОтгрузке: "2026-12-01T00:00:00" },
+    });
+    const d = await later.create(SHIP, { ...base, date: "2026-11-21", lines: [line()] });
+    expect((await later.post("Document_РеализацияТоваровУслуг", d.ref)).sc).toMatchObject({
+      verified: false,
+    });
   });
 
   it("заказ, счёт и счёт-фактура — только состояние документа, с пояснением", async () => {

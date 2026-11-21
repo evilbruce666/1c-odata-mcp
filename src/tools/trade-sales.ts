@@ -7,7 +7,7 @@ import { withoutAccounting } from "../odata/configuration.js";
 import { InputError } from "../errors.js";
 import { createCore, docDate, resolveCatalogItem, resolveOrgRef } from "./write.js";
 import { partnerOf } from "./trade-counterparty.js";
-import { seriesSavedNote } from "./trade-warehouse.js";
+import { orderedWarehouses, seriesSavedNote } from "./trade-warehouse.js";
 
 /**
  * Продажи и закупки Управления торговлей: реализация (товары и услуги), приобретение, возвраты, счёт клиенту, заказы
@@ -534,10 +534,22 @@ export async function verifySalesMovements(
     const found: Record<string, ODataEntity[]> = {};
     for (const r of regs) found[r] = await recordsOf(conn, r, entitySet, guid);
     const mismatches: string[] = [];
+    // Ордерная схема: «в наличии» и серии меняют складские ордера, а не этот документ (как у складских документов).
+    const goods = ((doc["Товары"] as ODataEntity[] | undefined) ?? []).map((r) =>
+      String(r["Склад_Key"] ?? ""),
+    );
+    const ordered = post
+      ? await orderedWarehouses(
+          conn,
+          goods,
+          spec.stock === "Expense" ? "ПриОтгрузке" : "ПриПоступлении",
+          String(doc["Date"] ?? ""),
+        )
+      : [];
     if (!post) {
       for (const [r, rows] of Object.entries(found))
         if (rows.length) mismatches.push(`после отмены проведения в ${r} осталось записей: ${rows.length}`);
-    } else {
+    } else if (!ordered.length) {
       // Склад: позиции со складом в строке — у товаров он всегда в строке (без него 1С не проводит), у услуг его нет.
       const want = new Map<string, number>();
       for (const r of (doc["Товары"] as ODataEntity[] | undefined) ?? []) {
@@ -557,6 +569,8 @@ export async function verifySalesMovements(
         got.delete(k);
       }
       for (const [k, n] of got) if (n) mismatches.push(`склад ${k}: лишнее движение ${n / 1000}`);
+    }
+    if (post) {
       if (party) {
         const sum = found[party.register]!.filter((r) => r["RecordType"] === party.dir).reduce(
           (a, r) => a + cents(Number(r["Сумма"] ?? 0)),
@@ -565,19 +579,28 @@ export async function verifySalesMovements(
         const amount = cents(Number(doc["СуммаДокумента"] ?? 0));
         if (sum !== amount) mismatches.push(`${party.register}: ${sum / 100}, в документе ${amount / 100}`);
       }
-      for (const s of (doc["Серии"] as ODataEntity[] | undefined) ?? []) {
-        const n = found[SERIES_REG]!.filter((r) => low(r["Серия_Key"]) === low(s["Серия_Key"])).reduce(
-          (a, r) => a + qty(Number(r["Количество"] ?? 0)),
-          0,
-        );
-        if (n !== qty(Number(s["Количество"] ?? 0)))
-          mismatches.push(
-            `серия ${low(s["Серия_Key"])}: в регистре серий ${n / 1000}, в документе ${Number(s["Количество"])}`,
+      if (!ordered.length)
+        for (const s of (doc["Серии"] as ODataEntity[] | undefined) ?? []) {
+          const n = found[SERIES_REG]!.filter((r) => low(r["Серия_Key"]) === low(s["Серия_Key"])).reduce(
+            (a, r) => a + qty(Number(r["Количество"] ?? 0)),
+            0,
           );
-      }
+          if (n !== qty(Number(s["Количество"] ?? 0)))
+            mismatches.push(
+              `серия ${low(s["Серия_Key"])}: в регистре серий ${n / 1000}, в документе ${Number(s["Количество"])}`,
+            );
+        }
     }
     const matched = !mismatches.length;
     return {
+      ...(ordered.length
+        ? {
+            movementsNote:
+              `Склад с ордерной схемой (${ordered.join(", ")}): товар и серии меняют складские ордера, а не этот ` +
+              "документ — движения по складу не сверялись" +
+              (party ? ", расчёты сверены." : ". Проверено состояние документа."),
+          }
+        : {}),
       movementsVerified: matched,
       movements: {
         register: regs.join(", "),

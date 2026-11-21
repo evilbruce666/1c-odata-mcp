@@ -578,17 +578,32 @@ async function orderSchemeWarehouses(
   kind: Exclude<StockKind, "inventory">,
   doc: ODataEntity,
 ): Promise<string[]> {
+  const out: string[] = [];
+  for (const [side, f] of ORDER_SCHEME[kind])
+    out.push(...(await orderedWarehouses(conn, [String(doc[side] ?? "")], f, String(doc["Date"] ?? ""))));
+  return out;
+}
+
+/**
+ * Какие из складов на дату работают по ордерной схеме для стороны f (ПриОтгрузке, ПриПоступлении,
+ * ПриОтраженииИзлишковНедостач): названия в кавычках. Схема справочника без флага — ордерных нет.
+ */
+export async function orderedWarehouses(
+  conn: Connection,
+  refs: readonly string[],
+  f: string,
+  date: string,
+): Promise<string[]> {
   const props = new Set(
     (await conn.getMetadata()).entities.get(WAREHOUSES)?.properties.map((p) => p.name) ?? [],
   );
-  const sides = ORDER_SCHEME[kind].filter(([, f]) => props.has(`ИспользоватьОрдернуюСхему${f}`));
-  const day = String(doc["Date"] ?? "").slice(0, 10);
+  const flag = `ИспользоватьОрдернуюСхему${f}`;
+  if (!props.has(flag)) return [];
+  const since = `ДатаНачалаОрдернойСхемы${f}`;
+  const day = date.slice(0, 10);
   const out: string[] = [];
-  for (const [side, f] of sides) {
-    const ref = String(doc[side] ?? "");
+  for (const ref of new Set(refs.map((r) => r.toLowerCase()))) {
     if (!ref || ref === EMPTY_REF) continue;
-    const flag = `ИспользоватьОрдернуюСхему${f}`;
-    const since = `ДатаНачалаОрдернойСхемы${f}`;
     const w = await conn.client.getEntity<ODataEntity>(
       `${WAREHOUSES}(${odataGuid(ref)})${buildQuery({ select: ["Description", flag, ...(props.has(since) ? [since] : [])] })}`,
     );
