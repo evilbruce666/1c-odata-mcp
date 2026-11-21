@@ -601,3 +601,250 @@ export async function verifySalesMovements(
     };
   }
 }
+
+// ─── Правка строк, копия и поля ───
+
+/** Документы со строками товаров, которые коннектор умеет править. */
+const LINE_KINDS: readonly SalesKind[] = [
+  "shipment",
+  "purchase",
+  "returnToSupplier",
+  "returnFromCustomer",
+  "customerOrder",
+  "supplierOrder",
+];
+
+/** Кинд документа продаж или закупок УТ, если коннектор умеет его править; undefined — Бухгалтерия, как раньше. */
+export async function tradeSalesEditKind(
+  conn: Connection,
+  entitySet: string,
+): Promise<SalesKind | undefined> {
+  const kind = (Object.keys(SALES_DOCS) as SalesKind[]).find((k) => SALES_DOCS[k] === entitySet);
+  return kind && (await tradeSalesSet(conn, kind)) ? kind : undefined;
+}
+
+type Row = Record<string, unknown>;
+const rowsOf = (doc: ODataEntity, t: string) => (doc[t] as Row[] | undefined) ?? [];
+const renumber = (r: Row[]) => r.map((x, i) => ({ ...x, LineNumber: i + 1 }));
+const POSTED =
+  "Документ проведён. Сначала отмените проведение (write.document.post_document с post=false), затем меняйте его. Ничего не записано.";
+const readDoc = (conn: Connection, set: string, ref: string) =>
+  conn.client.getEntity<ODataEntity>(`${set}(${odataGuid(guidOf(ref))})?$format=json`);
+
+/**
+ * Итог документа и единственный этап графика оплаты — по строкам (сумма с НДС). Несколько этапов — разнести сумму
+ * нельзя, отказ.
+ */
+function totals(doc: ODataEntity, rowsAfter: Row[]): Row | string {
+  const total = round2(rowsAfter.reduce((a, r) => a + Number(r["СуммаСНДС"] ?? r["Сумма"] ?? 0), 0));
+  const out: Row = { СуммаДокумента: total };
+  const plan = rowsOf(doc, "ЭтапыГрафикаОплаты");
+  if (plan.length > 1)
+    return "В графике оплаты несколько этапов: как разнести новую сумму — не определить. Измените документ в 1С.";
+  if (plan.length === 1) {
+    const p = Object.fromEntries(
+      Object.entries(plan[0]!).filter(([k]) => !k.includes("@") && k !== "Ref_Key"),
+    );
+    out["ЭтапыГрафикаОплаты"] = [
+      { ...p, СуммаПлатежа: total, ...("СуммаВзаиморасчетов" in p ? { СуммаВзаиморасчетов: total } : {}) },
+    ];
+  }
+  return out;
+}
+
+/** Новые строки по позициям — той же сборкой, что при создании; основание возврата — как у документа. */
+async function builtRows(conn: Connection, kind: SalesKind, doc: ODataEntity, lines: readonly SalesLine[]) {
+  const warehouse = empty(doc["Склад_Key"]) ? undefined : String(doc["Склад_Key"]);
+  const built = rows(lines, await rateRefs(conn, lines), {
+    priceIncludesVat: doc["ЦенаВключаетНДС"] !== false,
+    warehouse,
+    services: !warehouse,
+  });
+  const first = rowsOf(doc, "Товары")[0] ?? {};
+  if (kind === "returnToSupplier" && !empty(doc["ДокументПоступления_Key"]))
+    built.Товары = built.Товары.map((r) => ({
+      ...r,
+      ДокументПоступления_Key: doc["ДокументПоступления_Key"],
+    }));
+  if (kind === "returnFromCustomer" && first["ДокументРеализации"])
+    built.Товары = built.Товары.map((r) => ({
+      ...r,
+      ДокументРеализации: first["ДокументРеализации"],
+      ДокументРеализации_Type: first["ДокументРеализации_Type"],
+    }));
+  return built;
+}
+
+export type SalesLineOp =
+  | { op: "replace"; lines: SalesLine[] }
+  | { op: "add"; line: SalesLine }
+  | { op: "remove"; lineNumber: number };
+
+/**
+ * Строки документа продаж или закупок УТ: замена, добавление, удаление. Прежние строки при добавлении остаются со
+ * всеми полями, которые заполнила 1С; серии идут вместе со строкой (неоднозначно — отказ); итог и график оплаты
+ * пересчитываются; только непроведённые. Запись делает patch, сверку строк — rowsCheck (trade-edit).
+ */
+export async function editTradeSalesLines(
+  conn: Connection,
+  set: string,
+  kind: SalesKind,
+  ref: string,
+  edit: SalesLineOp,
+  patch: (fields: Row, check: { before: number; expected: number }) => Promise<CallToolResult>,
+): Promise<CallToolResult> {
+  if (!LINE_KINDS.includes(kind))
+    refuse(
+      "У счёта на оплату и счёта-фактуры строк товаров нет: меняйте документ-основание или создайте новый.",
+    );
+  const doc = await readDoc(conn, set, ref);
+  if (doc["Posted"] === true) refuse(POSTED.replace(" Ничего не записано.", ""));
+  const before = rowsOf(doc, "Товары");
+  const series = rowsOf(doc, "Серии");
+  let next: Row[];
+  let nextSeries: Row[] | undefined;
+  if (edit.op === "replace") {
+    const b = await builtRows(conn, kind, doc, edit.lines);
+    next = b.Товары;
+    nextSeries = b.Серии ?? (series.length ? [] : undefined);
+  } else if (edit.op === "add") {
+    const b = await builtRows(conn, kind, doc, [edit.line]);
+    next = renumber([...before, ...b.Товары]);
+    nextSeries = b.Серии ? renumber([...series, ...b.Серии]) : undefined;
+  } else {
+    if (edit.lineNumber > before.length) refuse(`В документе всего ${before.length} строк(и).`);
+    const removed = before[edit.lineNumber - 1]!;
+    next = renumber(before.filter((_, i) => i + 1 !== edit.lineNumber));
+    if (!next.length)
+      refuse("Нельзя удалить последнюю строку — в документе должна остаться хотя бы одна позиция.");
+    const item = low(removed["Номенклатура_Key"]);
+    if (series.some((s) => low(s["Номенклатура_Key"]) === item)) {
+      if (next.some((r) => low(r["Номенклатура_Key"]) === item))
+        refuse(
+          "У этой позиции есть серии, а сама позиция — ещё в другой строке: какие серии убрать, не определить. Замените строки целиком.",
+        );
+      nextSeries = renumber(series.filter((s) => low(s["Номенклатура_Key"]) !== item));
+    }
+  }
+  const t = totals(doc, next);
+  if (typeof t === "string") refuse(t);
+  const fields: Row = { Товары: next, ...(t as Row), ...(nextSeries ? { Серии: nextSeries } : {}) };
+  return patch(fields, { before: before.length, expected: next.length });
+}
+
+/** Поля шапки документов продаж и закупок УТ, которые можно менять и задавать копии. */
+const SALES_EDITABLE = new Set([
+  "Комментарий",
+  "Date",
+  "Статус",
+  "Подразделение_Key",
+  "Менеджер_Key",
+  "Договор_Key",
+  "НазначениеПлатежа",
+]);
+export function salesWhitelistRefusal(fields: Record<string, unknown>): string | undefined {
+  const bad = Object.keys(fields).filter((k) => !SALES_EDITABLE.has(k));
+  return bad.length
+    ? `Поля ${bad.join(", ")} в документе продаж или закупок Управления торговлей коннектор не меняет: от них зависят ` +
+        `расчёты и строки. Можно: ${[...SALES_EDITABLE].join(", ")}; строки — инструментами строк документа. Ничего не записано.`
+    : undefined;
+}
+export async function salesPostedRefusal(
+  conn: Connection,
+  set: string,
+  ref: string,
+): Promise<string | undefined> {
+  return (await readDoc(conn, set, ref))["Posted"] === true ? POSTED : undefined;
+}
+
+/** Не копируются: объекты расчётов, расшифровка и виды запасов (1С заполнит), связи с исходными документами. */
+const SALES_NOT_COPIED = new Set([
+  "ВидыЗапасов",
+  "РасшифровкаПлатежа",
+  "ИдентификаторПлатежа",
+  "ДокументОснование",
+  "ДокументОснование_Type",
+  "ЗаказКлиента",
+  "ЗаказКлиента_Type",
+  "Автор_Key",
+  "Автор",
+  "ДополнительныеРеквизиты",
+  "ШтрихкодыУпаковок",
+  "ОбъектРасчетов_Key",
+]);
+const SALES_ROW_NOT_COPIED = new Set([
+  "ОбъектРасчетов_Key",
+  "АналитикаУчетаНоменклатуры_Key",
+  "ИдентификаторСтроки",
+  "КодСтроки",
+  "ЗаказКлиента",
+  "ЗаказКлиента_Type",
+]);
+
+/** Копия документа продаж или закупок УТ: непроведённая, новая дата, правка количества строк — пропорционально суммам. */
+export async function copyTradeSales(
+  conn: Connection,
+  set: string,
+  kind: SalesKind,
+  ref: string,
+  input: {
+    date?: string | undefined;
+    fields?: Record<string, unknown> | undefined;
+    lines?: Array<{ lineNumber: number; fields: Record<string, unknown> }> | undefined;
+  },
+  confirm: boolean,
+  strip: (e: ODataEntity) => Record<string, unknown>,
+): Promise<CallToolResult> {
+  if (!LINE_KINDS.includes(kind))
+    refuse("Счёт на оплату и счёт-фактуру не копируют: создайте новый на основании документа.");
+  const bad = salesWhitelistRefusal(input.fields ?? {});
+  if (bad) throw new InputError(bad);
+  const badRow = (input.lines ?? []).flatMap((l) => Object.keys(l.fields).filter((k) => k !== "Количество"));
+  if (badRow.length)
+    refuse(
+      `В копии у строки меняется только Количество (суммы — пропорционально); не меняются: ${[...new Set(badRow)].join(", ")}.`,
+    );
+  const source = await readDoc(conn, set, ref);
+  const base = strip(source);
+  const payload: Row = {};
+  for (const [k, v] of Object.entries(base)) if (!SALES_NOT_COPIED.has(k)) payload[k] = v;
+  const strow = (r: Row) =>
+    Object.fromEntries(Object.entries(r).filter(([k]) => !SALES_ROW_NOT_COPIED.has(k)));
+  const lines = rowsOf(base as ODataEntity, "Товары").map(strow);
+  for (const l of input.lines ?? []) {
+    const r = lines[l.lineNumber - 1];
+    if (!r) refuse(`В документе-образце нет строки ${l.lineNumber}.`);
+    const q = Number(l.fields["Количество"]);
+    if (!(q > 0)) refuse("Количество должно быть больше нуля.");
+    const k = q / Number(r!["Количество"] || 1);
+    for (const f of ["Сумма", "СуммаНДС", "СуммаСНДС", "СуммаВзаиморасчетов"])
+      if (f in r!) r![f] = round2(Number(r![f]) * k);
+    r!["Количество"] = q;
+    if ("КоличествоУпаковок" in r!) r!["КоличествоУпаковок"] = q;
+  }
+  payload["Товары"] = lines;
+  if (payload["Серии"]) payload["Серии"] = rowsOf(base as ODataEntity, "Серии").map(strow);
+  const date = await docDate(conn, input.date);
+  payload["Date"] = date;
+  payload["Posted"] = false;
+  const plan = rowsOf(base as ODataEntity, "ЭтапыГрафикаОплаты")
+    .map(strow)
+    .map((p) => ({ ...p, ДатаПлатежа: DAY(date) }));
+  const t = totals({ ...source, ЭтапыГрафикаОплаты: plan }, lines);
+  if (typeof t === "string") refuse(t);
+  Object.assign(payload, t, input.fields ?? {});
+  const sent = rowsOf(payload as ODataEntity, "Серии").length;
+  return createCore(
+    conn,
+    set,
+    payload,
+    confirm,
+    [
+      "Копия — без объектов расчётов, видов запасов и связей образца: 1С заполнит их при записи; дата оплаты — по новой дате.",
+      ...(sent && input.lines?.length
+        ? ["Серии скопированы как в образце: если менялось количество, проверьте серии."]
+        : []),
+    ],
+    (created) => seriesSavedNote(sent, created),
+  );
+}

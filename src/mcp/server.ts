@@ -522,7 +522,12 @@ const TRADE_WRITE: Record<string, TradeWrite> = {
       "write.entity.update_entity",
     ].map((name) => [
       name,
-      { applies: (a: Record<string, unknown>) => STOCK_SETS.has(String(a.entitySet)), ready: stockOf },
+      {
+        applies: (a: Record<string, unknown>) =>
+          STOCK_SETS.has(String(a.entitySet)) || SALES_SETS.has(String(a.entitySet)),
+        ready: (conn: Connection, a: Record<string, unknown>) =>
+          SALES_SETS.has(String(a.entitySet)) ? salesOf(conn, a) : stockOf(conn, a),
+      },
     ]),
   ),
   // Копия и поля денежных документов УТ (строк товаров у них нет — инструменты строк отказывают).
@@ -531,9 +536,15 @@ const TRADE_WRITE: Record<string, TradeWrite> = {
       name,
       {
         applies: (a: Record<string, unknown>) =>
-          STOCK_SETS.has(String(a.entitySet)) || MONEY_SETS.has(String(a.entitySet)),
+          STOCK_SETS.has(String(a.entitySet)) ||
+          MONEY_SETS.has(String(a.entitySet)) ||
+          SALES_SETS.has(String(a.entitySet)),
         ready: (conn: Connection, a: Record<string, unknown>) =>
-          MONEY_SETS.has(String(a.entitySet)) ? moneyOf(conn, a) : stockOf(conn, a),
+          MONEY_SETS.has(String(a.entitySet))
+            ? moneyOf(conn, a)
+            : SALES_SETS.has(String(a.entitySet))
+              ? salesOf(conn, a)
+              : stockOf(conn, a),
       },
     ]),
   ),

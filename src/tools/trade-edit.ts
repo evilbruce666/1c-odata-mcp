@@ -71,7 +71,7 @@ const same = (a: unknown, b: unknown) =>
  * Сверка строк после правки: перечитанные строки совпадают с отправленными по позиции, количеству и цене. Общая
  * проверка правки табличные части не сверяет (verified=false) — для документа УТ сверяем сами.
  */
-async function rowsCheck(
+export async function rowsCheck(
   conn: Connection,
   entitySet: string,
   ref: string,

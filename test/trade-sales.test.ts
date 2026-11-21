@@ -107,6 +107,7 @@ function setup(
   } = {},
 ) {
   const posts: { set: string; body: Record<string, unknown> }[] = [];
+  const patches: Record<string, unknown>[] = [];
   const docs = new Map<
     string,
     {
@@ -204,6 +205,12 @@ function setup(
       }
       if (d && method === "GET")
         return json(200, { ...d.body, Ref_Key: ref, Posted: d.posted, DataVersion: `v${d.v}` });
+      if (d && method === "PATCH") {
+        const patch = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        patches.push(patch);
+        Object.assign(d.body, patch);
+        return json(200, { ...d.body, Ref_Key: ref });
+      }
     }
     const reg = /^AccumulationRegister_([^(]+)\(Recorder='([0-9a-f-]{36})'/i.exec(path);
     if (reg) {
@@ -242,7 +249,7 @@ function setup(
     await call("write.document.post_document", { entitySet, ref, post: p });
     return call("write.document.post_document", { entitySet, ref, post: p, confirm: true });
   };
-  return { call, create, post, posts, docs, fake };
+  return { call, create, post, posts, patches, docs, fake };
 }
 
 const SHIP = "write.sales.create_shipment";
@@ -591,6 +598,119 @@ describe("продажи и закупки УТ: проведение со св�
     const p = await s.post("Document_ЗаказКлиента", ref);
     expect(p.sc).toMatchObject({ done: true, verified: true });
     expect(String(p.sc["movementsNote"])).toContain("состояние документа");
+  });
+});
+
+describe("продажи и закупки УТ: строки, копия, поля", () => {
+  const SET = "Document_РеализацияТоваровУслуг";
+  const twice = async (s: ReturnType<typeof setup>, name: string, args: Record<string, unknown>) => {
+    const p = await s.call(name, args);
+    if (p.isError) return p;
+    return s.call(name, {
+      ...args,
+      confirm: true,
+      ...(p.sc["operationId"] ? { operationId: p.sc["operationId"] } : {}),
+    });
+  };
+  const made = async (s: ReturnType<typeof setup>, lines = [line(2, 50)]) => {
+    const { ref } = await s.create(SHIP, { ...base, lines });
+    for (const r of s.docs.get(ref)!.body["Товары"] as Record<string, unknown>[])
+      r["ОбъектРасчетов_Key"] = g("8", 1);
+    return ref;
+  };
+
+  it("замена строк: та же сборка, итог и единственный этап графика пересчитаны; строки сверены", async () => {
+    const s = setup();
+    const ref = await made(s);
+    const r = await twice(s, "write.document.update_document_lines", {
+      entitySet: SET,
+      ref,
+      lines: [line(3, 10)],
+    });
+    expect(r.isError, r.text).toBeFalsy();
+    expect(s.patches.at(-1)).toMatchObject({
+      Товары: [{ Количество: 3, КоличествоУпаковок: 3, Сумма: 30, Склад_Key: WH }],
+      СуммаДокумента: 30,
+      ЭтапыГрафикаОплаты: [{ СуммаПлатежа: 30, СуммаВзаиморасчетов: 30 }],
+    });
+    expect(r.sc).toMatchObject({ verified: true });
+  });
+
+  it("добавление сохраняет поля прежних строк; удаление уносит серии позиции; проведённый — отказ", async () => {
+    const s = setup();
+    const ref = await made(s, [line(1, 10), line(1, 20, { nomenclatureRef: SVC, seriesRef: SERIES })]);
+    const add = await twice(s, "write.document.add_document_line", { entitySet: SET, ref, line: line(1, 5) });
+    expect(add.isError, add.text).toBeFalsy();
+    expect(s.patches.at(-1)!["Товары"]).toMatchObject([{ ОбъектРасчетов_Key: g("8", 1) }, {}, { Сумма: 5 }]);
+    expect(s.patches.at(-1)).toMatchObject({ СуммаДокумента: 35 });
+    const rm = await twice(s, "write.document.remove_document_line", { entitySet: SET, ref, lineNumber: 2 });
+    expect(rm.isError, rm.text).toBeFalsy();
+    expect(s.patches.at(-1)).toMatchObject({ Серии: [], СуммаДокумента: 15 });
+    await s.post(SET, ref);
+    const posted = await s.call("write.document.add_document_line", {
+      entitySet: SET,
+      ref,
+      line: line(1, 5),
+    });
+    expect(posted.text).toContain("проведён");
+  });
+
+  it("график оплаты из нескольких этапов — отказ; счёт-фактура строк не правит", async () => {
+    const s = setup();
+    const ref = await made(s);
+    s.docs.get(ref)!.body["ЭтапыГрафикаОплаты"] = [{ СуммаПлатежа: 50 }, { СуммаПлатежа: 50 }];
+    const r = await s.call("write.document.update_document_lines", {
+      entitySet: SET,
+      ref,
+      lines: [line(1, 10)],
+    });
+    expect(r.text).toContain("несколько этапов");
+    const iss = await s.create("write.sales.create_issued_invoice", { baseDocumentRef: BASE_SALE });
+    const sf = await s.call("write.document.add_document_line", {
+      entitySet: "Document_СчетФактураВыданный",
+      ref: iss.ref,
+      line: line(1, 5),
+    });
+    expect(sf.text).toContain("строк товаров нет");
+  });
+
+  it("поля: белый список, проведённый — отказ; копия — без объектов расчётов, количество — пропорционально суммам", async () => {
+    const s = setup();
+    const ref = await made(s);
+    const ok = await twice(s, "write.entity.update_entity", {
+      entitySet: SET,
+      ref,
+      fields: { Комментарий: "ZZ", Статус: "Отгружено" },
+    });
+    expect(ok.isError, ok.text).toBeFalsy();
+    const bad = await s.call("write.entity.update_entity", {
+      entitySet: SET,
+      ref,
+      fields: { Склад_Key: WH },
+    });
+    expect(bad.text).toContain("Склад_Key");
+    const { preview } = await s.create("write.document.copy_document", {
+      entitySet: SET,
+      ref,
+      date: "2026-11-25",
+      lines: [{ lineNumber: 1, fields: { Количество: 4 } }],
+    });
+    const body = s.posts.at(-1)!.body;
+    expect(body["Товары"]).toEqual([
+      expect.objectContaining({ Количество: 4, КоличествоУпаковок: 4, Сумма: 200, СуммаСНДС: 200 }),
+    ]);
+    expect(JSON.stringify(body)).not.toContain("ОбъектРасчетов_Key");
+    expect(body).toMatchObject({
+      СуммаДокумента: 200,
+      ЭтапыГрафикаОплаты: [{ ДатаПлатежа: "2026-11-25T00:00:00", СуммаПлатежа: 200 }],
+    });
+    expect(JSON.stringify(preview.sc["notes"])).toContain("без объектов расчётов");
+    const badRow = await s.call("write.document.copy_document", {
+      entitySet: SET,
+      ref,
+      lines: [{ lineNumber: 1, fields: { Цена: 1 } }],
+    });
+    expect(badRow.text).toContain("Цена");
   });
 });
 

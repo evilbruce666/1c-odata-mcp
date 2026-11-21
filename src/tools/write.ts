@@ -56,6 +56,11 @@ import { createAgreement, createTradeContract } from "./trade-contracts.js";
 import { createTradeNomenclature, tradeNomenclatureSchema } from "./trade-nomenclature.js";
 import {
   SALES_OPS,
+  copyTradeSales,
+  editTradeSalesLines,
+  salesPostedRefusal,
+  salesWhitelistRefusal,
+  tradeSalesEditKind,
   createTradeSales,
   tradeSalesSet,
   verifySalesMovements,
@@ -76,6 +81,7 @@ import {
 } from "./trade-money.js";
 import {
   addTradeLine,
+  rowsCheck,
   copyTradeDocument,
   removeTradeLine,
   replaceTradeLines,
@@ -2875,6 +2881,11 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         if (ka) return fail(ka);
         const trade = await tradeEditKind(conn, entitySet);
         if (trade) return updateTradeFields(conn, entitySet, trade, ref, fields, confirm);
+        if (await tradeSalesEditKind(conn, entitySet)) {
+          const refusal = salesWhitelistRefusal(fields) ?? (await salesPostedRefusal(conn, entitySet, ref));
+          if (refusal) return fail(refusal);
+          return patchOrPreview(conn, entitySet, ref, fields, confirm);
+        }
         if (await tradeMoneyEditKind(conn, entitySet))
           return updateTradeMoney(conn, entitySet, ref, fields, confirm, (f) =>
             patchOrPreview(conn, entitySet, ref, f, confirm),
@@ -3391,6 +3402,17 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         if (ka) return fail(ka);
         const trade = await tradeEditKind(conn, entitySet);
         if (trade) return replaceTradeLines(conn, entitySet, trade, ref, lines, confirm);
+        const salesKind = await tradeSalesEditKind(conn, entitySet);
+        if (salesKind)
+          return editTradeSalesLines(conn, entitySet, salesKind, ref, { op: "replace", lines }, async (f) =>
+            rowsCheck(
+              conn,
+              entitySet,
+              ref,
+              f["Товары"] as Array<Record<string, unknown>>,
+              await patchOrPreview(conn, entitySet, ref, f, confirm),
+            ),
+          );
         const info = await getDocInfo(conn, entitySet, ref.replace(/[{}']/g, ""));
         if (info.posted) {
           return fail(
@@ -3990,6 +4012,17 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         if (ka) return fail(ka);
         const trade = await tradeEditKind(conn, entitySet);
         if (trade) return addTradeLine(conn, entitySet, trade, ref, line, confirm);
+        const salesKind = await tradeSalesEditKind(conn, entitySet);
+        if (salesKind)
+          return editTradeSalesLines(conn, entitySet, salesKind, ref, { op: "add", line }, async (f, c) =>
+            rowsCheck(
+              conn,
+              entitySet,
+              ref,
+              f["Товары"] as Array<Record<string, unknown>>,
+              await patchLinesOrPreview(conn, entitySet, ref, f, confirm, { section: "Товары", ...c }),
+            ),
+          );
         const info = await getDocInfo(conn, entitySet, ref.replace(/[{}']/g, ""));
         if (info.posted) return fail("Документ проведён. Сначала отмените проведение, затем меняйте строки.");
         const built = await buildSectionRows(
@@ -4075,6 +4108,17 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
             confirm,
             stripForCopy,
           );
+        const salesKind = await tradeSalesEditKind(conn, entitySet);
+        if (salesKind)
+          return copyTradeSales(
+            conn,
+            entitySet,
+            salesKind,
+            ref,
+            { date, fields, lines },
+            confirm,
+            stripForCopy,
+          );
         const guid = ref.replace(/[{}']/g, "");
         const source = await conn.client.getEntity(`${entitySet}(guid'${guid}')${buildQuery({})}`);
         const payload = stripForCopy(source);
@@ -4151,6 +4195,23 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         if (ka) return fail(ka);
         const trade = await tradeEditKind(conn, entitySet);
         if (trade) return removeTradeLine(conn, entitySet, trade, ref, lineNumber, confirm);
+        const salesKind = await tradeSalesEditKind(conn, entitySet);
+        if (salesKind)
+          return editTradeSalesLines(
+            conn,
+            entitySet,
+            salesKind,
+            ref,
+            { op: "remove", lineNumber },
+            async (f, c) =>
+              rowsCheck(
+                conn,
+                entitySet,
+                ref,
+                f["Товары"] as Array<Record<string, unknown>>,
+                await patchLinesOrPreview(conn, entitySet, ref, f, confirm, { section: "Товары", ...c }),
+              ),
+          );
         const info = await getDocInfo(conn, entitySet, ref.replace(/[{}']/g, ""));
         if (info.posted) return fail("Документ проведён. Сначала отмените проведение, затем меняйте строки.");
         if (lineNumber > info.lines.length) return fail(`В документе всего ${info.lines.length} строк(и).`);
