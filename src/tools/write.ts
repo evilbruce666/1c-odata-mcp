@@ -2771,6 +2771,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
         if (Object.keys(fields).length === 0) return fail("Не заданы поля для изменения.");
+        const ka = await stockInAccountingBaseRefusal(conn, entitySet);
+        if (ka) return fail(ka);
         const trade = await tradeEditKind(conn, entitySet);
         if (trade) return updateTradeFields(conn, entitySet, trade, ref, fields, confirm);
         if (await tradeMoneyEditKind(conn, entitySet))

@@ -478,6 +478,7 @@ describe("денежные документы УТ: отказы без запи
     [REQ, { ...base, operationKind: "ОплатаПоставщику", counterpartyRef: CP }, "payForm"],
     [IN, { ...base, operationKind: "ПоступлениеОплатыОтКлиента", counterpartyRef: CP }, "несколько"],
     [OUT, { ...base, cash: CASH }, "operationKind"],
+    [OUT, { ...base, operationKind: "constructor", cash: CASH }, "не поддержана"],
   ] as const)("%s %o → «%s»", async (tool, args, text) => {
     const s = setup();
     const r = await s.call(tool, args as Record<string, unknown>);
@@ -645,6 +646,61 @@ describe("денежные документы УТ: копия и поля", () 
     });
     expect(posted.text).toContain("проведён");
     expect(s.patches).toHaveLength(1);
+  });
+
+  it("сумма: взаиморасчёты в другой валюте или НДС в строке — отказ без PATCH (ревью: уходила рублёвая сумма)", async () => {
+    for (const row of [
+      { Сумма: 10, ВалютаВзаиморасчетов_Key: g("a", 8), СуммаВзаиморасчетов: 0.11 },
+      { Сумма: 120, ВалютаВзаиморасчетов_Key: RUB, СуммаВзаиморасчетов: 120, СуммаНДС: 20 },
+    ]) {
+      const s = setup();
+      const { ref } = await s.create(BOUT, pay);
+      s.docs.get(ref)!.body["РасшифровкаПлатежа"] = [{ LineNumber: 1, ...row }];
+      const r = await s.call("write.entity.update_entity", {
+        entitySet: SET,
+        ref,
+        fields: { СуммаДокумента: 20 },
+      });
+      expect(r.isError).toBe(true);
+      expect(r.text).toMatch(/другой валюте|НДС/);
+      const c = await s.call("write.document.copy_document", {
+        entitySet: SET,
+        ref,
+        fields: { СуммаДокумента: 20 },
+      });
+      expect(c.isError).toBe(true);
+      expect(s.patches).toEqual([]);
+    }
+  });
+
+  it("новая дата безналичного документа переносит «проведено банком», заявки — даты платежа", async () => {
+    const s = setup();
+    const { ref } = await s.create(BOUT, pay);
+    await twice(s, "write.entity.update_entity", {
+      entitySet: SET,
+      ref,
+      fields: { Date: "2026-12-05T10:00:00" },
+    });
+    expect(s.patches.at(-1)).toMatchObject({
+      Date: "2026-12-05T10:00:00",
+      ДатаПроведенияБанком: "2026-12-05T00:00:00",
+    });
+    const req = await s.create(REQ, {
+      ...base,
+      operationKind: "ОплатаПоставщику",
+      payForm: "bank",
+      orgBankAccount: BANK,
+      counterpartyRef: CP,
+    });
+    await twice(s, "write.entity.update_entity", {
+      entitySet: "Document_ЗаявкаНаРасходованиеДенежныхСредств",
+      ref: req.ref,
+      fields: { Date: "2026-12-06T09:00:00" },
+    });
+    expect(s.patches.at(-1)).toMatchObject({
+      ЖелательнаяДатаПлатежа: "2026-12-06T00:00:00",
+      ДатаПлатежа: "2026-12-06T00:00:00",
+    });
   });
 
   it("сумма при нескольких строках расшифровки — отказ: разнести нельзя", async () => {

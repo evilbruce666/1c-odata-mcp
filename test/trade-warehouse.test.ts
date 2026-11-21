@@ -961,6 +961,7 @@ describe("складские документы в Управлении торг
       [W, { organization: "ТЕСТ", warehouse: "Брак", lines: [line(1)] }],
       ["write.document.add_document_line", { entitySet: SET, ref, line: line(1, { price: 0 }) }],
       ["write.document.copy_document", { entitySet: SET, ref }],
+      ["write.entity.update_entity", { entitySet: SET, ref, fields: { Статус: "Отгружено" } }],
     ] as const) {
       const r = await s.call(name, args);
       expect(r.isError, name).toBe(true);

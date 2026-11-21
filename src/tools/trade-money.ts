@@ -229,9 +229,11 @@ export async function createTradeMoney(
   input: MoneyInput,
   confirm: boolean,
 ): Promise<CallToolResult> {
-  const op = MONEY_OPS[kind][input.operationKind];
+  const op = Object.hasOwn(MONEY_OPS[kind], input.operationKind)
+    ? MONEY_OPS[kind][input.operationKind]
+    : undefined;
   if (!op) {
-    const why = EXCLUDED[input.operationKind];
+    const why = Object.hasOwn(EXCLUDED, input.operationKind) ? EXCLUDED[input.operationKind] : undefined;
     refuse(
       `Хозяйственная операция «${input.operationKind}» ${why ? `не поддерживается: ${why}.` : "в этом документе Управления торговлей не поддержана."} ` +
         `Поддержаны: ${Object.keys(MONEY_OPS[kind]).join(", ")}.`,
@@ -484,7 +486,8 @@ export async function verifyMoneyMovements(
   const guid = guidOf(ref);
   try {
     const doc = await conn.client.getEntity<ODataEntity>(`${entitySet}(${odataGuid(guid)})?$format=json`);
-    const spec = MONEY_OPS[kind][String(doc["ХозяйственнаяОперация"])];
+    const opName = String(doc["ХозяйственнаяОперация"]);
+    const spec = Object.hasOwn(MONEY_OPS[kind], opName) ? MONEY_OPS[kind][opName] : undefined;
     const main = MAIN_REGISTER[kind];
     // Заявка денег не двигает и расчётов не трогает (на копии — только «к выплате»).
     const party = spec?.party && kind !== "request" ? PARTY_REGISTER[spec.party] : undefined;
@@ -596,12 +599,32 @@ function withAmount(doc: ODataEntity, fields: Record<string, unknown>): Record<s
   const row = Object.fromEntries(
     Object.entries(rows[0]!).filter(([k]) => !k.includes("@") && k !== "Ref_Key"),
   );
+  // Взаиморасчёты в другой валюте (у.е.) и НДС строки по новой сумме коннектор не пересчитывает (ревью выпуска 4).
+  const settleCur = String(row["ВалютаВзаиморасчетов_Key"] ?? "");
+  const docCur = String(doc["Валюта_Key"] ?? "");
+  if (settleCur && !/^0{8}-/.test(settleCur) && docCur && settleCur !== docCur)
+    return "Взаиморасчёты по строке — в другой валюте: сумму взаиморасчётов по курсу коннектор не пересчитывает. Измените документ в 1С.";
+  if (Number(row["СуммаНДС"] ?? 0) !== 0)
+    return "В строке расшифровки есть НДС: пересчитать его по новой сумме коннектор не берётся. Измените документ в 1С.";
   return {
     ...fields,
     РасшифровкаПлатежа: [
       { ...row, Сумма: amount, ...("СуммаВзаиморасчетов" in row ? { СуммаВзаиморасчетов: amount } : {}) },
     ],
   };
+}
+
+/**
+ * Новая дата документа переносит служебные даты, как при создании и копии: «проведено банком» у безналичных, даты
+ * платежа у заявки (если их не задали явно).
+ */
+function withDates(entitySet: string, fields: Record<string, unknown>): Record<string, unknown> {
+  if (typeof fields["Date"] !== "string") return fields;
+  const day = `${String(fields["Date"]).slice(0, 10)}T00:00:00`;
+  if (entitySet === MONEY_DOCS.bankIn || entitySet === MONEY_DOCS.bankOut)
+    return { ДатаПроведенияБанком: day, ...fields };
+  if (entitySet === MONEY_DOCS.request) return { ЖелательнаяДатаПлатежа: day, ДатаПлатежа: day, ...fields };
+  return fields;
 }
 
 /** Изменение полей шапки по белому списку, только у непроведённого документа. */
@@ -622,8 +645,9 @@ export async function updateTradeMoney(
     throw new InputError(
       "Документ проведён. Сначала отмените проведение (write.document.post_document с post=false), затем меняйте его. Ничего не записано.",
     );
-  const full = withAmount(doc, fields);
-  if (typeof full === "string") throw new InputError(`${full} Ничего не записано.`);
+  const amounted = withAmount(doc, fields);
+  if (typeof amounted === "string") throw new InputError(`${amounted} Ничего не записано.`);
+  const full = withDates(entitySet, amounted);
   const result = await patch(full);
   const sc = result.structuredContent as Record<string, unknown> | undefined;
   if (!confirm || result.isError || !sc || sc["dryRun"] || !("РасшифровкаПлатежа" in full)) return result;
@@ -701,7 +725,8 @@ export async function copyTradeMoney(
   const source = await conn.client.getEntity<ODataEntity>(
     `${entitySet}(${odataGuid(guidOf(ref))})?$format=json`,
   );
-  const spec = MONEY_OPS[kind][String(source["ХозяйственнаяОперация"])];
+  const srcOp = String(source["ХозяйственнаяОперация"]);
+  const spec = Object.hasOwn(MONEY_OPS[kind], srcOp) ? MONEY_OPS[kind][srcOp] : undefined;
   if (!spec)
     throw new InputError(
       `Хозяйственная операция образца «${String(source["ХозяйственнаяОперация"])}» коннектором не поддержана — копию не создаю. Ничего не записано.`,
