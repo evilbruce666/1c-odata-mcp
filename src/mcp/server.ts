@@ -584,8 +584,12 @@ const TRADE_WRITE_HINT =
   "(write.counterparty.create_partner, create_counterparty, update_counterparty, create_bank_account, create_contact_person), " +
   "договоры и соглашения (write.catalog.create_contract, create_agreement), номенклатура и её папки " +
   "(create_nomenclature, update_nomenclature, write.entity.create_folder и move_to_folder для Catalog_Номенклатура), " +
-  "складские документы (write.warehouse.create_transfer, create_surplus, create_writeoff, create_inventory, затем " +
-  "post_document и mark_for_deletion для этих документов).";
+  "складские документы (write.warehouse.create_transfer, create_surplus, create_writeoff, create_inventory), " +
+  "деньги (write.money.create_cash_receipt, create_cash_payment, create_payment, create_bank_writeoff, " +
+  "create_payment_request), продажи и закупки (write.sales.create_customer_order, create_invoice, create_shipment, " +
+  "create_act, create_issued_invoice; write.purchase.create_purchase, create_supplier_order, create_received_invoice; " +
+  "write.warehouse.create_return_to_supplier, create_return_from_customer); для этих документов — правка строк, " +
+  "copy_document, update_entity, post_document и mark_for_deletion. Розница и кассы ККМ — нет.";
 
 /**
  * Запись собирает документы и справочники Бухгалтерии. В базе без регистра бухгалтерии (Управление торговлей, другие

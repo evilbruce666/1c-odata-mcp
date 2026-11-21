@@ -601,7 +601,8 @@ export async function verifySalesMovements(
               (party ? ", расчёты сверены." : ". Проверено состояние документа."),
           }
         : {}),
-      movementsVerified: matched,
+      // Ордерный склад без расчётов (приём на комиссию, возврат комитенту): сверять нечего — признака сверки нет.
+      ...(ordered.length && !party ? {} : { movementsVerified: matched }),
       movements: {
         register: regs.join(", "),
         found: Object.values(found).reduce((a, r) => a + r.length, 0),

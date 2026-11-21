@@ -631,6 +631,19 @@ describe("продажи и закупки УТ: проведение со св�
     expect((await pur.post("Document_ПриобретениеТоваровУслуг", c.ref)).sc).toMatchObject({
       verified: false,
     });
+    // Приём на комиссию на ордерном складе: расчётов с поставщиком нет, склад не сверяется — признака сверки нет.
+    const flagIn = { ИспользоватьОрдернуюСхемуПриПоступлении: true };
+    const com = setup({ spoil, orderScheme: flagIn });
+    const e = await com.create(PUR, {
+      ...base,
+      contractRef: CONTRACT,
+      operationKind: "ПриемНаКомиссию",
+      lines: [line()],
+    });
+    const ep = await com.post("Document_ПриобретениеТоваровУслуг", e.ref);
+    expect(ep.sc).toMatchObject({ done: true, verified: true });
+    expect(ep.sc).not.toHaveProperty("movementsVerified");
+    expect(String(ep.sc["movementsNote"])).toContain("Проверено состояние документа");
     // Схема с 01.12 — на дату документа её нет: сверка идёт и видит пустой склад.
     const later = setup({
       spoil,
