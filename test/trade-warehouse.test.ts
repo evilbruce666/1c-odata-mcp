@@ -102,6 +102,10 @@ function setup(
     dropSeriesWithoutStatus?: boolean;
     /** Последнее проведённое перемещение организации: откуда берётся налогообложение НДС. */
     lastTransfer?: Record<string, unknown>;
+    /** Действующие цены вида «Закупочные цены» по позициям: срез последних регистра цен. */
+    prices?: Record<string, number>;
+    /** Флаги ордерной схемы складов: по Ref_Key склада. */
+    orderScheme?: Record<string, Record<string, unknown>>;
   } = {},
 ) {
   const posts: { set: string; body: Record<string, unknown> }[] = [];
@@ -125,6 +129,28 @@ function setup(
     {
       schema: o.schema ?? "ut11",
       data: (q: FakeQuery) => {
+        // Механизм цен — прежний: последние документы цен заполняют «Товары», а не «Товары2_5».
+        if (q.base === "Document_УстановкаЦенНоменклатуры_Товары2_5") return [];
+        if (
+          q.base === "Document_УстановкаЦенНоменклатуры" ||
+          q.base === "Document_УстановкаЦенНоменклатуры_Товары"
+        )
+          return [{ Ref_Key: g("7", 1) }];
+        if (q.base === "InformationRegister_ЦеныНоменклатуры_RecordType" && q.fn === "SliceLast")
+          return Object.entries(o.prices ?? { [ITEM]: 12.5 })
+            .filter(([item]) => (q.args["Condition"] ?? "").includes(item))
+            .map(([item, Цена]) => ({
+              Period: "2026-11-01T00:00:00",
+              Номенклатура_Key: item,
+              ВидЦены_Key: PRICE_KIND,
+              Характеристика_Key: EMPTY,
+              Цена,
+            }));
+        if (q.base === "Catalog_Склады" && o.orderScheme)
+          return pick(
+            TABLES["Catalog_Склады"]!.map((w) => ({ ...w, ...o.orderScheme![String(w["Ref_Key"])] })),
+            q.params.get("$filter") ?? "",
+          );
         if (
           q.base === "Document_ПеремещениеТоваров" &&
           !q.fn &&
@@ -400,6 +426,49 @@ describe("складские документы в Управлении торг
     expect(s.fake.violations).toEqual([]);
   });
 
+  it("оприходование без цены в строке — цена по виду цены на дату документа, с заметкой; указанная — как есть", async () => {
+    const s = setup({ prices: { [ITEM]: 12.5, [ITEM_SERIES]: 99 } });
+    const r = await s.call(S, {
+      organization: "ТЕСТ",
+      warehouse: "Основной",
+      priceKind: "Закупочные цены",
+      incomeItem: "Излишки",
+      date: "2026-11-20",
+      lines: [line(2), line(1, { nomenclatureRef: ITEM_SERIES, price: 7 })],
+    });
+    expect(r.isError, r.text).toBeFalsy();
+    expect(payloadOf(r)["Товары"]).toMatchObject([
+      { Номенклатура_Key: ITEM, Цена: 12.5, Сумма: 25 },
+      { Номенклатура_Key: ITEM_SERIES, Цена: 7, Сумма: 7 },
+    ]);
+    expect(JSON.stringify(r.sc["notes"])).toContain(
+      "подставлены по виду цены «Закупочные цены» на 2026-11-20",
+    );
+  });
+
+  it("оприходование: у позиции нет цены этого вида — отказ «укажите price», записей нет", async () => {
+    const s = setup({ prices: {} });
+    const r = await s.call(S, {
+      organization: "ТЕСТ",
+      warehouse: "Основной",
+      priceKind: "Закупочные цены",
+      incomeItem: "Излишки",
+      lines: [line(1)],
+    });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("Укажите price");
+    expect(s.posts).toEqual([]);
+  });
+
+  it("пересчёт: organization не используется — заметка, а не молчание", async () => {
+    const s = setup();
+    const lines = [{ nomenclatureRef: ITEM, factQuantity: 1, accountingQuantity: 1 }];
+    const withOrg = await s.call(I, { organization: "ТЕСТ", warehouse: "Основной", lines });
+    expect(JSON.stringify(withOrg.sc["notes"])).toContain("organization не используется");
+    const without = await s.call(I, { warehouse: "Основной", lines });
+    expect(JSON.stringify(without.sc["notes"] ?? [])).not.toContain("organization");
+  });
+
   it("оприходование: вид цены по ссылке и пересчёт-основание", async () => {
     const s = setup();
     const r = await s.call(S, {
@@ -591,6 +660,40 @@ describe("складские документы в Управлении торг
     expect((await flip.post("Document_СписаниеНедостачТоваров", f.ref)).sc).toMatchObject({
       verified: false,
     });
+  });
+
+  it("склад с ордерной схемой на дату документа — сверка не выполняется, пояснение вместо ложного расхождения", async () => {
+    const flag = "ИспользоватьОрдернуюСхемуПриОтраженииИзлишковНедостач";
+    const since = "ДатаНачалаОрдернойСхемыПриОтраженииИзлишковНедостач";
+    // Движения как при ордерной схеме: «в наличии» документ не меняет.
+    const spoil = (m: Record<string, unknown>[]) =>
+      m.map((x) => ({ ...x, ВНаличии: 0, КОтгрузке: x["ВНаличии"] }));
+    const ordered = setup({
+      spoil,
+      orderScheme: { [WH_A]: { [flag]: true, [since]: "2026-01-01T00:00:00" } },
+    });
+    const a = await ordered.create(S, { ...surplusArgs, date: "2026-11-20" });
+    const r = await ordered.post("Document_ОприходованиеИзлишковТоваров", a.ref);
+    expect(r.sc).toMatchObject({ done: true, verified: true });
+    expect(String(r.sc["movementsNote"])).toContain("ордерной схемой («Основной»)");
+    expect(r.sc).not.toHaveProperty("movementsVerified");
+    // Ордерная схема с более поздней даты — на дату документа её нет: сверка идёт и видит расхождение.
+    const later = setup({ spoil, orderScheme: { [WH_A]: { [flag]: true, [since]: "2026-12-01T00:00:00" } } });
+    const b = await later.create(S, { ...surplusArgs, date: "2026-11-20" });
+    expect((await later.post("Document_ОприходованиеИзлишковТоваров", b.ref)).sc).toMatchObject({
+      verified: false,
+    });
+    // Перемещение: ордерная схема при поступлении у получателя — тоже без сверки.
+    const tr = setup({ orderScheme: { [WH_B]: { ИспользоватьОрдернуюСхемуПриПоступлении: true } } });
+    const c = await tr.create(T, {
+      organization: "ТЕСТ",
+      fromWarehouse: "Основной",
+      toWarehouse: "Брак",
+      lines: [line(1)],
+    });
+    expect(String((await tr.post("Document_ПеремещениеТоваров", c.ref)).sc["movementsNote"])).toContain(
+      "«Брак»",
+    );
   });
 
   it("пересчёт: проведение проходит защиту, движений не ждёт — пояснение, без проверки по регистру", async () => {

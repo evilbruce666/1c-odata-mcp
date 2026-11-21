@@ -3626,7 +3626,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         if (await tradeStockSet(conn, "inventory"))
           return createTradeInventory(
             conn,
-            { warehouse: await tradeWarehouse(conn, warehouse), date, comment, lines },
+            { organization, warehouse: await tradeWarehouse(conn, warehouse), date, comment, lines },
             confirm,
           );
         const set = await requireEntity(

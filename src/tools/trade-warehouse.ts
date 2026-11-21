@@ -2,7 +2,7 @@ import type { CallToolResult } from "@modelcontextprotocol/server";
 import type { Connection } from "../context.js";
 import type { ODataEntity } from "../types/odata.js";
 import { ODataError } from "../odata/errors.js";
-import { EMPTY_REF } from "../odata/pricing.js";
+import { EMPTY_REF, detectMechanism, slicePrices } from "../odata/pricing.js";
 import { buildQuery, cmp, odataGuid, or } from "../odata/query.js";
 import { InputError } from "../errors.js";
 import { withoutAccounting } from "../odata/configuration.js";
@@ -23,6 +23,7 @@ export const STOCK_DOCS = {
 } as const;
 export type StockKind = keyof typeof STOCK_DOCS;
 const STOCK_REGISTER = "AccumulationRegister_ТоварыНаСкладах";
+const WAREHOUSES = "Catalog_Склады";
 const ITEMS = "Catalog_Номенклатура";
 const KINDS = "Catalog_ВидыНоменклатуры";
 const EXPENSE_ITEMS = "ChartOfCharacteristicTypes_СтатьиРасходов";
@@ -292,8 +293,10 @@ export async function createTradeSurplus(
     await resolveCatalogItem(conn, [INCOME_ITEMS], "Статья доходов", input.incomeItem),
     await resolveCatalogItem(conn, ["Catalog_Валюты"], "Справочник «Валюты»", "643"),
   ];
+  const date = await docDate(conn, input.date);
+  const priced = await pricesByKind(conn, kind, input.lines, date);
   const payload = {
-    Date: await docDate(conn, input.date),
+    Date: date,
     Posted: false,
     Организация_Key: await resolveOrgRef(conn, input.organization),
     Склад_Key: input.warehouse,
@@ -306,12 +309,56 @@ export async function createTradeSurplus(
       LineNumber: i + 1,
       Номенклатура_Key: l.nomenclatureRef,
       Количество: l.quantity,
-      Цена: l.price ?? 0,
-      Сумма: round2(l.quantity * (l.price ?? 0)),
+      Цена: priced.prices[i]!,
+      Сумма: round2(l.quantity * priced.prices[i]!),
     })),
   };
-  const notes = await seriesNotes(conn, input.lines, SERIES_IN_1C);
+  const notes = [...priced.notes, ...(await seriesNotes(conn, input.lines, SERIES_IN_1C))];
   return createCore(conn, STOCK_DOCS.surplus, payload, confirm, notes, () => undefined);
+}
+
+/**
+ * Цены строк оприходования: указанная в строке — как есть; не указана (0) — действующая цена вида цены на дату
+ * документа, как заполняет форма 1С (решение владельца, 21.11.2026). Нет цены у позиции — отказ: излишки с нулевой
+ * стоимостью ушли бы молча (ревью выпуска 3).
+ */
+async function pricesByKind(
+  conn: Connection,
+  kind: { ref: string; name?: string | undefined },
+  lines: readonly StockLine[],
+  at: string,
+): Promise<{ prices: number[]; notes: string[] }> {
+  const missing = [
+    ...new Set(lines.filter((l) => !l.price).map((l) => guidOf(l.nomenclatureRef).toLowerCase())),
+  ];
+  if (!missing.length) return { prices: lines.map((l) => l.price!), notes: [] };
+  let found: Map<string, number>;
+  try {
+    const mech = await detectMechanism(conn);
+    const records = await slicePrices(conn, mech, { kindRefs: [kind.ref], itemRefs: missing, at });
+    // Цена без характеристики: строки коннектора характеристику не задают.
+    found = new Map(
+      records.filter((r) => !r.characteristicRef).map((r) => [r.itemRef.toLowerCase(), r.price] as const),
+    );
+  } catch (e) {
+    throw new InputError(
+      `Цены вида «${kind.name ?? kind.ref}» прочитать не удалось (${e instanceof Error ? e.message : String(e)}). ` +
+        "Укажите price в строках. Ничего не записано.",
+    );
+  }
+  const absent = missing.filter((r) => !found.get(r));
+  if (absent.length)
+    throw new InputError(
+      `У вида цены «${kind.name ?? kind.ref}» нет цены на ${at.slice(0, 10)} для позиций: ${absent.join(", ")}. ` +
+        "Укажите price в этих строках. Ничего не записано.",
+    );
+  return {
+    prices: lines.map((l) => l.price || found.get(guidOf(l.nomenclatureRef).toLowerCase())!),
+    notes: [
+      `Цены ${missing.length === 1 ? "одной позиции" : `${missing.length} позиций`} подставлены по виду цены ` +
+        `«${kind.name ?? kind.ref}» на ${at.slice(0, 10)}, как в форме 1С. Указанные в строках цены не менялись.`,
+    ],
+  };
 }
 
 export interface WriteoffInput {
@@ -355,6 +402,7 @@ export async function createTradeWriteoff(
 }
 
 export interface InventoryInput {
+  organization?: string | undefined;
   warehouse: string;
   date?: string | undefined;
   comment?: string | undefined;
@@ -394,7 +442,10 @@ export async function createTradeInventory(
         : {}),
     })),
   };
-  return createCore(conn, STOCK_DOCS.inventory, payload, confirm, [], () => undefined);
+  const notes = input.organization
+    ? ["У пересчёта товаров в Управлении торговлей нет организации: organization не используется."]
+    : [];
+  return createCore(conn, STOCK_DOCS.inventory, payload, confirm, notes, () => undefined);
 }
 
 type Direction = "Receipt" | "Expense";
@@ -477,6 +528,47 @@ export function compareStockMoves(
   return { matched: !mismatches.length, expected: want.size, found: records.length, mismatches };
 }
 
+/** Какие флаги ордерной схемы склада касаются документа: сторона склада → поле флага и даты начала. */
+const ORDER_SCHEME: Record<Exclude<StockKind, "inventory">, Array<[string, string]>> = {
+  surplus: [["Склад_Key", "ПриОтраженииИзлишковНедостач"]],
+  writeoff: [["Склад_Key", "ПриОтраженииИзлишковНедостач"]],
+  transfer: [
+    ["СкладОтправитель_Key", "ПриОтгрузке"],
+    ["СкладПолучатель_Key", "ПриПоступлении"],
+  ],
+};
+
+/**
+ * Склады документа с ордерной схемой на его дату. При ордерной схеме «в наличии» меняет складской ордер, а не
+ * распоряжение, и сверка по строкам ложно показала бы расхождение с советом отменить проведение (ревью выпуска 3).
+ * На копии рабочей базы ордерных складов нет — поэтому не сверяем, а не угадываем движения. Схема без флагов — нет.
+ */
+async function orderSchemeWarehouses(
+  conn: Connection,
+  kind: Exclude<StockKind, "inventory">,
+  doc: ODataEntity,
+): Promise<string[]> {
+  const props = new Set(
+    (await conn.getMetadata()).entities.get(WAREHOUSES)?.properties.map((p) => p.name) ?? [],
+  );
+  const sides = ORDER_SCHEME[kind].filter(([, f]) => props.has(`ИспользоватьОрдернуюСхему${f}`));
+  const day = String(doc["Date"] ?? "").slice(0, 10);
+  const out: string[] = [];
+  for (const [side, f] of sides) {
+    const ref = String(doc[side] ?? "");
+    if (!ref || ref === EMPTY_REF) continue;
+    const flag = `ИспользоватьОрдернуюСхему${f}`;
+    const since = `ДатаНачалаОрдернойСхемы${f}`;
+    const w = await conn.client.getEntity<ODataEntity>(
+      `${WAREHOUSES}(${odataGuid(ref)})${buildQuery({ select: ["Description", flag, ...(props.has(since) ? [since] : [])] })}`,
+    );
+    const start = String(w[since] ?? "").slice(0, 10);
+    if (w[flag] === true && (!start || start === "0001-01-01" || start <= day))
+      out.push(`«${String(w["Description"] ?? ref)}»`);
+  }
+  return out;
+}
+
 async function stockRecords(conn: Connection, set: string, guid: string): Promise<ODataEntity[]> {
   try {
     const s = await conn.client.getEntity<ODataEntity>(
@@ -511,6 +603,14 @@ export async function verifyStockMovements(
     let expected: StockMove[] | undefined = [];
     if (post) {
       const doc = await conn.client.getEntity<ODataEntity>(`${entitySet}(${odataGuid(guid)})?$format=json`);
+      const ordered = await orderSchemeWarehouses(conn, kind, doc);
+      if (ordered.length)
+        return {
+          movementsNote:
+            `Склад с ордерной схемой (${ordered.join(", ")}): товар в наличии меняют складские ордера, а не этот ` +
+            "документ — сверка движений не выполнялась. Проверено состояние документа.",
+          movements: { register: STOCK_REGISTER, found: records.length },
+        };
       expected = expectedStockMoves(kind, doc);
       if (!expected)
         return {
