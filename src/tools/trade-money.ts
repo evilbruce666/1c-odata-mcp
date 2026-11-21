@@ -589,30 +589,63 @@ export async function tradeMoneyEditKind(
 }
 
 /** Сумма документа и одной строки расшифровки меняются вместе; строк несколько — разнести сумму нельзя. */
-function withAmount(doc: ODataEntity, fields: Record<string, unknown>): Record<string, unknown> | string {
-  if (!("СуммаДокумента" in fields)) return fields;
+/** Процент ставки НДС по перечислению справочника (НДС22, НДС20_120 → 22, 20; БезНДС, НДС0 → 0). */
+async function vatPercent(conn: Connection, ref: string): Promise<number | undefined> {
+  const r = await conn.client
+    .getEntity<ODataEntity>(
+      `Catalog_СтавкиНДС(${odataGuid(ref)})${buildQuery({ select: ["ПеречислениеСтавкаНДС"] })}`,
+    )
+    .catch(() => undefined);
+  const code = String(r?.["ПеречислениеСтавкаНДС"] ?? "");
+  if (code === "БезНДС" || code === "НДС0") return 0;
+  const m = /^НДС(\d+)(?:_\d+)?$/.exec(code);
+  return m ? Number(m[1]) : undefined;
+}
+
+/**
+ * Новая сумма документа — в единственную строку расшифровки; НДС строки пересчитывается по её ставке, как 1С в форме
+ * при смене суммы: сумма × ставка / (100 + ставка), сумма платежа включает НДС (на копии рабочей УТ 11.5 так
+ * посчитаны 83 из 90 строк с НДС, остальные — НДС, перенесённый из счёта поставщика). Предпросмотр показывает
+ * «было → станет». Взаиморасчёты в другой валюте и несколько строк — отказ.
+ */
+async function withAmount(
+  conn: Connection,
+  doc: ODataEntity,
+  fields: Record<string, unknown>,
+): Promise<{ fields: Record<string, unknown>; note?: string } | string> {
+  if (!("СуммаДокумента" in fields)) return { fields };
   const amount = Number(fields["СуммаДокумента"]);
   if (!(amount > 0)) return "Сумма документа должна быть больше нуля.";
   const rows = (doc["РасшифровкаПлатежа"] as ODataEntity[] | undefined) ?? [];
   if (rows.length > 1)
     return "В расшифровке платежа несколько строк: какую сумму в какую строку — не определить. Измените документ в 1С.";
-  if (!rows.length) return fields;
+  if (!rows.length) return { fields };
   const row = Object.fromEntries(
     Object.entries(rows[0]!).filter(([k]) => !k.includes("@") && k !== "Ref_Key"),
   );
-  // Взаиморасчёты в другой валюте (у.е.) и НДС строки по новой сумме коннектор не пересчитывает (ревью выпуска 4).
+  // Взаиморасчёты в другой валюте (у.е.) по новой сумме коннектор не пересчитывает (ревью выпуска 4).
   const settleCur = String(row["ВалютаВзаиморасчетов_Key"] ?? "");
   const docCur = String(doc["Валюта_Key"] ?? "");
   if (settleCur && !/^0{8}-/.test(settleCur) && docCur && settleCur !== docCur)
     return "Взаиморасчёты по строке — в другой валюте: сумму взаиморасчётов по курсу коннектор не пересчитывает. Измените документ в 1С.";
-  if (Number(row["СуммаНДС"] ?? 0) !== 0)
-    return "В строке расшифровки есть НДС: пересчитать его по новой сумме коннектор не берётся. Измените документ в 1С.";
-  return {
-    ...fields,
-    РасшифровкаПлатежа: [
-      { ...row, Сумма: amount, ...("СуммаВзаиморасчетов" in row ? { СуммаВзаиморасчетов: amount } : {}) },
-    ],
+  const out: Record<string, unknown> = {
+    ...row,
+    Сумма: amount,
+    ...("СуммаВзаиморасчетов" in row ? { СуммаВзаиморасчетов: amount } : {}),
   };
+  let note: string | undefined;
+  const rateRef = String(row["СтавкаНДС_Key"] ?? "");
+  const oldVat = Number(row["СуммаНДС"] ?? 0);
+  if (rateRef && !/^0{8}-/.test(rateRef)) {
+    const p = await vatPercent(conn, rateRef);
+    if (p === undefined)
+      return "Ставка НДС строки расшифровки не распознана — НДС по новой сумме не пересчитать. Измените документ в 1С.";
+    const vat = Math.round((amount * p * 100) / (100 + p)) / 100;
+    out["СуммаНДС"] = vat;
+    if (vat !== oldVat) note = `НДС строки пересчитан по ставке ${p}% от новой суммы: ${oldVat} → ${vat}.`;
+  } else if (oldVat !== 0)
+    return "В строке расшифровки есть НДС без ставки — пересчитать его не по чему. Измените документ в 1С.";
+  return { fields: { ...fields, РасшифровкаПлатежа: [out] }, ...(note ? { note } : {}) };
 }
 
 /**
@@ -650,13 +683,13 @@ export async function updateTradeMoney(
     throw new InputError(
       "Документ проведён. Сначала отмените проведение (write.document.post_document с post=false), затем меняйте его. Ничего не записано.",
     );
-  const amounted = withAmount(doc, fields);
+  const amounted = await withAmount(conn, doc, fields);
   if (typeof amounted === "string") throw new InputError(`${amounted} Ничего не записано.`);
-  const full = amounted;
-  const note = dateNote(entitySet, fields);
+  const full = amounted.fields;
+  const extra = [dateNote(entitySet, fields), amounted.note].filter((n): n is string => !!n);
   const patched = await patch(full);
   const result =
-    note && !patched.isError && patched.structuredContent
+    extra.length && !patched.isError && patched.structuredContent
       ? {
           ...patched,
           structuredContent: {
@@ -664,7 +697,7 @@ export async function updateTradeMoney(
             notes: [
               ...(((patched.structuredContent as Record<string, unknown>)["notes"] as string[] | undefined) ??
                 []),
-              note,
+              ...extra,
             ],
           },
         }
@@ -677,10 +710,12 @@ export async function updateTradeMoney(
   );
   const want = Number(full["СуммаДокумента"]);
   const rows = (after["РасшифровкаПлатежа"] as ODataEntity[] | undefined) ?? [];
+  const sentVat = ((full["РасшифровкаПлатежа"] as ODataEntity[])[0] ?? {})["СуммаНДС"];
   const ok =
     rows.length === 1 &&
     cents(Number(rows[0]!["Сумма"])) === cents(want) &&
-    cents(Number(after["СуммаДокумента"])) === cents(want);
+    cents(Number(after["СуммаДокумента"])) === cents(want) &&
+    (sentVat === undefined || cents(Number(rows[0]!["СуммаНДС"] ?? 0)) === cents(Number(sentVat)));
   return {
     ...result,
     structuredContent: ok
@@ -688,7 +723,7 @@ export async function updateTradeMoney(
       : {
           ...sc,
           verified: false,
-          note: `1С сохранила сумму иначе: в документе ${String(after["СуммаДокумента"])}, в расшифровке ${rows.map((r) => r["Сумма"]).join(", ")}. Проверьте документ в 1С.`,
+          note: `1С сохранила сумму иначе: в документе ${String(after["СуммаДокумента"])}, в расшифровке ${rows.map((r) => `${String(r["Сумма"])} (НДС ${String(r["СуммаНДС"] ?? 0)})`).join(", ")}. Проверьте документ в 1С.`,
         },
   };
 }
@@ -770,12 +805,13 @@ export async function copyTradeMoney(
     payload["ДатаПлатежа"] = day;
     payload["Статус"] = "НеСогласована";
   }
-  const full = withAmount(
+  const full = await withAmount(
+    conn,
     { ...source, РасшифровкаПлатежа: payload["РасшифровкаПлатежа"] },
     input.fields ?? {},
   );
   if (typeof full === "string") throw new InputError(`${full} Ничего не записано.`);
-  Object.assign(payload, full);
+  Object.assign(payload, full.fields);
   if (!(payload["РасшифровкаПлатежа"] as unknown[]).length) delete payload["РасшифровкаПлатежа"];
   return createCore(
     conn,
@@ -784,6 +820,7 @@ export async function copyTradeMoney(
     confirm,
     [
       "Копия — без объекта расчётов и связей образца (основание, заявка): 1С заполнит объект расчётов при записи.",
+      ...(full.note ? [full.note] : []),
       ...(kind === "request" && !("Статус" in (input.fields ?? {}))
         ? ["Копия заявки — «Не согласована»."]
         : []),

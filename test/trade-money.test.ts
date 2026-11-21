@@ -28,7 +28,15 @@ const EXPENSE = g("f", 3);
 const ASSET = g("f", 4);
 const RUB = g("a", 9);
 
+const VAT20 = "ba669c11-0000-0000-0000-000000000001";
+const VAT20IN = "ba669c12-0000-0000-0000-000000000001";
+const VATODD = "ba669c99-0000-0000-0000-000000000001";
 const TABLES: Record<string, Record<string, unknown>[]> = {
+  Catalog_СтавкиНДС: [
+    { Ref_Key: VAT20, Description: "20%", ПеречислениеСтавкаНДС: "НДС20" },
+    { Ref_Key: VAT20IN, Description: "20/120", ПеречислениеСтавкаНДС: "НДС20_120" },
+    { Ref_Key: VATODD, Description: "особая", ПеречислениеСтавкаНДС: "НДСОсобая" },
+  ],
   Catalog_Организации: [{ Ref_Key: ORG, Description: "ТЕСТ", Code: "1" }],
   Catalog_Кассы: [
     { Ref_Key: CASH, Description: "Касса ТЕСТ", Code: "1", Owner_Key: ORG, DeletionMark: false },
@@ -648,10 +656,46 @@ describe("денежные документы УТ: копия и поля", () 
     expect(s.patches).toHaveLength(1);
   });
 
-  it("сумма: взаиморасчёты в другой валюте или НДС в строке — отказ без PATCH (ревью: уходила рублёвая сумма)", async () => {
+  it("сумма с НДС в строке: НДС пересчитан по ставке (×p/(100+p)), «было → станет» в заметке, сверка после записи", async () => {
+    for (const rate of [VAT20, VAT20IN]) {
+      const s = setup();
+      const { ref } = await s.create(BOUT, pay);
+      s.docs.get(ref)!.body["РасшифровкаПлатежа"] = [
+        { LineNumber: 1, Сумма: 120, СуммаВзаиморасчетов: 120, СтавкаНДС_Key: rate, СуммаНДС: 20 },
+      ];
+      const r = await twice(s, "write.entity.update_entity", {
+        entitySet: SET,
+        ref,
+        fields: { СуммаДокумента: 250 },
+      });
+      expect(r.isError, r.text).toBeFalsy();
+      expect(s.patches.at(-1)).toMatchObject({
+        СуммаДокумента: 250,
+        РасшифровкаПлатежа: [{ Сумма: 250, СуммаВзаиморасчетов: 250, СтавкаНДС_Key: rate, СуммаНДС: 41.67 }],
+      });
+      expect(JSON.stringify(r.sc["notes"])).toContain("20 → 41.67");
+      expect(r.sc).toMatchObject({ verified: true });
+    }
+    // Копия с новой суммой — тот же пересчёт.
+    const s = setup();
+    const { ref } = await s.create(BOUT, pay);
+    s.docs.get(ref)!.body["РасшифровкаПлатежа"] = [
+      { LineNumber: 1, Сумма: 120, СуммаВзаиморасчетов: 120, СтавкаНДС_Key: VAT20, СуммаНДС: 20 },
+    ];
+    const c = await s.call("write.document.copy_document", {
+      entitySet: SET,
+      ref,
+      fields: { СуммаДокумента: 60 },
+    });
+    expect(c.isError, c.text).toBeFalsy();
+    expect(JSON.stringify(c.sc)).toContain('"СуммаНДС":10');
+  });
+
+  it("сумма: взаиморасчёты в другой валюте, НДС без ставки или нераспознанная ставка — отказ без PATCH", async () => {
     for (const row of [
       { Сумма: 10, ВалютаВзаиморасчетов_Key: g("a", 8), СуммаВзаиморасчетов: 0.11 },
       { Сумма: 120, ВалютаВзаиморасчетов_Key: RUB, СуммаВзаиморасчетов: 120, СуммаНДС: 20 },
+      { Сумма: 120, СуммаВзаиморасчетов: 120, СтавкаНДС_Key: VATODD, СуммаНДС: 20 },
     ]) {
       const s = setup();
       const { ref } = await s.create(BOUT, pay);
