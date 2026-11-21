@@ -5,7 +5,9 @@
  * помечаются на удаление (физически не удаляются — это делается в 1С «Удалением помеченных»).
  *
  * Пишет в боевую базу, поэтому запускается только явно:
- *   npm run test:live -- --db <имя базы> --yes [--slow]
+ *   npm run test:live -- --db <имя базы> --yes [--slow] [--no-post]
+ * --no-post — без проведения (рабочая база, где проводить не разрешено): сценарий «договор → акт проводится» пропущен.
+ * Документы получают комментарий с меткой ZZ-TEST, если инструмент его принимает.
  * --slow добавляет сценарий «правка не дошла» (ждёт 2 минуты; статус сам операцию не закрывает,
  * закрытие — только явным markNotApplied=true, #52).
  * Журнал операций — во временном каталоге, рабочий журнал не трогается.
@@ -88,9 +90,21 @@ async function main(): Promise<number> {
   const rows: Array<[string, boolean, string]> = [];
   const check = (name: string, ok: boolean, detail = "") => rows.push([name, ok, detail]);
 
+  /** Комментарий с меткой — документ находится в 1С поиском по «ZZ-TEST», даже если прогон оборвался. */
+  const tagged = (name: string, a: Json): Json => {
+    const shape = (tools[name]?.inputSchema as unknown as { shape?: Record<string, unknown> }).shape;
+    return shape && "comment" in shape && a["comment"] === undefined ? { ...a, comment: tag } : a;
+  };
+
   /** Предпросмотр → подтверждение → повтор: одна запись, повтор отвечает из журнала той же ссылкой. */
-  async function flow(name: string, a: Json, label = name): Promise<Json | undefined> {
-    const p = await run(name, { ...a, confirm: false });
+  async function flow(name: string, args: Json, label = name): Promise<Json | undefined> {
+    let a = tagged(name, args);
+    let p = await run(name, { ...a, confirm: false });
+    // Часть инструментов принимает комментарий только в Управлении торговлей — тогда без него.
+    if (p.err && a !== args && p.text.includes("только для Управления торговлей")) {
+      a = args;
+      p = await run(name, { ...a, confirm: false });
+    }
     if (p.err || typeof p.sc["operationId"] !== "string")
       return void check(label, false, `предпросмотр: ${p.text.slice(0, 160)}`);
     const operationId = p.sc["operationId"];
@@ -108,6 +122,32 @@ async function main(): Promise<number> {
     );
     return c1.sc;
   }
+
+  /** Правка существующего объекта: предпросмотр → подтверждение → повтор из журнала. */
+  async function edit(name: string, a: Json, label = name): Promise<Json | undefined> {
+    const p = await run(name, { ...a, confirm: false });
+    if (p.err) return void check(label, false, `предпросмотр: ${p.text.slice(0, 160)}`);
+    const op = typeof p.sc["operationId"] === "string" ? { operationId: p.sc["operationId"] } : {};
+    const c1 = await run(name, { ...a, confirm: true, ...op });
+    if (c1.err) return void check(label, false, `подтверждение: ${c1.text.slice(0, 160)}`);
+    const c2 = await run(name, { ...a, confirm: true, ...op });
+    const replayOk = !c2.err && (c2.sc["replayed"] === undefined || c2.sc["replayed"] === true);
+    check(label, replayOk, replayOk ? "" : `повтор: ${c2.err ? c2.text.slice(0, 120) : "не из журнала"}`);
+    return c1.sc;
+  }
+
+  /** Инструмент другой конфигурации: предпросмотр обязан отказать, не дойдя до записи. */
+  async function refused(name: string, a: Json): Promise<void> {
+    const p = await run(name, { ...a, confirm: false });
+    check(
+      `${name} — отказ в этой конфигурации`,
+      p.err && !p.text.startsWith("входные данные"),
+      p.text.slice(0, 100),
+    );
+  }
+
+  const dataVersion = async (set: string, ref: string) =>
+    String((await client.getEntity(`${set}(guid'${ref}')?$format=json&$select=DataVersion`))["DataVersion"]);
 
   /** Подменяет HTTP-запросы метода: after — ответ 1С «потерян» после отправки, before — запрос не ушёл. */
   const origRequest = client.request.bind(client);
@@ -132,6 +172,8 @@ async function main(): Promise<number> {
   // --- фикстуры и все инструменты создания
   const cp = await flow("write.counterparty.create_counterparty", { name: `${tag} контрагент` });
   const goods = await flow("write.catalog.create_nomenclature", { name: `${tag} товар` });
+  let pay: Json | undefined;
+  let ctrCustomer: Json | undefined;
   if (!cp || !goods) {
     line("Не удалось создать контрагента/номенклатуру — дальше не идём.");
   } else {
@@ -142,7 +184,10 @@ async function main(): Promise<number> {
     const wh = await first("Catalog_Склады", "&$filter=IsFolder%20eq%20false").catch(() => undefined);
     const grp = await first("Catalog_НоменклатурныеГруппы").catch(() => undefined);
 
-    const ctr = await flow("write.catalog.create_contract", { counterpartyRef: cpRef, kind: "СПокупателем" });
+    ctrCustomer = await flow("write.catalog.create_contract", {
+      counterpartyRef: cpRef,
+      kind: "СПокупателем",
+    });
     await flow(
       "write.catalog.create_contract",
       { counterpartyRef: cpRef, kind: "СПоставщиком" },
@@ -180,12 +225,13 @@ async function main(): Promise<number> {
         ],
       });
     } else check("write.sales.create_services_act", false, "нет номенклатурной группы в базе");
-    if (ctr)
-      await flow("write.money.create_payment", {
-        counterpartyRef: cpRef,
-        contractRef: String(ctr["ref"]),
-        amount: 1,
-      });
+    pay = ctrCustomer
+      ? await flow("write.money.create_payment", {
+          counterpartyRef: cpRef,
+          contractRef: String(ctrCustomer["ref"]),
+          amount: 1,
+        })
+      : undefined;
     await flow("write.money.create_bank_writeoff", { operationKind: "ПрочееСписание", amount: 1 });
     await flow("write.money.create_cash_receipt", { operationKind: "ПрочийПриход", amount: 1 });
     await flow("write.money.create_cash_payment", { operationKind: "ПрочийРасход", amount: 1 });
@@ -233,7 +279,8 @@ async function main(): Promise<number> {
     }
 
     // --- договор по умолчанию и проведение (без договора БП 3.0 не проводит реализацию)
-    {
+    if (has("no-post")) line("  проведение пропущено (--no-post)");
+    else {
       const postAndUnpost = async (entitySet: string, ref: string) => {
         const p = await run("write.document.post_document", { entitySet, ref, post: true, confirm: true });
         if (!p.err) await run("write.document.post_document", { entitySet, ref, post: false, confirm: true });
@@ -369,6 +416,113 @@ async function main(): Promise<number> {
           `статус ${String(early.sc["status"])} → ${String(late.sc["status"])} → ${String(marked.sc["status"])}`,
         );
       }
+    }
+  }
+
+  // --- правка справочников и документов, цены, банковские сервисные правки
+  if (cp && goods) {
+    const cpRef = String(cp["ref"]);
+    const gRef = String(goods["ref"]);
+    const EMPTY = "00000000-0000-0000-0000-000000000000";
+    // Группа отвечает записью 1С (record), а не ref.
+    const group = await edit("write.counterparty.create_group", { name: `${tag} группа`, parentRef: EMPTY });
+    const groupRef = (group?.["record"] as Json | undefined)?.["Ref_Key"];
+    if (typeof groupRef === "string") made.push(["Catalog_Контрагенты", groupRef]);
+    if (typeof groupRef === "string")
+      await edit("write.counterparty.set_group", {
+        ref: cpRef,
+        subjectKind: "counterparty",
+        parentRef: groupRef,
+        expectedDataVersion: await dataVersion("Catalog_Контрагенты", cpRef),
+      });
+    await edit("write.counterparty.update_counterparty", {
+      ref: cpRef,
+      fullName: `${tag} полное наименование`,
+    });
+    await edit("write.catalog.update_nomenclature", { ref: gRef, article: "ZZ-1" });
+    const folder = await flow(
+      "write.entity.create_folder",
+      { entitySet: "Catalog_Номенклатура", name: `${tag} папка товаров` },
+      "write.entity.create_folder (номенклатура)",
+    );
+    if (folder)
+      await edit("write.entity.move_to_folder", {
+        entitySet: "Catalog_Номенклатура",
+        ref: gRef,
+        folder: String(folder["ref"]),
+      });
+    const doc = await flow(
+      "write.sales.create_invoice",
+      {
+        counterpartyRef: cpRef,
+        lines: [{ nomenclatureRef: gRef, quantity: 1, price: 100, vatRate: "БезНДС" }],
+      },
+      "write.sales.create_invoice (для правки)",
+    );
+    if (doc) {
+      const set = String(doc["entitySet"]);
+      const ref = String(doc["ref"]);
+      await edit("write.entity.update_entity", {
+        entitySet: set,
+        ref,
+        fields: { Комментарий: `${tag} правка` },
+      });
+      await edit("write.document.update_document_lines", {
+        entitySet: set,
+        ref,
+        lines: [{ nomenclatureRef: gRef, quantity: 3, price: 10, vatRate: "БезНДС" }],
+      });
+    }
+    const kinds = ["Catalog_ТипыЦенНоменклатуры", "Catalog_ВидыЦен"];
+    let kind: Json | undefined;
+    for (const k of kinds)
+      kind ??= await first(k, "&$filter=DeletionMark%20eq%20false").catch(() => undefined);
+    if (kind)
+      await flow("write.pricing.create_price_setting", {
+        priceKind: String(kind["Ref_Key"]),
+        lines: [{ itemRef: gRef, price: 100 }],
+      });
+    else check("write.pricing.create_price_setting", false, "нет вида цен в базе");
+    if (pay && ctrCustomer) {
+      const set = String(pay["entitySet"]);
+      const ref = String(pay["ref"]);
+      await edit("write.document.apply_bank_settlement_settings", {
+        entitySet: set,
+        ref,
+        contractRef: String(ctrCustomer["ref"]),
+        side: "customer",
+        expectedDataVersion: await dataVersion(set, ref),
+      });
+      // Сумма в шапке изменилась, строка — нет: ровно тот случай, ради которого выравнивание.
+      await edit(
+        "write.entity.update_entity",
+        { entitySet: set, ref, fields: { СуммаДокумента: 2 } },
+        "write.entity.update_entity (сумма банковского документа)",
+      );
+      await edit("write.document.align_bank_payment_amounts", {
+        entitySet: set,
+        ref,
+        expectedDataVersion: await dataVersion(set, ref),
+      });
+    }
+    // Инструменты только Управления торговлей: в Бухгалтерии — отказ до записи.
+    const accounting = (await conn.getMetadata()).entities.has("AccountingRegister_Хозрасчетный");
+    if (accounting) {
+      const L = [{ nomenclatureRef: gRef, quantity: 1, price: 100 }];
+      await refused("write.counterparty.create_partner", { name: `${tag} партнёр`, relations: ["client"] });
+      await refused("write.catalog.create_agreement", {
+        side: "client",
+        counterpartyRef: cpRef,
+        name: `${tag} соглашение`,
+      });
+      await refused("write.money.create_payment_request", {
+        operationKind: "ОплатаПоставщику",
+        amount: 1,
+        payForm: "bank",
+        counterpartyRef: cpRef,
+      });
+      await refused("write.sales.create_customer_order", { counterpartyRef: cpRef, lines: L });
+      await refused("write.purchase.create_supplier_order", { counterpartyRef: cpRef, lines: L });
     }
   }
 
