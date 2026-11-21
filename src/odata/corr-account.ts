@@ -51,12 +51,14 @@ export async function otherOperationFields(
   conn: Connection,
   operationKind: string,
   a: OtherArgs,
+  /** Что документ и так пишет в шапку (статья ДДС — всегда; у списания — ещё контрагент и договор). */
+  inHeader: ReadonlyArray<keyof OtherArgs> = ["cashflowItemRef"],
 ): Promise<{ fields: Record<string, unknown>; notes: string[] } | undefined> {
   const side = OTHER_OPERATIONS[operationKind];
   if (!side) {
-    if (a.corrAccount)
+    if (a.corrAccount || a.otherItemRef)
       throw new InputError(
-        `corrAccount — только для прочих операций (${Object.keys(OTHER_OPERATIONS).join(", ")}); у «${operationKind}» счёт расчётов подбирается по договору. Ничего не записано.`,
+        `corrAccount и otherItemRef — только для прочих операций (${Object.keys(OTHER_OPERATIONS).join(", ")}); у «${operationKind}» счёт расчётов подбирается по договору. Ничего не записано.`,
       );
     return undefined;
   }
@@ -83,11 +85,16 @@ export async function otherOperationFields(
   const missing: string[] = [];
   for (const [i, k] of kinds.slice(0, 3).entries()) {
     const kindRef = String(k["ExtDimensionType_Key"] ?? "");
+    // Вид субконто не прочитался — отказ: иначе значение субконто тихо пропало бы (ревью выпуска 5).
     const kind = await conn.client
       .getEntity<ODataEntity>(
         `ChartOfCharacteristicTypes_ВидыСубконтоХозрасчетные(${odataGuid(kindRef)})${buildQuery({ select: ["PredefinedDataName", "Description"] })}`,
       )
-      .catch(() => undefined);
+      .catch((e: unknown) => {
+        throw new InputError(
+          `Не удалось прочитать вид субконто ${i + 1} счёта ${code} (${e instanceof Error ? e.message : String(e)}): без него субконто не заполнить. Проверьте, что в составе OData опубликован план видов характеристик «Виды субконто хозрасчётные». Ничего не записано.`,
+        );
+      });
     const name = String(kind?.["PredefinedDataName"] ?? "");
     const src = KIND_SOURCES[name];
     const field = `Субконто${side}${i + 1}`;
@@ -104,6 +111,13 @@ export async function otherOperationFields(
     }
     fields[field] = value;
     fields[`${field}_Type`] = `StandardODATA.${src.type}`;
+  }
+  // Значение, которому у счёта нет субконто и которого нет в шапке, в документ не попадёт — сказать (ревью выпуска 5).
+  const used = new Set(Object.values(fields).filter((v) => typeof v === "string"));
+  for (const src of Object.values(KIND_SOURCES)) {
+    const v = a[src.arg];
+    if (v && v !== EMPTY && !used.has(v) && !inHeader.includes(src.arg))
+      notes.push(`У счёта ${code} нет субконто «${src.label}» — это значение в документ не записано.`);
   }
   if (missing.length)
     throw new InputError(

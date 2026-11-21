@@ -1467,6 +1467,10 @@ export function emptySettlementWarning(
   // Без договора расчётов с контрагентом нет (налог, зарплата, прочее списание) — пустой счёт законен.
   const contract = payload["ДоговорКонтрагента_Key"];
   if (typeof contract !== "string" || !contract || contract === EMPTY_REF) return undefined;
+  // Прочая операция: корреспондирующий счёт задан в шапке (corrAccount), строка расчётов не ведёт — проверено
+  // проведением прочего списания по договору на рабочей БП 3.0 (ревью выпуска 5).
+  const header = payload[SETTLE_FIELD];
+  if (typeof header === "string" && header && header !== EMPTY_REF) return undefined;
   const empty = (v: unknown) => v === EMPTY_REF || v === "";
   const rows = Array.isArray(created[PAYMENT_ROWS]) ? (created[PAYMENT_ROWS] as ODataEntity[]) : [];
   const headerEmpty =
@@ -4790,7 +4794,11 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         );
         // Прочее списание: корреспондирующий счёт и субконто в шапке; строку расшифровки 1С при записи добавляет
         // сама с нулевой суммой — отправляем её с суммой документа, как в документах, проведённых из формы.
-        const other = await otherOperationFields(conn, operationKind, a);
+        const other = await otherOperationFields(conn, operationKind, a, [
+          "cashflowItemRef",
+          "counterpartyRef",
+          "contractRef",
+        ]);
         const org = await resolveOrg(conn, organization);
         const bank = await resolveOrgBankAccount(conn, org.key, orgBankAccount);
         const bd = await buildSettlementRow(conn, operationKind, contractRef, amount);

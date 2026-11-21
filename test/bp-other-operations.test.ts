@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createServer } from "../src/mcp/server.js";
+import { emptySettlementWarning } from "../src/tools/write.js";
 import { fake1C } from "./helpers/fake-1c.js";
 
 /**
@@ -61,7 +62,7 @@ const KINDS = [
   },
 ];
 
-function setup() {
+function setup(o: { kinds500?: boolean } = {}) {
   const fake = fake1C(
     {
       READ_ONLY: "false",
@@ -75,7 +76,9 @@ function setup() {
           : q.base === "ChartOfAccounts_Хозрасчетный"
             ? ACCOUNTS
             : q.base === "ChartOfCharacteristicTypes_ВидыСубконтоХозрасчетные"
-              ? KINDS
+              ? o.kinds500
+                ? []
+                : KINDS
               : undefined,
     },
   );
@@ -171,11 +174,77 @@ describe("Бухгалтерия: прочие операции денежных
     [{ operationKind: "ПрочийПриход", amount: 1, corrAccount: "91", otherItemRef: ITEM91 }, "группа"],
     [{ operationKind: "ПрочийПриход", amount: 1, corrAccount: "99.99" }, "не найден"],
     [{ operationKind: "ОплатаПокупателя", amount: 1, corrAccount: "91.02" }, "только для прочих операций"],
+    [{ operationKind: "ОплатаПокупателя", amount: 1, otherItemRef: ITEM91 }, "только для прочих операций"],
   ])("отказ до записи: %j", async (args, text) => {
     const s = setup();
     const r = await s.call("write.money.create_cash_receipt", { ...args, confirm: false });
     expect(r.err).toBe(true);
     expect(r.text).toContain(text);
     expect(s.fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
+  });
+
+  it("ревью выпуска 5: вид субконто не прочитался — отказ, а не тихая потеря; значение без субконто — заметка", async () => {
+    const bad = setup({ kinds500: true });
+    const r = await bad.call("write.money.create_cash_payment", {
+      operationKind: "ПрочийРасход",
+      amount: 1,
+      corrAccount: "76.09",
+      counterpartyRef: CP,
+      contractRef: CTR,
+    });
+    expect(r.err).toBe(true);
+    expect(r.text).toContain("Не удалось прочитать вид субконто");
+    expect(bad.fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
+    // 91.02 без субконто «контрагент»: в РКО прочего расхода контрагента нет и в шапке — заметка.
+    const s = setup();
+    const n = await s.call("write.money.create_cash_payment", {
+      operationKind: "ПрочийРасход",
+      amount: 1,
+      corrAccount: "91.02",
+      otherItemRef: ITEM91,
+      counterpartyRef: CP,
+    });
+    expect(n.err, n.text).toBe(false);
+    expect(JSON.stringify(n.sc["notes"])).toContain("нет субконто «контрагент");
+    // У списания контрагент остаётся в шапке — заметки о потере нет.
+    const w = await s.call("write.money.create_bank_writeoff", {
+      operationKind: "ПрочееСписание",
+      amount: 1,
+      corrAccount: "91.02",
+      otherItemRef: ITEM91,
+      counterpartyRef: CP,
+    });
+    expect(w.err, w.text).toBe(false);
+    expect(JSON.stringify(w.sc["notes"] ?? [])).not.toContain("нет субконто");
+  });
+
+  it("прочее списание по договору: после записи нет ложного «пуст счёт расчётов» — счёт в шапке", async () => {
+    const s = setup();
+    const args = {
+      operationKind: "ПрочееСписание",
+      amount: 1,
+      corrAccount: "76.09",
+      counterpartyRef: CP,
+      contractRef: CTR,
+    };
+    const p = await s.call("write.money.create_bank_writeoff", args);
+    const c = await s.call("write.money.create_bank_writeoff", {
+      ...args,
+      confirm: true,
+      operationId: p.sc["operationId"],
+    });
+    expect(c.err, c.text).toBe(false);
+    expect(JSON.stringify(c.sc)).not.toContain("пуст счёт расчётов");
+    // Как ответила живая БП 3.0: строка расшифровки с пустым счётом расчётов, счёт — в шапке.
+    const created = {
+      СчетУчетаРасчетовСКонтрагентом_Key: A7609,
+      РасшифровкаПлатежа: [
+        { СчетУчетаРасчетовСКонтрагентом_Key: "00000000-0000-0000-0000-000000000000", СуммаПлатежа: 1 },
+      ],
+    };
+    const withHeader = { ДоговорКонтрагента_Key: CTR, СчетУчетаРасчетовСКонтрагентом_Key: A7609 };
+    expect(emptySettlementWarning(created, withHeader)).toBeUndefined();
+    // Обычная оплата по договору без счёта — предупреждение, как раньше.
+    expect(emptySettlementWarning(created, { ДоговорКонтрагента_Key: CTR })).toContain("пуст счёт расчётов");
   });
 });
