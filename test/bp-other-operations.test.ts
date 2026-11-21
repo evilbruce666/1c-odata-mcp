@@ -76,7 +76,7 @@ const KINDS = [
   },
 ];
 
-function setup(o: { kinds500?: boolean } = {}) {
+function setup(o: { kinds500?: boolean; plainChart?: boolean } = {}) {
   const fake = fake1C(
     {
       READ_ONLY: "false",
@@ -85,7 +85,7 @@ function setup(o: { kinds500?: boolean } = {}) {
     },
     {
       data: (q) =>
-        q.fn
+        q.fn || o.plainChart
           ? undefined
           : q.base === "ChartOfAccounts_Хозрасчетный"
             ? ACCOUNTS
@@ -256,7 +256,11 @@ describe("Бухгалтерия: прочие операции денежных
         { СчетУчетаРасчетовСКонтрагентом_Key: "00000000-0000-0000-0000-000000000000", СуммаПлатежа: 1 },
       ],
     };
-    const withHeader = { ДоговорКонтрагента_Key: CTR, СчетУчетаРасчетовСКонтрагентом_Key: A7609 };
+    const withHeader = {
+      ВидОперации: "ПрочееСписание",
+      ДоговорКонтрагента_Key: CTR,
+      СчетУчетаРасчетовСКонтрагентом_Key: A7609,
+    };
     expect(emptySettlementWarning(created, withHeader)).toBeUndefined();
     // Обычная оплата по договору без счёта — предупреждение, как раньше.
     expect(emptySettlementWarning(created, { ДоговорКонтрагента_Key: CTR })).toContain("пуст счёт расчётов");
@@ -392,5 +396,37 @@ describe("Бухгалтерия: прочие операции денежных
       expect(bad.err, JSON.stringify(args)).toBe(true);
       expect(bad.text).toContain(text);
     }
+  });
+
+  it("ревью выпуска 5, раунд 3: строка с суммой и молчание о счёте — только белому списку; расчётные виды как раньше", async () => {
+    const s = setup({ plainChart: true });
+    for (const op of [
+      "ПрочиеРасчетыСКонтрагентами",
+      "РасчетыПоКредитамИЗаймам",
+      "ПеречислениеЗаработнойПлатыРаботнику",
+    ]) {
+      const r = await s.call("write.money.create_bank_writeoff", {
+        operationKind: op,
+        amount: 100,
+        counterpartyRef: CP,
+        contractRef: CTR,
+      });
+      expect(r.err, `${op}: ${r.text}`).toBe(false);
+      expect(payloadOf(r), op).not.toHaveProperty("РасшифровкаПлатежа");
+    }
+    // Счёт в шапке из настройки договора у расчётного вида — предупреждение о пустом счёте строки остаётся.
+    const created = {
+      СчетУчетаРасчетовСКонтрагентом_Key: A7609,
+      РасшифровкаПлатежа: [
+        { СчетУчетаРасчетовСКонтрагентом_Key: "00000000-0000-0000-0000-000000000000", СуммаПлатежа: 1 },
+      ],
+    };
+    const payload = {
+      ВидОперации: "ПрочиеРасчетыСКонтрагентами",
+      ДоговорКонтрагента_Key: CTR,
+      СчетУчетаРасчетовСКонтрагентом_Key: A7609,
+    };
+    expect(emptySettlementWarning(created, payload)).toContain("пуст счёт расчётов");
+    expect(emptySettlementWarning(created, { ...payload, ВидОперации: "ПрочееСписание" })).toBeUndefined();
   });
 });

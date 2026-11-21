@@ -1168,6 +1168,14 @@ describe("align_bank_payment_amounts и запрет проведения при
     expect(r.isError).toBe(true);
     expect(JSON.stringify(r.content)).toContain("не указан договор");
     expect(g.writes).toHaveLength(0);
+    // Кредиты и прочие расчёты ведут договор: строка без договора — не выравнивается (ревью выпуска 5, раунд 3).
+    for (const op of ["РасчетыПоКредитамИЗаймам", "ПрочиеРасчетыСКонтрагентами"]) {
+      const h = await broken();
+      h.setDoc({ ВидОперации: op, [ROWS]: [{ ...rowOf(h), ДоговорКонтрагента_Key: EMPTY }] });
+      const x = await h.run({}, ALIGN);
+      expect(x.isError, op).toBe(true);
+      expect(h.writes).toHaveLength(0);
+    }
   });
 
   it("Int64 строкой, как отдаёт 1С: «1» не считается изменением и отправляется строкой", async () => {

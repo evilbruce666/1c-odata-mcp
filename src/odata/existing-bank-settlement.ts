@@ -7,6 +7,7 @@ import { accountingChart } from "../config/accounting.js";
 import { counterpartyCatalog, EMPTY_GUID, exactRef, readCounterparty } from "./counterparty-hierarchy.js";
 import { settlementAccountsFor, settlementSideOf } from "./settlement-accounts.js";
 import { odataGuid } from "./query.js";
+import { NO_SETTLEMENT_KINDS } from "./corr-account.js";
 import { ODataError } from "./errors.js";
 import { fingerprintWriteInput } from "./write-operation-context.js";
 
@@ -480,9 +481,10 @@ export async function alignBankPaymentAmounts(
   // Строка без договора — операция без расчётов с контрагентом (прочее списание, налог, комиссия): после смены суммы
   // документа выравнивается только сумма платежа (и НДС по ставке), курса и взаиморасчётов у неё нет (ревью
   // выпуска 5: иначе исправить сумму можно было только в 1С).
-  // Оплата покупателя или поставщику без договора — это незаполненный документ, а не операция без расчётов.
+  // Строка без договора выравнивается только у видов без расчётов из белого списка; у остальных пустой договор —
+  // незаполненный документ (оплата, кредит, прочие расчёты), как раньше.
   const noContract = rawContract === EMPTY_GUID || rawContract === "";
-  if (noContract && /Поставщик|Покупател/i.test(String(doc.ВидОперации ?? "")))
+  if (noContract && !NO_SETTLEMENT_KINDS.has(String(doc.ВидОперации ?? "")))
     throw new InputError("В строке не указан договор — сначала apply_bank_settlement_settings.");
   const contracts = resolveEntity(CATALOGS.contracts, available);
   if (!noContract) {

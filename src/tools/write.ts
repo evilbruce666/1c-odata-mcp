@@ -1,4 +1,4 @@
-import { WRITEOFF_REFUSED, otherOperationFields } from "../odata/corr-account.js";
+import { NO_SETTLEMENT_KINDS, WRITEOFF_REFUSED, otherOperationFields } from "../odata/corr-account.js";
 import {
   ALIGN_HINT,
   bankPostingBlocker,
@@ -1467,10 +1467,16 @@ export function emptySettlementWarning(
   // Без договора расчётов с контрагентом нет (налог, зарплата, прочее списание) — пустой счёт законен.
   const contract = payload["ДоговорКонтрагента_Key"];
   if (typeof contract !== "string" || !contract || contract === EMPTY_REF) return undefined;
-  // Прочая операция: корреспондирующий счёт задан в шапке (corrAccount), строка расчётов не ведёт — проверено
-  // проведением прочего списания по договору на рабочей БП 3.0 (ревью выпуска 5).
+  // Операция без расчётов из белого списка со счётом в шапке (corrAccount): строка расчётов не ведёт — проверено
+  // проведением прочего списания по договору на рабочей БП 3.0. Счёт шапки из настройки договора — не повод молчать.
   const header = payload[SETTLE_FIELD];
-  if (typeof header === "string" && header && header !== EMPTY_REF) return undefined;
+  if (
+    NO_SETTLEMENT_KINDS.has(String(payload["ВидОперации"] ?? "")) &&
+    typeof header === "string" &&
+    header &&
+    header !== EMPTY_REF
+  )
+    return undefined;
   const empty = (v: unknown) => v === EMPTY_REF || v === "";
   const rows = Array.isArray(created[PAYMENT_ROWS]) ? (created[PAYMENT_ROWS] as ODataEntity[]) : [];
   const headerEmpty =
@@ -4883,9 +4889,13 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           Комментарий: comment,
           ...(other ? other.fields : {}),
           // Без договорной строки 1С при записи добавляет строку расшифровки с нулевой суммой, и проведение
-          // останавливала проверка суммы — у любого вида операции без договора (проверено на рабочей БП 3.0):
-          // отправляем строку с суммой документа, как в документах, проведённых из формы.
-          РасшифровкаПлатежа: bd ? [bd.row] : [{ LineNumber: 1, СуммаПлатежа: amount }],
+          // останавливала проверка суммы: у видов без расчётов из белого списка (проверены проведением на рабочей
+          // БП 3.0) отправляем строку с суммой документа; расчётным видам — как раньше.
+          ...(bd
+            ? { РасшифровкаПлатежа: [bd.row] }
+            : NO_SETTLEMENT_KINDS.has(operationKind)
+              ? { РасшифровкаПлатежа: [{ LineNumber: 1, СуммаПлатежа: amount }] }
+              : {}),
         });
         return other
           ? createOrPreview(conn, set, payload, confirm, other.notes, { keepSettlement: true })
