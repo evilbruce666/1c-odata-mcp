@@ -673,33 +673,34 @@ describe("денежные документы УТ: копия и поля", () 
     }
   });
 
-  it("новая дата безналичного документа переносит «проведено банком», заявки — даты платежа", async () => {
+  it("новая дата документа служебные даты не трогает (дата платежа заявки бывает позже) — заметка; явно — меняются", async () => {
     const s = setup();
-    const { ref } = await s.create(BOUT, pay);
-    await twice(s, "write.entity.update_entity", {
-      entitySet: SET,
-      ref,
-      fields: { Date: "2026-12-05T10:00:00" },
-    });
-    expect(s.patches.at(-1)).toMatchObject({
-      Date: "2026-12-05T10:00:00",
-      ДатаПроведенияБанком: "2026-12-05T00:00:00",
-    });
     const req = await s.create(REQ, {
       ...base,
       operationKind: "ОплатаПоставщику",
       payForm: "bank",
       orgBankAccount: BANK,
       counterpartyRef: CP,
+      paymentDate: "2026-12-20",
     });
-    await twice(s, "write.entity.update_entity", {
-      entitySet: "Document_ЗаявкаНаРасходованиеДенежныхСредств",
+    const R = "Document_ЗаявкаНаРасходованиеДенежныхСредств";
+    const r = await twice(s, "write.entity.update_entity", {
+      entitySet: R,
       ref: req.ref,
-      fields: { Date: "2026-12-06T09:00:00" },
+      fields: { Date: "2026-11-22T09:00:00" },
     });
-    expect(s.patches.at(-1)).toMatchObject({
-      ЖелательнаяДатаПлатежа: "2026-12-06T00:00:00",
-      ДатаПлатежа: "2026-12-06T00:00:00",
+    expect(s.patches.at(-1)).toEqual({ Date: "2026-11-22T09:00:00" });
+    expect(s.docs.get(req.ref)!.body["ДатаПлатежа"]).toBe("2026-12-20T00:00:00");
+    expect(JSON.stringify(r.sc["notes"])).toContain("Даты платежа заявки не изменены");
+    const { ref } = await s.create(BOUT, pay);
+    await twice(s, "write.entity.update_entity", {
+      entitySet: SET,
+      ref,
+      fields: { Date: "2026-12-05T10:00:00", ДатаПроведенияБанком: "2026-12-05T00:00:00" },
+    });
+    expect(s.patches.at(-1)).toEqual({
+      Date: "2026-12-05T10:00:00",
+      ДатаПроведенияБанком: "2026-12-05T00:00:00",
     });
   });
 

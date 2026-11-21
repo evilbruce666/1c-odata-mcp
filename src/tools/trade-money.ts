@@ -572,6 +572,7 @@ const MONEY_EDITABLE = new Set([
   "Статус",
   "ЖелательнаяДатаПлатежа",
   "ДатаПлатежа",
+  "ДатаПроведенияБанком",
 ]);
 const moneyWhitelistRefusal = (bad: string[]) =>
   `Поля ${bad.join(", ")} в денежном документе Управления торговлей коннектор не меняет: от них зависят расчёты и ` +
@@ -615,16 +616,20 @@ function withAmount(doc: ODataEntity, fields: Record<string, unknown>): Record<s
 }
 
 /**
- * Новая дата документа переносит служебные даты, как при создании и копии: «проведено банком» у безналичных, даты
- * платежа у заявки (если их не задали явно).
+ * Смена даты документа служебные даты не трогает: у заявки дата платежа бывает позже даты документа, у выписки дата
+ * банка — своя (второй раунд ревью выпуска 4: перенос затирал будущую дату платежа). Только заметка; задать их можно
+ * явно — поля есть в белом списке.
  */
-function withDates(entitySet: string, fields: Record<string, unknown>): Record<string, unknown> {
-  if (typeof fields["Date"] !== "string") return fields;
-  const day = `${String(fields["Date"]).slice(0, 10)}T00:00:00`;
-  if (entitySet === MONEY_DOCS.bankIn || entitySet === MONEY_DOCS.bankOut)
-    return { ДатаПроведенияБанком: day, ...fields };
-  if (entitySet === MONEY_DOCS.request) return { ЖелательнаяДатаПлатежа: day, ДатаПлатежа: day, ...fields };
-  return fields;
+function dateNote(entitySet: string, fields: Record<string, unknown>): string | undefined {
+  if (typeof fields["Date"] !== "string") return undefined;
+  if (
+    (entitySet === MONEY_DOCS.bankIn || entitySet === MONEY_DOCS.bankOut) &&
+    !("ДатаПроведенияБанком" in fields)
+  )
+    return "Дата «проведено банком» не изменена — при необходимости задайте ДатаПроведенияБанком.";
+  if (entitySet === MONEY_DOCS.request && !("ДатаПлатежа" in fields || "ЖелательнаяДатаПлатежа" in fields))
+    return "Даты платежа заявки не изменены — при необходимости задайте ЖелательнаяДатаПлатежа и ДатаПлатежа.";
+  return undefined;
 }
 
 /** Изменение полей шапки по белому списку, только у непроведённого документа. */
@@ -647,8 +652,23 @@ export async function updateTradeMoney(
     );
   const amounted = withAmount(doc, fields);
   if (typeof amounted === "string") throw new InputError(`${amounted} Ничего не записано.`);
-  const full = withDates(entitySet, amounted);
-  const result = await patch(full);
+  const full = amounted;
+  const note = dateNote(entitySet, fields);
+  const patched = await patch(full);
+  const result =
+    note && !patched.isError && patched.structuredContent
+      ? {
+          ...patched,
+          structuredContent: {
+            ...(patched.structuredContent as Record<string, unknown>),
+            notes: [
+              ...(((patched.structuredContent as Record<string, unknown>)["notes"] as string[] | undefined) ??
+                []),
+              note,
+            ],
+          },
+        }
+      : patched;
   const sc = result.structuredContent as Record<string, unknown> | undefined;
   if (!confirm || result.isError || !sc || sc["dryRun"] || !("РасшифровкаПлатежа" in full)) return result;
   // Общая проверка правки табличные части не сверяет: сумму строки расшифровки перечитываем сами.
