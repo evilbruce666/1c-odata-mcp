@@ -194,6 +194,8 @@ const EXPECTED_ERRORS: Record<string, string> = {
   "write.counterparty.create_partner": "партнёры есть в Управлении торговлей",
   // Заявка на расходование — документ УТ: в Бухгалтерии — отказ с указанием платёжного поручения.
   "write.money.create_payment_request": "Заявка на расходование — документ Управления торговлей",
+  "write.sales.create_customer_order": "документ Управления торговлей",
+  "write.purchase.create_supplier_order": "документ Управления торговлей",
 };
 
 afterEach(() => {
@@ -379,6 +381,18 @@ const TRADE_WRITE_TOOLS = new Set([
   "write.money.create_bank_writeoff",
   "write.money.create_payment_request",
   "write.money.create_payout_order",
+  "write.sales.create_shipment",
+  "write.sales.create_act",
+  "write.sales.create_services_act",
+  "write.sales.create_invoice",
+  "write.sales.create_customer_order",
+  "write.sales.create_issued_invoice",
+  "write.purchase.create_purchase",
+  "write.purchase.create_supplier_invoice",
+  "write.purchase.create_supplier_order",
+  "write.purchase.create_received_invoice",
+  "write.warehouse.create_return_from_customer",
+  "write.warehouse.create_return_to_supplier",
 ]);
 
 describe("запись на снимке схемы УТ 11 отказывает до предпросмотра", () => {
@@ -403,7 +417,11 @@ describe("запись на снимке схемы УТ 11 отказывает
     const registered = (createServer(fake.ctx) as unknown as { _registeredTools: Tools })._registeredTools[
       name
     ]!;
-    const args = registered.inputSchema ? registered.inputSchema.parse(argsFor(tool)) : argsFor(tool);
+    // Реализация в УТ теперь поддержана: «другой документ» — отчёт о розничных продажах (его делает касса).
+    const raw = argsFor(tool);
+    if (raw["entitySet"] === "Document_РеализацияТоваровУслуг")
+      raw["entitySet"] = "Document_ОтчетОРозничныхПродажах";
+    const args = registered.inputSchema ? registered.inputSchema.parse(raw) : raw;
     const r = await registered.handler(args, {});
     const text = (r.content ?? []).map((c) => c.text ?? "").join("");
     expect(r.isError, `${name}: ${text.slice(0, 160)}`).toBe(true);
@@ -437,7 +455,7 @@ describe("запись цен в УТ: допуск только для доку
   ] as const)("%s: документ цен — проходит, другой документ УТ — отказ", async (name, args) => {
     const allowed = await call(name, { ...args, entitySet: PRICE_DOC });
     expect(allowed.text).not.toContain("только для Бухгалтерии");
-    const other = await call(name, { ...args, entitySet: "Document_РеализацияТоваровУслуг" });
+    const other = await call(name, { ...args, entitySet: "Document_ОтчетОРозничныхПродажах" });
     expect(other.r.isError).toBe(true);
     expect(other.text).toContain("только для Бухгалтерии");
     expect(other.text).toContain("write.pricing.create_price_setting");

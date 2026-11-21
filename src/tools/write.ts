@@ -55,6 +55,14 @@ import {
 import { createAgreement, createTradeContract } from "./trade-contracts.js";
 import { createTradeNomenclature, tradeNomenclatureSchema } from "./trade-nomenclature.js";
 import {
+  SALES_OPS,
+  createTradeSales,
+  tradeSalesSet,
+  verifySalesMovements,
+  type SalesInput,
+  type SalesKind,
+} from "./trade-sales.js";
+import {
   MONEY_OPS,
   PAYOUT_ORDER_IN_TRADE,
   copyTradeMoney,
@@ -2539,6 +2547,81 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       ),
   );
 
+  /** Поля продаж и закупок Управления торговлей; в Бухгалтерии — отказ, а не молчаливый пропуск. */
+  const tradeSalesFields = {
+    agreementRef: z
+      .string()
+      .optional()
+      .describe(
+        "Управление торговлей: Ref_Key соглашения с клиентом или поставщиком (одно у партнёра — само)",
+      ),
+    vatTaxation: z
+      .string()
+      .optional()
+      .describe(
+        "Управление торговлей: налогообложение НДС (ПродажаОблагаетсяНДС, ПродажаНеОблагаетсяНДС, …); по умолчанию — как в последнем документе организации",
+      ),
+    paymentDueDate: z
+      .string()
+      .optional()
+      .describe("Управление торговлей: дата оплаты YYYY-MM-DD (по умолчанию — дата документа)"),
+    basisRef: z
+      .string()
+      .optional()
+      .describe(
+        "Управление торговлей: документ-основание — реализация (возврат клиента, счёт) или приобретение (возврат поставщику)",
+      ),
+    comment: z.string().optional().describe("Управление торговлей: комментарий"),
+  };
+  type TradeSalesArgs = { [K in keyof typeof tradeSalesFields]?: unknown } & {
+    operationKind?: unknown;
+    status?: unknown;
+    incomingNumber?: unknown;
+  };
+  const noTradeSales = (a: TradeSalesArgs) => {
+    const used = [...Object.keys(tradeSalesFields), "status", "incomingNumber"].filter(
+      (k) => (a as Record<string, unknown>)[k] !== undefined,
+    );
+    if (used.length)
+      throw new InputError(
+        `Параметры ${used.join(", ")} — только для Управления торговлей. Ничего не записано.`,
+      );
+  };
+  /** Документ продаж или закупок УТ: сборщик trade-sales; undefined — Бухгалтерия, как раньше. */
+  const tradeSales = async (
+    conn: Connection,
+    kind: SalesKind,
+    a: Record<string, unknown> & { confirm: boolean },
+    opts: { services?: boolean } = {},
+  ) => {
+    if (!(await tradeSalesSet(conn, kind))) return undefined;
+    const s = (k: string) => (typeof a[k] === "string" ? (a[k] as string) : undefined);
+    const goods = !opts.services && !["issuedInvoice", "receivedInvoice", "invoice"].includes(kind);
+    const input: SalesInput = {
+      organization: s("organization"),
+      operationKind: s("operationKind"),
+      counterpartyRef: s("counterpartyRef"),
+      contractRef: s("contractRef"),
+      agreementRef: s("agreementRef"),
+      warehouse: goods ? await tradeWarehouse(conn, s("warehouse")) : undefined,
+      lines: a["lines"] as SalesInput["lines"],
+      priceIncludesVat:
+        typeof a["sumIncludesVat"] === "boolean" ? (a["sumIncludesVat"] as boolean) : undefined,
+      vatTaxation: s("vatTaxation"),
+      paymentDueDate: s("paymentDueDate"),
+      status: s("status"),
+      basisRef: s("basisRef") ?? s("baseDocumentRef"),
+      basisSet: s("baseDocumentEntity"),
+      services: opts.services,
+      incomingNumber: s("incomingNumber"),
+      incomingDate: s("incomingDate"),
+      operationCode: s("operationCode"),
+      date: s("date"),
+      comment: s("comment"),
+    };
+    return createTradeSales(conn, kind, input, a.confirm);
+  };
+
   server.registerTool(
     "write.sales.create_invoice",
     {
@@ -2562,6 +2645,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         orgBankAccount: orgBankAccountField,
         // Счёт на оплату проводок не делает — счета учёта в его строках не нужны.
         lines: z.array(purchaseLine).min(1).describe("Позиции счёта"),
+        ...tradeSalesFields,
         confirm: confirmField,
       }),
       outputSchema: createResultSchema,
@@ -2576,9 +2660,23 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       orgBankAccount,
       lines,
       confirm,
+      ...ut
     }) =>
       guard("write.sales.create_invoice", async () => {
         const conn = ctx.db(database);
+        const trade = await tradeSales(conn, "invoice", {
+          ...ut,
+          organization,
+          counterpartyRef,
+          contractRef,
+          date,
+          sumIncludesVat,
+          orgBankAccount,
+          lines,
+          confirm,
+        });
+        if (trade) return trade;
+        noTradeSales(ut);
         const set = await requireEntity(
           conn,
           WRITE_DOCUMENTS.customerInvoice,
@@ -2658,7 +2756,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
             confirm && result["done"] === true
               ? ((await verifyPriceMovements(conn, entitySet, ref, post)) ??
                 (await verifyStockMovements(conn, entitySet, ref, post)) ??
-                (await verifyMoneyMovements(conn, entitySet, ref, post)))
+                (await verifyMoneyMovements(conn, entitySet, ref, post)) ??
+                (await verifySalesMovements(conn, entitySet, ref, post)))
               : undefined;
           return ok({ ...result, ...movements });
         }
@@ -2708,7 +2807,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const movements =
           (await verifyPriceMovements(conn, entitySet, guid, post)) ??
           (await verifyStockMovements(conn, entitySet, guid, post)) ??
-          (await verifyMoneyMovements(conn, entitySet, guid, post));
+          (await verifyMoneyMovements(conn, entitySet, guid, post)) ??
+          (await verifySalesMovements(conn, entitySet, guid, post));
         // Что провёл документ — сразу в ответе: проводки по регистру Хозрасчетный.
         // Сбой чтения проводок не отменяет проведения, только поясняется.
         let postings: Record<string, unknown> = {};
@@ -2886,6 +2986,13 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     warehouse: z.string().optional().describe("Название, код или Ref_Key склада (если в базе несколько)"),
     date: z.string().optional().describe("Дата документа YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
     sumIncludesVat: z.boolean().default(true).describe("Сумма включает НДС"),
+    operationKind: z
+      .string()
+      .optional()
+      .describe(
+        "Управление торговлей: хозяйственная операция (по умолчанию основная для документа; комиссия — явно)",
+      ),
+    ...tradeSalesFields,
   };
 
   /** Схема закупки: счета доходов/расходов не применяются (Дт 41/19 Кт 60). */
@@ -2935,9 +3042,23 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       sumIncludesVat,
       lines,
       confirm,
+      ...ut
     }) =>
       guard("write.purchase.create_purchase", async () => {
         const conn = ctx.db(database);
+        const trade = await tradeSales(conn, "purchase", {
+          ...ut,
+          organization,
+          counterpartyRef,
+          contractRef,
+          warehouse,
+          date,
+          sumIncludesVat,
+          lines,
+          confirm,
+        });
+        if (trade) return trade;
+        noTradeSales(ut);
         const set = await requireEntity(
           conn,
           WRITE_DOCUMENTS.purchases,
@@ -3013,6 +3134,12 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     }) =>
       guard("write.purchase.create_supplier_invoice", async () => {
         const conn = ctx.db(database);
+        if (await tradeSalesSet(conn, "purchase"))
+          return fail(
+            "В Управлении торговлей счёт поставщика не документ: оплату согласуют заявкой на расходование " +
+              "(write.money.create_payment_request), товар принимают приобретением (write.purchase.create_purchase). " +
+              "Ничего не записано.",
+          );
         const set = await requireEntity(
           conn,
           WRITE_DOCUMENTS.supplierInvoice,
@@ -3186,9 +3313,23 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       orgBankAccount,
       lines,
       confirm,
+      ...ut
     }) =>
       guard("write.sales.create_shipment", async () => {
         const conn = ctx.db(database);
+        const trade = await tradeSales(conn, "shipment", {
+          ...ut,
+          organization,
+          counterpartyRef,
+          contractRef,
+          warehouse,
+          date,
+          sumIncludesVat,
+          lines,
+          confirm,
+        });
+        if (trade) return trade;
+        noTradeSales(ut);
         const set = await requireEntity(conn, WRITE_DOCUMENTS.sales, "Документ «Реализация товаров и услуг»");
         const org = await resolveOrg(conn, organization);
         const warehouseKey = await resolveWarehouse(conn, warehouse);
@@ -3315,6 +3456,43 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     lines: Array<{ nomenclatureRef: string; quantity: number; price: number }>,
   ): GoodsLine[] => lines.map((l) => ({ ...l, vatRate: "БезНДС" }));
 
+  for (const [name, kind, title, what] of [
+    ["write.sales.create_customer_order", "customerOrder", "Создать заказ клиента", "клиента"],
+    ["write.purchase.create_supplier_order", "supplierOrder", "Создать заказ поставщику", "поставщику"],
+  ] as const)
+    server.registerTool(
+      name,
+      {
+        title,
+        description:
+          `Управление торговлей: создаёт «Заказ ${what}» со строками товаров, складом и соглашением. По умолчанию ` +
+          `статус «${kind === "customerOrder" ? "К обеспечению" : "Не согласован"}» (status — иначе). Хозяйственные операции: ` +
+          `${SALES_OPS[kind]!.join(", ")}. НЕПРОВЕДЁННЫЙ; провести — post_document. dry-run/confirm. В Бухгалтерии — отказ.`,
+        inputSchema: z.object({
+          ...goodsDocCommon,
+          lines: z
+            .array(kind === "customerOrder" ? saleLine : purchaseLine)
+            .min(1)
+            .describe("Позиции заказа"),
+          status: z
+            .string()
+            .optional()
+            .describe("Статус заказа (значение 1С, напр. КОбеспечению, НеСогласован)"),
+          confirm: confirmField,
+        }),
+        outputSchema: createResultSchema,
+      },
+      (a) =>
+        guard(name, async () => {
+          const conn = ctx.db(a.database);
+          const trade = await tradeSales(conn, kind, a);
+          if (trade) return trade;
+          return fail(
+            `Заказ ${what} — документ Управления торговлей; в этой базе его нет или он устроен иначе. Ничего не записано.`,
+          );
+        }),
+    );
+
   server.registerTool(
     "write.warehouse.create_return_from_customer",
     {
@@ -3337,9 +3515,22 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       expenseAccount,
       lines,
       confirm,
+      ...ut
     }) =>
       guard("write.warehouse.create_return_from_customer", async () => {
         const conn = ctx.db(database);
+        const trade = await tradeSales(conn, "returnFromCustomer", {
+          ...ut,
+          organization,
+          counterpartyRef,
+          contractRef,
+          warehouse,
+          date,
+          lines,
+          confirm,
+        });
+        if (trade) return trade;
+        noTradeSales(ut);
         const set = await requireEntity(
           conn,
           WRITE_DOCUMENTS.returnFromCustomer,
@@ -3378,9 +3569,21 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       inputSchema: z.object(purchaseDocInput),
       outputSchema: createResultSchema,
     },
-    ({ database, organization, counterpartyRef, contractRef, warehouse, date, lines, confirm }) =>
+    ({ database, organization, counterpartyRef, contractRef, warehouse, date, lines, confirm, ...ut }) =>
       guard("write.warehouse.create_return_to_supplier", async () => {
         const conn = ctx.db(database);
+        const trade = await tradeSales(conn, "returnToSupplier", {
+          ...ut,
+          organization,
+          counterpartyRef,
+          contractRef,
+          warehouse,
+          date,
+          lines,
+          confirm,
+        });
+        if (trade) return trade;
+        noTradeSales(ut);
         const set = await requireEntity(
           conn,
           WRITE_DOCUMENTS.returnToSupplier,
@@ -4007,6 +4210,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         ),
         orgBankAccount: orgBankAccountField,
         lines: z.array(lineObject).min(1).describe("Позиции-услуги"),
+        ...tradeSalesFields,
         confirm: confirmField,
       }),
       outputSchema: createResultSchema,
@@ -4024,9 +4228,19 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       orgBankAccount,
       lines,
       confirm,
+      ...ut
     }) =>
       guard("write.sales.create_act", async () => {
         const conn = ctx.db(database);
+        // В УТ услуги продаются реализацией: акт выполненных работ эта конфигурация через OData не проводит.
+        const trade = await tradeSales(
+          conn,
+          "shipment",
+          { ...ut, organization, counterpartyRef, contractRef, date, sumIncludesVat, lines, confirm },
+          { services: true },
+        );
+        if (trade) return trade;
+        noTradeSales(ut);
         const set = await requireEntity(conn, WRITE_DOCUMENTS.sales, "Документ «Реализация товаров и услуг»");
         const org = await resolveOrg(conn, organization);
         const bank = await resolveOrgBankAccount(conn, org.key, orgBankAccount);
@@ -4099,6 +4313,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     }) =>
       guard("write.sales.create_services_act", async () => {
         const conn = ctx.db(database);
+        if (await tradeSalesSet(conn, "shipment"))
+          return fail(
+            "В Управлении торговлей услуги продаются реализацией: используйте write.sales.create_act. Ничего не записано.",
+          );
         const set = await requireEntity(
           conn,
           WRITE_DOCUMENTS.servicesAct,
@@ -4636,13 +4854,24 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .string()
           .optional()
           .describe("Дата и дата выставления YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
+        comment: z.string().optional().describe("Управление торговлей: комментарий"),
         confirm: confirmField,
       }),
       outputSchema: createResultSchema,
     },
-    ({ database, baseDocumentRef, baseDocumentEntity, operationCode, date, confirm }) =>
+    ({ database, baseDocumentRef, baseDocumentEntity, operationCode, date, confirm, ...ut }) =>
       guard("write.sales.create_issued_invoice", async () => {
         const conn = ctx.db(database);
+        const trade = await tradeSales(conn, "issuedInvoice", {
+          ...ut,
+          baseDocumentRef,
+          baseDocumentEntity,
+          operationCode,
+          date,
+          confirm,
+        });
+        if (trade) return trade;
+        noTradeSales(ut);
         const set = await requireEntity(
           conn,
           WRITE_DOCUMENTS.issuedInvoice,
@@ -4703,13 +4932,28 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .string()
           .optional()
           .describe("Дата регистрации YYYY-MM-DD (по умолчанию — момент предпросмотра)"),
+        incomingNumber: z
+          .string()
+          .optional()
+          .describe("Управление торговлей, обязательно: номер счёта-фактуры поставщика"),
         confirm: confirmField,
       }),
       outputSchema: createResultSchema,
     },
-    ({ database, baseDocumentRef, baseDocumentEntity, incomingDate, operationCode, date, confirm }) =>
+    ({ database, baseDocumentRef, baseDocumentEntity, incomingDate, operationCode, date, confirm, ...ut }) =>
       guard("write.purchase.create_received_invoice", async () => {
         const conn = ctx.db(database);
+        const trade = await tradeSales(conn, "receivedInvoice", {
+          ...ut,
+          baseDocumentRef,
+          baseDocumentEntity,
+          incomingDate,
+          operationCode,
+          date,
+          confirm,
+        });
+        if (trade) return trade;
+        noTradeSales(ut);
         const set = await requireEntity(
           conn,
           WRITE_DOCUMENTS.receivedInvoice,

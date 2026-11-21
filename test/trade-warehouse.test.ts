@@ -697,7 +697,7 @@ describe("складские документы в Управлении торг
     });
     expect(mark.isError, mark.text).toBeFalsy();
     const other = await s.call("write.document.post_document", {
-      entitySet: "Document_РеализацияТоваровУслуг",
+      entitySet: "Document_ОтчетОРозничныхПродажах",
       ref: w.ref,
       post: true,
     });

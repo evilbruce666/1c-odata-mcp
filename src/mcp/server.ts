@@ -26,6 +26,7 @@ import { PARTNERS, tradeCounterpartySchema } from "../tools/trade-counterparty.j
 import { tradeNomenclatureSchema } from "../tools/trade-nomenclature.js";
 import { STOCK_DOCS, tradeStockSchema } from "../tools/trade-warehouse.js";
 import { MONEY_DOCS, tradeMoneySet, type MoneyKind } from "../tools/trade-money.js";
+import { SALES_DOCS, tradeSalesSet, type SalesKind } from "../tools/trade-sales.js";
 import { registerDebtTools } from "../tools/debts.js";
 import { registerMonthCloseTools } from "../tools/month-close.js";
 import { registerCardTools } from "../tools/card.js";
@@ -456,17 +457,30 @@ const money = (kind: MoneyKind) => async (conn: Connection) =>
   (await tradeMoneySet(conn, kind)) !== undefined;
 const moneyOf = (conn: Connection, a: Record<string, unknown>) =>
   money(MONEY_SETS.get(String(a.entitySet))!)(conn);
+/** Продажи и закупки УТ: реализация, приобретение, возвраты, счёт клиенту, заказы, счета-фактуры. */
+const SALES_SETS = new Map<string, SalesKind>(
+  (Object.entries(SALES_DOCS) as Array<[SalesKind, string]>).map(([k, set]) => [set, k]),
+);
+const sales = (kind: SalesKind) => async (conn: Connection) =>
+  (await tradeSalesSet(conn, kind)) !== undefined;
+const salesOf = (conn: Connection, a: Record<string, unknown>) =>
+  sales(SALES_SETS.get(String(a.entitySet))!)(conn);
 const TRADE_WRITE: Record<string, TradeWrite> = {
   "write.pricing.create_price_setting": { applies: () => true, ready: prices },
   "write.document.post_document": {
     applies: (a) =>
-      a.entitySet === PRICE_DOC || STOCK_SETS.has(String(a.entitySet)) || MONEY_SETS.has(String(a.entitySet)),
+      a.entitySet === PRICE_DOC ||
+      STOCK_SETS.has(String(a.entitySet)) ||
+      MONEY_SETS.has(String(a.entitySet)) ||
+      SALES_SETS.has(String(a.entitySet)),
     ready: (conn, a) =>
       a.entitySet === PRICE_DOC
         ? prices(conn)
         : MONEY_SETS.has(String(a.entitySet))
           ? moneyOf(conn, a)
-          : stock(String(a.entitySet))(conn),
+          : SALES_SETS.has(String(a.entitySet))
+            ? salesOf(conn, a)
+            : stock(String(a.entitySet))(conn),
   },
   // Пометка — и для справочников, которые в УТ создаются (ошибочно созданного контрагента и партнёра убрать).
   "write.entity.mark_for_deletion": {
@@ -474,17 +488,20 @@ const TRADE_WRITE: Record<string, TradeWrite> = {
       a.entitySet === PRICE_DOC ||
       TRADE_CATALOGS.has(String(a.entitySet)) ||
       STOCK_SETS.has(String(a.entitySet)) ||
-      MONEY_SETS.has(String(a.entitySet)),
+      MONEY_SETS.has(String(a.entitySet)) ||
+      SALES_SETS.has(String(a.entitySet)),
     ready: (conn, a) =>
       a.entitySet === PRICE_DOC
         ? prices(conn)
         : MONEY_SETS.has(String(a.entitySet))
           ? moneyOf(conn, a)
-          : STOCK_SETS.has(String(a.entitySet))
-            ? stock(String(a.entitySet))(conn)
-            : a.entitySet === NOMENCLATURE
-              ? nomenclature(conn)
-              : partners(conn),
+          : SALES_SETS.has(String(a.entitySet))
+            ? salesOf(conn, a)
+            : STOCK_SETS.has(String(a.entitySet))
+              ? stock(String(a.entitySet))(conn)
+              : a.entitySet === NOMENCLATURE
+                ? nomenclature(conn)
+                : partners(conn),
   },
   "write.counterparty.create_counterparty": { applies: () => true, ready: partners },
   "write.counterparty.create_partner": { applies: () => true, ready: partners },
@@ -520,6 +537,19 @@ const TRADE_WRITE: Record<string, TradeWrite> = {
       },
     ]),
   ),
+  "write.sales.create_shipment": { applies: () => true, ready: sales("shipment") },
+  "write.sales.create_act": { applies: () => true, ready: sales("shipment") },
+  // Акт услуг Бухгалтерии и счёт поставщика в УТ — отказ с указанием замены (объясняет сам инструмент).
+  "write.sales.create_services_act": { applies: () => true, ready: sales("shipment") },
+  "write.purchase.create_supplier_invoice": { applies: () => true, ready: sales("purchase") },
+  "write.purchase.create_purchase": { applies: () => true, ready: sales("purchase") },
+  "write.warehouse.create_return_from_customer": { applies: () => true, ready: sales("returnFromCustomer") },
+  "write.warehouse.create_return_to_supplier": { applies: () => true, ready: sales("returnToSupplier") },
+  "write.sales.create_invoice": { applies: () => true, ready: sales("invoice") },
+  "write.sales.create_customer_order": { applies: () => true, ready: sales("customerOrder") },
+  "write.purchase.create_supplier_order": { applies: () => true, ready: sales("supplierOrder") },
+  "write.sales.create_issued_invoice": { applies: () => true, ready: sales("issuedInvoice") },
+  "write.purchase.create_received_invoice": { applies: () => true, ready: sales("receivedInvoice") },
   "write.money.create_cash_receipt": { applies: () => true, ready: money("cashIn") },
   "write.money.create_cash_payment": { applies: () => true, ready: money("cashOut") },
   "write.money.create_payment": { applies: () => true, ready: money("bankIn") },
