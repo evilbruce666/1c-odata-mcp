@@ -762,4 +762,81 @@ describe("Бухгалтерия: прочие операции денежных
     expect(s.fake.violations, "запросы к полям, которых нет в схеме БП 3.0").toEqual([]);
     expect(s.fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
   });
+
+  it("1.1: эквайринг — строка на 57.03 с суммой, комиссия в «Сумме услуг», счёт комиссии в шапке", async () => {
+    const s = setup({
+      extra: {
+        ChartOfAccounts_Хозрасчетный: [
+          ...ACCOUNTS,
+          {
+            Ref_Key: g("a", 7),
+            Code: "57.03",
+            Description: "Эквайринг",
+            ЗапретитьИспользоватьВПроводках: false,
+            ExtDimensionTypes: [],
+          },
+        ],
+      },
+    });
+    const KIND = "ПоступленияОтПродажПоПлатежнымКартамИБанковскимКредитам";
+    const base = { operationKind: KIND, amount: 98, counterpartyRef: CP, contractRef: CTR };
+    const plain = await s.call("write.money.create_payment", base);
+    expect(plain.err, plain.text).toBe(false);
+    expect(payloadOf(plain)).toMatchObject({
+      ВидОперации: KIND,
+      ДоговорКонтрагента_Key: CTR,
+      СуммаДокумента: 98,
+      РасшифровкаПлатежа: [
+        {
+          ДоговорКонтрагента_Key: CTR,
+          СуммаПлатежа: 98,
+          СуммаВзаиморасчетов: 98,
+          СчетУчетаРасчетовСКонтрагентом_Key: g("a", 7),
+        },
+      ],
+    });
+    expect(payloadOf(plain)).not.toHaveProperty("СуммаУслуг");
+    const fee = await s.call("write.money.create_payment", {
+      ...base,
+      commission: 2,
+      corrAccount: "91.02",
+      otherItemRef: ITEM91,
+    });
+    expect(fee.err, fee.text).toBe(false);
+    expect(payloadOf(fee)).toMatchObject({
+      СуммаУслуг: 2,
+      СчетУчетаРасчетовСКонтрагентом_Key: A9102,
+      СубконтоКт1: ITEM91,
+      РасшифровкаПлатежа: [{ СуммаПлатежа: 98, СуммаУслуг: 2 }],
+    });
+    for (const [a, text] of [
+      [{ ...base, commission: 2 }, "укажите corrAccount"],
+      [{ ...base, contractRef: undefined }, "банк-эквайрер и договор"],
+      [
+        {
+          operationKind: "ОплатаПокупателя",
+          amount: 1,
+          counterpartyRef: CP,
+          contractRef: CTR,
+          commission: 1,
+        },
+        "commission — для эквайринга",
+      ],
+      [
+        {
+          operationKind: "ПрочееПоступление",
+          amount: 1,
+          corrAccount: "91.01",
+          otherItemRef: ITEM91,
+          commission: 1,
+        },
+        "commission — для эквайринга",
+      ],
+    ] as const) {
+      const r = await s.call("write.money.create_payment", a as Record<string, unknown>);
+      expect(r.err, text).toBe(true);
+      expect(r.text).toContain(text);
+    }
+    expect(s.fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
+  });
 });

@@ -36,6 +36,7 @@ import {
 } from "../odata/inventory.js";
 import { InputError } from "../errors.js";
 import { stockInsteadOfAccounts } from "../odata/stock.js";
+import { readTradeCost, tradeCostAvailable } from "../odata/trade-cost.js";
 import { tradeWithoutAccounting } from "../odata/configuration.js";
 import { RETAIL_NOT_INCLUDED } from "./sales.js";
 import { callPageStart } from "../odata/call-context.js";
@@ -719,13 +720,15 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
     {
       title: "Остатки товаров",
       description:
-        "Остатки товаров/материалов: сальдо счетов 41/10/43 регистра Хозрасчетный, сгруппированное по номенклатуре. " +
+        "Остатки товаров/материалов: сальдо счетов 41/10/43 регистра Хозрасчетный, сгруппированное по номенклатуре; в " +
+        "Управлении торговлей (Хозрасчётного нет) — количество и стоимость по регистру «Себестоимость товаров» (сумма в " +
+        "валюте регламентированного учёта, до расчёта себестоимости — предварительная). " +
         "Возвращает количество, сумму, артикул и группу номенклатуры (родитель). Можно ограничить организацией и группой " +
         "номенклатуры с её подгруппами (group). По умолчанию — текущие остатки; asOf=YYYY-MM-DD даёт остатки на конец даты. " +
         "groupBy=warehouse разбивает по складам и на первой странице добавляет итоги byWarehouse; если склад в субконто этих счетов не ведётся, " +
         "ответ скажет об этом (warehouseTracked=false), сумму и количество по складам из документов он не выводит. " +
         "Сумма на счетах без номенклатуры в субконто (например, 41.12) — в withoutNomenclature, она входит в totalAmount. " +
-        "query находит товар по части названия или артикулу: все части запроса, без учёта регистра; похожие буквы кириллицы и латиницы совпадают, только если точных совпадений нет, остальные названы в otherSimilar; словоформы не распознаются (пишите основу: «бумаг»). Итоги — только по найденному; при пустом ответе примечание говорит, есть ли товар в справочнике или группе. count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть. (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков. В УТ Хозрасчётного нет: остатки по складам — get_warehouse_stock.)",
+        "query находит товар по части названия или артикулу: все части запроса, без учёта регистра; похожие буквы кириллицы и латиницы совпадают, только если точных совпадений нет, остальные названы в otherSimilar; словоформы не распознаются (пишите основу: «бумаг»). Итоги — только по найденному; при пустом ответе примечание говорит, есть ли товар в справочнике или группе. count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть. (В БП 3.0 учёт ведётся на счетах бухучёта, а не в отдельном регистре остатков. В УТ остатки по складам без сумм, с резервом к отгрузке — get_warehouse_stock.)",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
@@ -760,22 +763,27 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
       guard("read.analytics.get_inventory", async () => {
         const t0 = Date.now();
         const conn = ctx.db(database);
-        await stockInsteadOfAccounts(conn);
-        const org = await orgKeyOf(conn, organization);
-        const accounts = await resolveAccounts(conn, accountPrefixes(conn.cfg, "inventory"));
-        const rows = await balanceByAccounts(
-          conn,
-          accounts.map((a) => a.key),
-          org.key,
-          asOf,
-        );
         const byWarehouse = groupBy === "warehouse";
+        // Управление торговлей (1.1): Хозрасчётного нет — суммы из регистра «Себестоимость товаров».
+        const trade = await tradeCostAvailable(conn);
+        if (!trade) await stockInsteadOfAccounts(conn);
+        const org = await orgKeyOf(conn, organization);
+        const accounts = trade ? [] : await resolveAccounts(conn, accountPrefixes(conn.cfg, "inventory"));
+        const rows = trade
+          ? []
+          : await balanceByAccounts(
+              conn,
+              accounts.map((a) => a.key),
+              org.key,
+              asOf,
+            );
+        const cost = trade ? await readTradeCost(conn, { orgKey: org.key, asOf, byWarehouse }) : undefined;
         const nomSet = await nomenclatureSet(conn);
-        let lines = aggregateStock(rows, byWarehouse);
+        let lines = cost ? cost.lines : aggregateStock(rows, byWarehouse);
         // До отбора по группе: при отборе может остаться только часть без склада, а вопрос про весь учёт.
         const anyStock = lines.length > 0;
         // Без типов субконто неизвестно, ведётся ли склад: это не то же самое, что «не ведётся».
-        const typesKnown = rows.some(hasSubcontoTypes);
+        const typesKnown = !!cost || rows.some(hasSubcontoTypes);
         const tracked = lines.some((l) => l.warehouseRef);
         const pageStart = callPageStart();
 
@@ -832,7 +840,22 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         const noItem = lines.filter((l) => !l.itemRef);
         const noItemCents = noItem.reduce((s, l) => s + l.cents, 0);
         const totalCents = lines.reduce((s, l) => s + l.cents, 0);
-        const notes = await selectionNotes(conn, nomSet, sel, { group, query }, "остатка на счетах");
+        const notes = await selectionNotes(
+          conn,
+          nomSet,
+          sel,
+          { group, query },
+          cost ? "остатка в себестоимости" : "остатка на счетах",
+        );
+        if (cost)
+          notes.push(
+            "Управление торговлей: количество и сумма — по регистру «Себестоимость товаров», сумма в валюте " +
+              "регламентированного учёта. " +
+              (cost.lastCalc
+                ? `Последний расчёт себестоимости — ${cost.lastCalc}; движения после него оценены предварительно, до следующего расчёта.`
+                : "Расчёт себестоимости не найден: суммы предварительные, до закрытия месяца.") +
+              " Количество может отличаться от get_warehouse_stock на товары вне складов (в пути, у комиссионера).",
+          );
         if (noItem.length) {
           notes.push(
             "В totalAmount входит withoutNomenclature: сумма строк без номенклатуры в субконто (она не ведётся на счёте, как на 41.12, или не заполнена).",
@@ -911,7 +934,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
             : {}),
           ...(notes.length ? { note: notes.join(" ") } : {}),
           items,
-          scan: { rowsScanned: rows.length, elapsedMs: Date.now() - t0 },
+          scan: { rowsScanned: cost ? cost.rows : rows.length, elapsedMs: Date.now() - t0 },
         });
       }),
   );

@@ -1,4 +1,5 @@
 import {
+  ACQUIRING_KIND,
   NO_SETTLEMENT_KINDS,
   OTHER_OPERATIONS,
   TRANSFER_KIND,
@@ -4645,7 +4646,9 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     a: Record<string, unknown> & { operationKind?: string; amount: number; confirm: boolean },
   ) => {
     if (!(await tradeMoneySet(conn, kind))) return undefined;
-    const bpOnly = ["corrAccount", "otherItemRef", "targetBankAccount"].filter((k) => a[k] !== undefined);
+    const bpOnly = ["corrAccount", "otherItemRef", "targetBankAccount", "commission"].filter(
+      (k) => a[k] !== undefined,
+    );
     if (bpOnly.length)
       throw new InputError(
         `Параметры ${bpOnly.join(", ")} — только для Бухгалтерии` +
@@ -4699,6 +4702,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "курс укажите в 1С, иначе 1С проведёт оплату без проводок. " +
         "Бухгалтерия, operationKind=«ПрочееПоступление» — прочее поступление без договора: корреспондирующий счёт " +
         "corrAccount (напр. «91.01») обязателен, субконто — otherItemRef, counterpartyRef, contractRef, cashflowItemRef. " +
+        "Бухгалтерия, эквайринг — operationKind=«ПоступленияОтПродажПоПлатежнымКартамИБанковскимКредитам»: банк-эквайрер (counterpartyRef), договор с ним (contractRef), amount — поступило на счёт, commission — комиссия банка (с corrAccount «91.02» и otherItemRef); проводки Дт 51 Кт 57.03 и Дт 91.02 Кт 57.03. " +
         "Банковский счёт организации берётся по названию или первый. dry-run/confirm.",
       inputSchema: z.object({
         database: databaseField,
@@ -4736,7 +4740,14 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         cashflowItemRef: z
           .string()
           .optional()
-          .describe("Бухгалтерия, «ПрочееПоступление»: Ref_Key статьи ДДС"),
+          .describe("Бухгалтерия, «ПрочееПоступление» и эквайринг: Ref_Key статьи ДДС"),
+        commission: z
+          .number()
+          .nonnegative()
+          .optional()
+          .describe(
+            "Бухгалтерия, эквайринг («ПоступленияОтПродажПоПлатежнымКартамИБанковскимКредитам»): комиссия банка; amount — сумма, поступившая на счёт. При комиссии — corrAccount (счёт расходов, напр. «91.02») и otherItemRef",
+          ),
         lines: settlementLinesField,
         ...tradeMoneyFields,
         confirm: confirmField,
@@ -4758,6 +4769,10 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           if (a.lines)
             throw new InputError(
               "lines — для оплаты по договорам, у прочего поступления строк по договорам нет. Ничего не записано.",
+            );
+          if (a.commission !== undefined)
+            throw new InputError(
+              `commission — для эквайринга (operationKind «${ACQUIRING_KIND}»). Ничего не записано.`,
             );
           if (a.purposeText !== undefined)
             throw new InputError("purposeText — только для Управления торговлей. Ничего не записано.");
@@ -4798,6 +4813,77 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
             corrAccountGiven: true,
           });
         }
+        // Эквайринг: банк-эквайрер и договор с ним, строка расчётов на 57.03 (не по настройке договора — у договора
+        // с банком она 60), комиссия — в «Сумме услуг» шапки и строки, её счёт (91.02 со статьёй) — в шапке. Так
+        // заполнены документы рабочей БП 3.0; проводки Дт 51 Кт 57.03 и Дт 91.02 Кт 57.03.
+        if (operationKind === ACQUIRING_KIND) {
+          if (a.purposeText !== undefined || a.lines)
+            throw new InputError(
+              "Эквайринг: purposeText и lines не поддержаны — одна строка по договору с банком. Ничего не записано.",
+            );
+          if (!a.counterpartyRef || !a.contractRef)
+            throw new InputError(
+              "Эквайринг: укажите counterpartyRef и contractRef — банк-эквайрер и договор эквайринга. Ничего не записано.",
+            );
+          const commission = a.commission ?? 0;
+          if (commission > 0 && !a.corrAccount)
+            throw new InputError(
+              "Эквайринг с комиссией: укажите corrAccount — счёт расходов на комиссию (напр. «91.02») и otherItemRef — статью. Ничего не записано.",
+            );
+          const set = await requireEntity(
+            conn,
+            WRITE_DOCUMENTS.bankIn,
+            "Документ «Поступление на расчётный счёт»",
+          );
+          const other = await otherOperationFields(conn, operationKind, a, [
+            "cashflowItemRef",
+            "counterpartyRef",
+            "contractRef",
+          ]);
+          const transit = (await accountsByCode(conn, ["57.03"])).get("57.03");
+          if (!transit) throw new InputError("Счёт 57.03 не найден в плане счетов. Ничего не записано.");
+          const org = await resolveOrg(conn, organization);
+          const bank = await resolveOrgBankAccount(conn, org.key, orgBankAccount);
+          const cpSet = resolveEntity(CATALOGS.counterparties, await conn.available());
+          const payload = clean({
+            Date: await docDate(conn, date),
+            Posted: false,
+            ВидОперации: operationKind,
+            Организация_Key: org.key,
+            СчетОрганизации_Key: bank,
+            Контрагент: a.counterpartyRef,
+            ...(cpSet ? { Контрагент_Type: `StandardODATA.${cpSet}` } : {}),
+            ДоговорКонтрагента_Key: a.contractRef,
+            СуммаДокумента: amount,
+            ...(commission > 0 ? { СуммаУслуг: commission } : {}),
+            СтатьяДвиженияДенежныхСредств_Key: a.cashflowItemRef,
+            Комментарий: a.comment,
+            ...(other ? other.fields : {}),
+            РасшифровкаПлатежа: [
+              clean({
+                LineNumber: 1,
+                ДоговорКонтрагента_Key: a.contractRef,
+                СпособПогашенияЗадолженности: "Автоматически",
+                СуммаПлатежа: amount,
+                СуммаВзаиморасчетов: amount,
+                КурсВзаиморасчетов: 1,
+                КратностьВзаиморасчетов: 1,
+                СтавкаНДС: "БезНДС",
+                СчетУчетаРасчетовСКонтрагентом_Key: transit,
+                СтатьяДвиженияДенежныхСредств_Key: a.cashflowItemRef,
+                ...(commission > 0 ? { СуммаУслуг: commission } : {}),
+              }),
+            ],
+          });
+          return createOrPreview(conn, set, payload, confirm, other?.notes, {
+            keepSettlement: true,
+            corrAccountGiven: !!other,
+          });
+        }
+        if (a.commission !== undefined)
+          throw new InputError(
+            `commission — для эквайринга (operationKind «${ACQUIRING_KIND}»). Ничего не записано.`,
+          );
         if (a.purposeText !== undefined || a.comment !== undefined)
           throw new InputError(
             "purposeText и comment — только для Управления торговлей (comment в Бухгалтерии — у «ПрочееПоступление»). Ничего не записано.",

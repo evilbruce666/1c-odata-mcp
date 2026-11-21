@@ -917,6 +917,20 @@ describe("1.1: перевод между счетами — параметр Б�
     expect(r.text).toContain("targetBankAccount — только для Бухгалтерии");
     expect(s.posts).toEqual([]);
   });
+
+  it("commission в Управлении торговлей — отказ (эквайринг УТ — своя хозяйственная операция)", async () => {
+    const s = setup();
+    const r = await s.call(BIN, {
+      ...base,
+      operationKind: "ПоступлениеОплатыОтКлиента",
+      orgBankAccount: BANK,
+      counterpartyRef: CP,
+      commission: 1,
+    });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("commission — только для Бухгалтерии");
+    expect(s.posts).toEqual([]);
+  });
 });
 
 describe("1.1: оплата несколькими строками по документам расчётов (lines)", () => {

@@ -422,8 +422,12 @@ describe("неопубликованные регистры: понятный о
     );
   });
 
-  it("get_inventory в УТ — отказ ведёт к get_warehouse_stock, а не к публикации Хозрасчётного", async () => {
-    const { call } = await setup();
+  it("get_inventory в УТ без регистра себестоимости — отказ ведёт к get_warehouse_stock, а не к публикации Хозрасчётного", async () => {
+    const { call, fake } = await setup();
+    const available = await fake.conn.available();
+    vi.spyOn(fake.conn, "available").mockResolvedValue(
+      new Set([...available].filter((s) => s !== "AccumulationRegister_СебестоимостьТоваров")),
+    );
     const r = await call({}, "read.analytics.get_inventory");
     expect(r.isError).toBe(true);
     expect(r.text).toContain("read.analytics.get_warehouse_stock");
@@ -519,5 +523,92 @@ describe("resolveItemGroup: пути", () => {
       { ref: G(61), name: "Б", parent: G(60) },
     ];
     expect(groupPath(loop[0]!, loop)).toBe("Б/А");
+  });
+});
+
+describe("1.1: get_inventory в УТ — количество и стоимость по регистру «Себестоимость товаров»", () => {
+  const ORG1 = uuid("e", 1);
+  const ORG2 = uuid("e", 2);
+  const PARTNER = uuid("f", 1);
+  const cost = (org: string, item: string, place: string, type: string, q: number, sum: number) => ({
+    Организация_Key: org,
+    КоличествоBalance: q,
+    СтоимостьРеглBalance: sum,
+    АналитикаУчетаНоменклатуры: {
+      Номенклатура_Key: item,
+      МестоХранения: place,
+      МестоХранения_Type: `StandardODATA.${type}`,
+    },
+  });
+  const COST = [
+    cost(ORG1, I(1), W(1), "Catalog_Склады", 3, 300.1),
+    cost(ORG1, I(1), W(4), "Catalog_Склады", 2, 200.2),
+    // Товар у партнёра (не на складе): в разбивке по складам — без склада.
+    cost(ORG1, I(2), PARTNER, "Catalog_Партнеры", 1, 50),
+    cost(ORG2, I(3), W(1), "Catalog_Склады", 5, 75),
+  ];
+  async function costSetup() {
+    const base = data(BALANCE);
+    const fake = fake1C(
+      { READ_ONLY: "true" },
+      {
+        schema: "ut11",
+        data: (q) => {
+          if (q.base === "AccumulationRegister_СебестоимостьТоваров" && q.fn === "Balance") {
+            const org = guidsIn(q.args["Condition"] ?? "")[0];
+            return org ? COST.filter((r) => r.Организация_Key === org) : COST;
+          }
+          if (q.base === "Catalog_Организации")
+            return [
+              { Ref_Key: ORG1, Description: "Орг 1" },
+              { Ref_Key: ORG2, Description: "Орг 2" },
+            ];
+          return base(q);
+        },
+      },
+    );
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await createServer(fake.ctx).connect(a);
+    const client = new Client({ name: "t", version: "1" });
+    await client.connect(b);
+    const call = async (args: object = {}) => {
+      const r = (await client.callTool({ name: "read.analytics.get_inventory", arguments: args })) as {
+        isError?: boolean;
+        structuredContent: Record<string, unknown> & { items: Array<Record<string, unknown>> };
+        content: { text: string }[];
+      };
+      return { ...r, text: r.content.map((c) => c.text).join("") };
+    };
+    return { call, fake };
+  }
+
+  it("все организации: сумма и количество по товару, итог; заметка об источнике", async () => {
+    const { call, fake } = await costSetup();
+    const r = await call();
+    expect(r.isError, r.text).toBeFalsy();
+    const s = r.structuredContent;
+    expect(s["totalAmount"]).toBe(625.3);
+    const byRef = Object.fromEntries(s.items.map((i) => [i["ref"], [i["quantity"], i["amount"]]]));
+    expect(byRef).toEqual({ [I(1)]: [5, 500.3], [I(2)]: [1, 50], [I(3)]: [5, 75] });
+    expect(String(s["note"])).toContain("Себестоимость товаров");
+    expect(fake.violations).toEqual([]);
+  });
+
+  it("организация — отбор на стороне 1С; по складам — склад, товар у партнёра без склада", async () => {
+    const { call, fake } = await costSetup();
+    const r = await call({ organization: ORG1, groupBy: "warehouse" });
+    expect(r.isError, r.text).toBeFalsy();
+    const s = r.structuredContent;
+    expect(s["totalAmount"]).toBe(550.3);
+    const rows = s.items.map((i) => [i["ref"], i["warehouseRef"] ?? null, i["amount"]]);
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        [I(1), W(1), 300.1],
+        [I(1), W(4), 200.2],
+        [I(2), null, 50],
+      ]),
+    );
+    expect(rows).toHaveLength(3);
+    expect(fake.violations).toEqual([]);
   });
 });

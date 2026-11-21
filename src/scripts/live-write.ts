@@ -498,6 +498,65 @@ async function main(): Promise<number> {
           );
         }
       }
+      // Эквайринг: банк-эквайрер — тестовый контрагент с договором; поступление 8 и комиссия 2 → Дт 51 Кт 57.03 8 и
+      // Дт 91.02 Кт 57.03 2.
+      const acqCtr = multiCp
+        ? await flow("write.catalog.create_contract", {
+            counterpartyRef: String(multiCp["ref"]),
+            kind: "СПоставщиком",
+          })
+        : undefined;
+      if (multiCp && acqCtr && otherItem) {
+        const acq = await flow(
+          "write.money.create_payment",
+          {
+            operationKind: "ПоступленияОтПродажПоПлатежнымКартамИБанковскимКредитам",
+            amount: 8,
+            commission: 2,
+            counterpartyRef: String(multiCp["ref"]),
+            contractRef: String(acqCtr["ref"]),
+            corrAccount: "91.02",
+            otherItemRef: String(otherItem["Ref_Key"]),
+            comment: tag,
+          },
+          "эквайринг с комиссией",
+        );
+        if (acq) {
+          const set = String(acq["entitySet"]);
+          const ref = String(acq["ref"]);
+          const p = await run("write.document.post_document", {
+            entitySet: set,
+            ref,
+            post: true,
+            confirm: true,
+          });
+          const codes = new Map(
+            (
+              await client.getCollection("ChartOfAccounts_Хозрасчетный?$format=json&$select=Ref_Key,Code")
+            ).value.map((a) => [a["Ref_Key"], String(a["Code"])]),
+          );
+          const recs = p.err
+            ? []
+            : (
+                await client.getCollection(
+                  `AccountingRegister_Хозрасчетный/RecordsWithExtDimensions?$format=json&$filter=${encodeURIComponent(`Recorder eq cast(guid'${ref}', '${set}')`)}`,
+                )
+              ).value;
+          if (!p.err)
+            await run("write.document.post_document", { entitySet: set, ref, post: false, confirm: true });
+          const got = recs
+            .map(
+              (r) =>
+                `${codes.get(r["AccountDr_Key"])}/${codes.get(r["AccountCr_Key"])}/${Number(r["Сумма"])}`,
+            )
+            .sort();
+          check(
+            "эквайринг: Дт 51 Кт 57.03 8, Дт 91.02 Кт 57.03 2",
+            !p.err && JSON.stringify(got) === JSON.stringify(["51/57.03/8", "91.02/57.03/2"]),
+            p.err ? p.text.slice(0, 160) : JSON.stringify(got),
+          );
+        }
+      }
       // Перевод между своими счетами: нужна организация с двумя счетами в одной валюте. Проводка — Дт 51 по
       // счёту-получателю, Кт 51 по счёту-отправителю (или Дт 57.01 Кт 51 — если 1С ведёт перевод через 57.01).
       const accounts = (
