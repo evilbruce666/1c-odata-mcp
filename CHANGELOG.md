@@ -5,6 +5,8 @@
 
 ## [Не выпущено]
 
+## [1.0.0] — 2026-11-21
+
 **Главное.** Полная поддержка Бухгалтерии 3.0 и Управления торговлей 11 на чтение и запись — по каждому инструменту с проверкой на живых базах ([docs/SUPPORT.md](docs/SUPPORT.md)); запись и в режиме сервера (HTTP) для ботов и своих приложений; оплата несколькими строками, перевод между счетами, эквайринг; остатки со стоимостью в УТ. С этой версии — политика совместимости ([docs/VERSIONING.md](docs/VERSIONING.md)).
 
 ### Что изменится при обновлении
@@ -990,7 +992,8 @@ POST-тестом (create → read → mark) на реальной базе — 
   коды плана счетов); вежливый фоллбэк при отсутствии объекта в «Составе OData».
 - npm-пакет с запуском через `npx 1c-odata-mcp`.
 
-[Не выпущено]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.17.0...HEAD
+[Не выпущено]: https://github.com/evilbruce666/1c-odata-mcp/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.17.0...v1.0.0
 [0.17.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.14.0...v0.15.0
