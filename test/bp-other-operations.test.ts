@@ -76,7 +76,14 @@ const KINDS = [
   },
 ];
 
-function setup(o: { kinds500?: boolean; plainChart?: boolean; env?: Record<string, string> } = {}) {
+function setup(
+  o: {
+    kinds500?: boolean;
+    plainChart?: boolean;
+    env?: Record<string, string>;
+    extra?: Record<string, Record<string, unknown>[]>;
+  } = {},
+) {
   const fake = fake1C(
     {
       READ_ONLY: "false",
@@ -88,13 +95,15 @@ function setup(o: { kinds500?: boolean; plainChart?: boolean; env?: Record<strin
       data: (q) =>
         q.fn || o.plainChart
           ? undefined
-          : q.base === "ChartOfAccounts_Хозрасчетный"
-            ? ACCOUNTS
-            : q.base === "ChartOfCharacteristicTypes_ВидыСубконтоХозрасчетные"
-              ? o.kinds500
-                ? []
-                : KINDS
-              : undefined,
+          : o.extra?.[q.base]
+            ? o.extra[q.base]
+            : q.base === "ChartOfAccounts_Хозрасчетный"
+              ? ACCOUNTS
+              : q.base === "ChartOfCharacteristicTypes_ВидыСубконтоХозрасчетные"
+                ? o.kinds500
+                  ? []
+                  : KINDS
+                : undefined,
     },
   );
   const tools = (
@@ -271,7 +280,7 @@ describe("Бухгалтерия: прочие операции денежных
     expect(emptySettlementWarning(created, { ДоговорКонтрагента_Key: CTR })).toContain("пуст счёт расчётов");
   });
 
-  it("списание: налог — счёт обязателен; зарплата, снятие наличных, перевод — отказ; комиссия и депозит — счёт по желанию; строка с суммой у любого вида без договора", async () => {
+  it("списание: налог — счёт обязателен; зарплата и снятие наличных — отказ; комиссия и депозит — счёт по желанию; строка с суммой у любого вида без договора", async () => {
     const s = setup();
     const noAcc = await s.call("write.money.create_bank_writeoff", {
       operationKind: "ПеречислениеНалога",
@@ -279,12 +288,11 @@ describe("Бухгалтерия: прочие операции денежных
     });
     expect(noAcc.err).toBe(true);
     expect(noAcc.text).toContain("укажите корреспондирующий счёт");
-    // Зарплата, снятие наличных, перевод на другой счёт: 1С проводила их без проводок или Дт 51 Кт 51 — отказ,
+    // Зарплата и снятие наличных: 1С проводила их без проводок — отказ,
     // и со счётом тоже.
     for (const [op, text] of [
       ["ПеречислениеЗП", "по ведомости"],
       ["СнятиеНаличных", "без проводок"],
-      ["ПереводНаДругойСчет", "счёта-получателя"],
     ] as const) {
       const r = await s.call("write.money.create_bank_writeoff", {
         operationKind: op,
@@ -555,5 +563,113 @@ describe("Бухгалтерия: прочие операции денежных
       );
       expect(/пуст счёт расчётов/.test(JSON.stringify(c.structuredContent)), kind).toBe(warn);
     }
+  });
+
+  it("1.1: перевод между своими счетами — счёт-получатель обязателен, той же организации и валюты; строка с суммой", async () => {
+    const ORG = g("e", 1);
+    const OTHER_ORG = g("e", 2);
+    const RUB = g("e", 3);
+    const USD = g("e", 4);
+    const [B1, B2, B3, B4] = [g("f", 1), g("f", 2), g("f", 3), g("f", 4)];
+    const s = setup({
+      extra: {
+        Catalog_Организации: [{ Ref_Key: ORG, Description: "Орг", ОсновнойБанковскийСчет_Key: B1 }],
+        Catalog_БанковскиеСчета: [
+          {
+            Ref_Key: B1,
+            Owner: ORG,
+            Owner_Type: "StandardODATA.Catalog_Организации",
+            Description: "Основной",
+            НомерСчета: "40702810000000000001",
+            ВалютаДенежныхСредств_Key: RUB,
+            DeletionMark: false,
+          },
+          {
+            Ref_Key: B2,
+            Owner: ORG,
+            Owner_Type: "StandardODATA.Catalog_Организации",
+            Description: "Второй",
+            НомерСчета: "40702810000000000002",
+            ВалютаДенежныхСредств_Key: RUB,
+            DeletionMark: false,
+          },
+          {
+            Ref_Key: B3,
+            Owner: ORG,
+            Owner_Type: "StandardODATA.Catalog_Организации",
+            Description: "Валютный",
+            НомерСчета: "40702840000000000003",
+            ВалютаДенежныхСредств_Key: USD,
+            DeletionMark: false,
+          },
+          {
+            Ref_Key: B4,
+            Owner: OTHER_ORG,
+            Owner_Type: "StandardODATA.Catalog_Организации",
+            Description: "Чужой",
+            НомерСчета: "40702810000000000004",
+            ВалютаДенежныхСредств_Key: RUB,
+            DeletionMark: false,
+          },
+        ],
+      },
+    });
+    const tr = (a: Record<string, unknown>) =>
+      s.call("write.money.create_bank_writeoff", { operationKind: "ПереводНаДругойСчет", amount: 7, ...a });
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{}, "укажите targetBankAccount"],
+      [{ targetBankAccount: B1 }, "совпадает"],
+      [{ targetBankAccount: B3 }, "Валюта счёта-получателя"],
+      [{ targetBankAccount: B4 }, "не банковский счёт этой организации"],
+      [{ targetBankAccount: B2, counterpartyRef: CP }, "нет контрагента"],
+      [{ targetBankAccount: B2, corrAccount: "57.01" }, "corrAccount и otherItemRef — только"],
+    ];
+    for (const [a, text] of cases) {
+      const r = await tr(a);
+      expect(r.err, JSON.stringify(a)).toBe(true);
+      expect(r.text).toContain(text);
+    }
+    // targetBankAccount у другого вида — отказ, а не тихий пропуск.
+    const fee = await s.call("write.money.create_bank_writeoff", {
+      operationKind: "КомиссияБанка",
+      amount: 1,
+      targetBankAccount: B2,
+    });
+    expect(fee.err).toBe(true);
+    expect(fee.text).toContain("только для операции «ПереводНаДругойСчет»");
+    // Счёт-получатель по названию; отправитель — основной счёт организации.
+    const ok = await tr({ targetBankAccount: "Второй" });
+    expect(ok.err, ok.text).toBe(false);
+    const p = payloadOf(ok);
+    expect(p).toMatchObject({
+      ВидОперации: "ПереводНаДругойСчет",
+      СчетОрганизации_Key: B1,
+      СчетКонтрагента_Key: B2,
+      РасшифровкаПлатежа: [{ LineNumber: 1, СуммаПлатежа: 7 }],
+    });
+    expect(p).not.toHaveProperty("Контрагент");
+    expect(JSON.stringify(ok.sc["notes"] ?? ok.text)).toContain("Схему перевода выбирает 1С");
+    expect(s.fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
+  });
+
+  it("1.1: перевод в копии и правке — без счёта-получателя отказ", async () => {
+    const s = setup({ plainChart: true });
+    const SET = "Document_СписаниеСРасчетногоСчета";
+    const ref = g("d", 1);
+    const copy = await s.call("write.document.copy_document", {
+      entitySet: SET,
+      ref,
+      fields: { ВидОперации: "ПереводНаДругойСчет" },
+    });
+    expect(copy.err).toBe(true);
+    expect(copy.text).toContain("без счёта-получателя");
+    const upd = await s.call("write.entity.update_entity", {
+      entitySet: SET,
+      ref,
+      fields: { ВидОперации: "ПереводНаДругойСчет" },
+    });
+    expect(upd.err).toBe(true);
+    expect(upd.text).toContain("правкой нельзя");
+    expect(s.fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
   });
 });

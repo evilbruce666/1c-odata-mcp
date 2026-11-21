@@ -1,6 +1,7 @@
 import {
   NO_SETTLEMENT_KINDS,
   OTHER_OPERATIONS,
+  TRANSFER_KIND,
   WRITEOFF_REFUSED,
   otherOperationFields,
 } from "../odata/corr-account.js";
@@ -1464,14 +1465,87 @@ export async function withSettlementAccounts(
   return { payload: next, notes };
 }
 
+const TRANSFER_NOTE =
+  "Схему перевода выбирает 1С: проверьте проводки после проведения (read.accounting.get_document_postings). " +
+  "Дт 51 Кт 51 между счетами — перевод отражён этим документом, поступление на счёт-получатель не создавайте. " +
+  "Дт 57.01 Кт 51 — деньги в пути: поступление «Перевод с другого счёта» на счёт-получатель оформите в 1С.";
+
+/**
+ * Счёт-получатель перевода: банковский счёт той же организации, не счёт-отправитель, в той же валюте (перевод в другой
+ * валюте — покупка или продажа валюты, другой вид операции). Проверено проведением на рабочей БП 3.0 (21.11.2026).
+ */
+async function transferTarget(
+  conn: Connection,
+  orgKey: string,
+  source: string | undefined,
+  a: {
+    targetBankAccount?: string | undefined;
+    counterpartyRef?: string | undefined;
+    contractRef?: string | undefined;
+  },
+): Promise<{ ref: string }> {
+  if (a.counterpartyRef || a.contractRef)
+    throw new InputError(
+      `У перевода между своими счетами нет контрагента и договора — уберите counterpartyRef и contractRef. Ничего не записано.`,
+    );
+  if (!a.targetBankAccount?.trim())
+    throw new InputError(
+      `Для операции «${TRANSFER_KIND}» укажите targetBankAccount — счёт-получатель той же организации: без него 1С проведёт Дт 51 Кт 51 по одному счёту. Ничего не записано.`,
+    );
+  if (!source)
+    throw new InputError(
+      "Для перевода укажите orgBankAccount — счёт-отправитель: основной счёт организации не определён. Ничего не записано.",
+    );
+  const ref = await resolveOrgBankAccount(conn, orgKey, a.targetBankAccount);
+  if (!ref) throw new InputError("Счёт-получатель не найден. Ничего не записано.");
+  if (ref === source)
+    throw new InputError("Счёт-получатель совпадает со счётом-отправителем. Ничего не записано.");
+  const set = resolveEntity(CATALOGS.bankAccounts, await conn.available());
+  if (!set) throw new InputError("Справочник банковских счетов не опубликован в OData. Ничего не записано.");
+  const read = (r: string) =>
+    conn.client.getEntity<ODataEntity>(
+      `${set}(${odataGuid(r)})${buildQuery({ select: ["Ref_Key", "Owner", "ВалютаДенежныхСредств_Key"] })}`,
+    );
+  const [src, dst] = await Promise.all([read(source), read(ref)]);
+  if (String(dst["Owner"] ?? "") !== orgKey)
+    throw new InputError(
+      "Счёт-получатель — не банковский счёт этой организации. Перевод контрагенту — другой вид операции. Ничего не записано.",
+    );
+  if (String(dst["ВалютаДенежныхСредств_Key"] ?? "") !== String(src["ВалютаДенежныхСредств_Key"] ?? ""))
+    throw new InputError(
+      "Валюта счёта-получателя другая: это покупка или продажа валюты — оформите её в 1С. Ничего не записано.",
+    );
+  return { ref };
+}
+
 /**
  * Вид списания, который 1С из OData-записи проводит неверно (WRITEOFF_REFUSED), — отказ и в копии, и при смене вида
  * операции через update_entity, не только при создании (ревью выпуска 5).
  */
-function writeoffKindRefusal(entitySet: string, kind: unknown): string | undefined {
+function writeoffKindRefusal(
+  entitySet: string,
+  fields: Record<string, unknown>,
+  /** Правка через update_entity: остальных реквизитов документа здесь нет. */
+  isUpdate = false,
+): string | undefined {
+  const kind = fields["ВидОперации"];
   if (!(WRITE_DOCUMENTS.bankOut as readonly string[]).includes(entitySet) || typeof kind !== "string")
     return undefined;
-  return Object.hasOwn(WRITEOFF_REFUSED, kind) ? `${WRITEOFF_REFUSED[kind]} Ничего не записано.` : undefined;
+  if (Object.hasOwn(WRITEOFF_REFUSED, kind)) return `${WRITEOFF_REFUSED[kind]} Ничего не записано.`;
+  // Перевод без счёта-получателя (или на тот же счёт) 1С проводит Дт 51 Кт 51 по одному счёту — проводка без смысла.
+  if (kind === TRANSFER_KIND) {
+    if (isUpdate)
+      return "Сменить вид операции на перевод на другой счёт правкой нельзя: нужен счёт-получатель. Создайте перевод — write.money.create_bank_writeoff с targetBankAccount. Ничего не записано.";
+    const target = fields["СчетКонтрагента_Key"];
+    if (
+      typeof target !== "string" ||
+      !target ||
+      target === EMPTY_REF ||
+      target === fields["СчетОрганизации_Key"]
+    )
+      return "Перевод на другой счёт без счёта-получателя (или на тот же счёт) 1С проведёт Дт 51 Кт 51 по одному счёту. Укажите в fields СчетКонтрагента_Key — другой банковский счёт организации. Ничего не записано.";
+  }
+  return undefined;
 }
 
 /** После записи: счёт расчётов пуст — 1С проведёт документ без проводок по расчётам, молча. */
@@ -2922,7 +2996,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           return updateTradeMoney(conn, entitySet, ref, fields, confirm, (f) =>
             patchOrPreview(conn, entitySet, ref, f, confirm),
           );
-        const refusedKind = writeoffKindRefusal(entitySet, fields["ВидОперации"]);
+        const refusedKind = writeoffKindRefusal(entitySet, fields, true);
         if (refusedKind) return fail(refusedKind);
         return patchOrPreview(conn, entitySet, ref, fields, confirm);
       }),
@@ -4183,7 +4257,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         }
         // Реквизиты шапки применяем последними — явное указание важнее пересчёта.
         Object.assign(payload, fields ?? {});
-        const refusedKind = writeoffKindRefusal(entitySet, payload["ВидОперации"]);
+        const refusedKind = writeoffKindRefusal(entitySet, payload);
         if (refusedKind) return fail(refusedKind);
         // Копия сохраняет счета расчётов исходного документа (бухгалтер мог поставить их вручную).
         // Настройку договора применяем, только если в fields сменили договор и счета не заданы явно.
@@ -4840,7 +4914,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       description:
         "Создаёт документ «Списание с расчётного счёта» (исходящий платёж с банка). НЕПРОВЕДЁННЫЙ; " +
         "провести — post_document. Вид операции ОБЯЗАТЕЛЕН и не угадывается (напр. «ОплатаПоставщику», " +
-        "«ПеречислениеНалога», «ПрочееСписание», «КомиссияБанка»; «ПеречислениеЗП», «СнятиеНаличных» и «ПереводНаДругойСчет» — отказ: их оформляют в 1С). " +
+        "«ПеречислениеНалога», «ПрочееСписание», «КомиссияБанка», «ПереводНаДругойСчет»; «ПеречислениеЗП» и «СнятиеНаличных» — отказ: их оформляют в 1С). " +
+        "Перевод между своими счетами — operationKind «ПереводНаДругойСчет» и targetBankAccount (счёт-получатель той же организации, в той же валюте). " +
         "Для оплаты поставщику с договором заполняется расшифровка: счёт расчётов — по настройке договора, источник виден в предпросмотре (обычно 60), сумма взаиморасчётов — для рублёвого договора. dry-run/confirm.",
       inputSchema: z.object({
         database: databaseField,
@@ -4868,6 +4943,12 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           .string()
           .optional()
           .describe("Бухгалтерия: Ref_Key статьи прочих доходов и расходов — субконто счёта 91"),
+        targetBankAccount: z
+          .string()
+          .optional()
+          .describe(
+            "Бухгалтерия, «ПереводНаДругойСчет» (ОБЯЗАТЕЛЕН): счёт-получатель — банковский счёт той же организации, Ref_Key, номер или часть названия",
+          ),
         ...tradeMoneyFields,
         confirm: confirmField,
       }),
@@ -4919,6 +5000,16 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         ]);
         const org = await resolveOrg(conn, organization);
         const bank = await resolveOrgBankAccount(conn, org.key, orgBankAccount);
+        const transfer =
+          operationKind === TRANSFER_KIND
+            ? await transferTarget(conn, org.key, bank, a)
+            : a.targetBankAccount !== undefined
+              ? (() => {
+                  throw new InputError(
+                    `targetBankAccount — только для операции «${TRANSFER_KIND}». Ничего не записано.`,
+                  );
+                })()
+              : undefined;
         const bd = await buildSettlementRow(conn, operationKind, contractRef, amount);
         const payload = clean({
           Date: await docDate(conn, date),
@@ -4933,6 +5024,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           СтатьяДвиженияДенежныхСредств_Key: cashflowItemRef,
           Комментарий: comment,
           ...(other ? other.fields : {}),
+          ...(transfer ? { СчетКонтрагента_Key: transfer.ref } : {}),
           // Без договорной строки 1С при записи добавляет строку расшифровки с нулевой суммой, и проведение
           // останавливала проверка суммы: у видов без расчётов из белого списка (проверены проведением на рабочей
           // БП 3.0) отправляем строку с суммой документа; расчётным видам — как раньше.
@@ -4942,6 +5034,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
               ? { РасшифровкаПлатежа: [{ LineNumber: 1, СуммаПлатежа: amount }] }
               : {}),
         });
+        if (transfer) return createOrPreview(conn, set, payload, confirm, [TRANSFER_NOTE]);
         return other
           ? createOrPreview(conn, set, payload, confirm, other.notes, {
               keepSettlement: true,

@@ -348,6 +348,72 @@ async function main(): Promise<number> {
           posted?.text.slice(0, 80) ?? "",
         );
       }
+      // Перевод между своими счетами: нужна организация с двумя счетами в одной валюте. Проводка — Дт 51 по
+      // счёту-получателю, Кт 51 по счёту-отправителю (или Дт 57.01 Кт 51 — если 1С ведёт перевод через 57.01).
+      const accounts = (
+        await client.getCollection(
+          "Catalog_БанковскиеСчета?$format=json&$select=Ref_Key,Owner,ВалютаДенежныхСредств_Key,DeletionMark&$filter=Owner_Type%20eq%20'StandardODATA.Catalog_Организации'",
+        )
+      ).value.filter((b) => b["DeletionMark"] !== true);
+      const pair = accounts
+        .flatMap((x) => accounts.map((y) => [x, y] as const))
+        .find(
+          ([x, y]) =>
+            x["Ref_Key"] !== y["Ref_Key"] &&
+            x["Owner"] === y["Owner"] &&
+            x["ВалютаДенежныхСредств_Key"] === y["ВалютаДенежныхСредств_Key"],
+        );
+      if (!pair) line("  перевод между счетами пропущен: нет организации с двумя счетами в одной валюте");
+      else {
+        const [from, to] = pair.map((b) => String(b["Ref_Key"]));
+        const tr = await flow(
+          "write.money.create_bank_writeoff",
+          {
+            organization: String(pair[0]["Owner"]),
+            operationKind: "ПереводНаДругойСчет",
+            amount: 1,
+            orgBankAccount: from,
+            targetBankAccount: to,
+          },
+          "перевод между своими счетами",
+        );
+        if (tr) {
+          const ref = String(tr["ref"]);
+          const set = String(tr["entitySet"]);
+          const p = await run("write.document.post_document", {
+            entitySet: set,
+            ref,
+            post: true,
+            confirm: true,
+          });
+          const codes = new Map(
+            (
+              await client.getCollection("ChartOfAccounts_Хозрасчетный?$format=json&$select=Ref_Key,Code")
+            ).value.map((a) => [a["Ref_Key"], String(a["Code"])]),
+          );
+          const recs = p.err
+            ? []
+            : (
+                await client.getCollection(
+                  `AccountingRegister_Хозрасчетный/RecordsWithExtDimensions?$format=json&$filter=${encodeURIComponent(`Recorder eq cast(guid'${ref}', '${set}')`)}`,
+                )
+              ).value;
+          if (!p.err)
+            await run("write.document.post_document", { entitySet: set, ref, post: false, confirm: true });
+          const r = recs[0];
+          const dt = r ? codes.get(r["AccountDr_Key"]) : undefined;
+          const ok =
+            recs.length === 1 &&
+            codes.get(r!["AccountCr_Key"]) === "51" &&
+            r!["ExtDimensionCr1"] === from &&
+            ((dt === "51" && r!["ExtDimensionDr1"] === to) || dt === "57.01");
+          check(
+            "перевод проводится Дт 51 (получатель) / 57.01 Кт 51 (отправитель)",
+            ok,
+            p.err ? p.text.slice(0, 120) : `проводок ${recs.length}, Дт ${dt ?? "-"}`,
+          );
+        }
+      }
     }
 
     // --- строки документа
