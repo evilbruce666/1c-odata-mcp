@@ -221,6 +221,21 @@ describe("WriteOperationJournal", () => {
     expect((await journal.lookup(operationId))?.state).toBe("rejected");
   });
 
+  it("records 1С «недостаточно прав на исполнение операции» as a rejection (rights are checked before writing)", async () => {
+    const journal = await createJournal();
+    const operationId = randomUUID();
+    await journal.prepare(operationId, entitySet, payload, requestHash);
+    const value =
+      "У пользователя недостаточно прав на исполнение операции над базой данных. объект: 'ПланОбмена.ОбменУправлениеТорговлейРозница'; право: 'Чтение'";
+    const body = JSON.stringify({ "odata.error": { code: "-1", message: { lang: "ru", value } } });
+    await expect(
+      journal.execute(operationId, entitySet, payload, requestHash, async () => {
+        throw fromHttpStatus(500, "url", body);
+      }),
+    ).rejects.toThrow(/Нет прав в 1С/);
+    expect((await journal.lookup(operationId))?.state).toBe("rejected");
+  });
+
   it("keeps a non-unique Ref_Key (Ссылка) as an unknown outcome: the object may already exist", async () => {
     const journal = await createJournal();
     const operationId = randomUUID();

@@ -163,16 +163,21 @@ async function vatTaxation(
   given: string | undefined,
 ): Promise<{ value: string; note?: string }> {
   if (given) return { value: given };
-  const last = (
-    await conn.client.getCollection<ODataEntity>(
-      `${set}${buildQuery({
-        filter: `${cmp("Организация_Key", "eq", odataGuid(org))} and Posted eq true and DeletionMark eq false`,
-        orderby: "Date desc",
-        top: 1,
-        select: ["Number", "Date", "НалогообложениеНДС"],
-      })}`,
-    )
-  ).value[0];
+  // Сначала документ того же вида, затем реализация: налогообложение у организации одно (заказов клиента может не быть).
+  let last: ODataEntity | undefined;
+  for (const from of [...new Set([set, SALES_DOCS.shipment])]) {
+    last = (
+      await conn.client.getCollection<ODataEntity>(
+        `${from}${buildQuery({
+          filter: `${cmp("Организация_Key", "eq", odataGuid(org))} and Posted eq true and DeletionMark eq false`,
+          orderby: "Date desc",
+          top: 1,
+          select: ["Number", "Date", "НалогообложениеНДС"],
+        })}`,
+      )
+    ).value[0];
+    if (last?.["НалогообложениеНДС"]) break;
+  }
   const value = String(last?.["НалогообложениеНДС"] ?? "");
   if (!value)
     refuse(

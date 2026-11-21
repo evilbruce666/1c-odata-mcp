@@ -100,6 +100,8 @@ function setup(
     schema?: FakeSchema;
     agreements?: Record<string, unknown>[];
     lastVat?: string | null;
+    /** Налогообложение последнего проведённого документа — по набору (нет набора — нет документов). */
+    lastVatBySet?: Record<string, string>;
     spoil?: (reg: string, rows: Record<string, unknown>[]) => Record<string, unknown>[];
     basePosted?: boolean;
   } = {},
@@ -132,6 +134,16 @@ function setup(
             ]
           );
         const f = q.params.get("$filter") ?? "";
+        if (o.lastVatBySet && SETS.includes(q.base) && f.includes("Posted eq true"))
+          return o.lastVatBySet[q.base]
+            ? [
+                {
+                  Number: "0ТУТ-000200",
+                  Date: "2026-11-21T09:00:00",
+                  НалогообложениеНДС: o.lastVatBySet[q.base],
+                },
+              ]
+            : [];
         if (SETS.includes(q.base) && f.includes("Posted eq true"))
           return o.lastVat === null
             ? []
@@ -450,6 +462,19 @@ describe("продажи и закупки УТ: состав", () => {
     const unposted = setup({ basePosted: false });
     const r = await unposted.call("write.sales.create_issued_invoice", { baseDocumentRef: BASE_SALE });
     expect(r.text).toContain("не проведён");
+  });
+});
+
+describe("продажи и закупки УТ: налогообложение по умолчанию", () => {
+  it("заказов клиента у организации ещё нет — налогообложение из последней реализации, с заметкой", async () => {
+    const s = setup({ lastVatBySet: { Document_РеализацияТоваровУслуг: "ПродажаОблагаетсяНДС" } });
+    const r = await s.call("write.sales.create_customer_order", {
+      ...base,
+      lines: [line(1, 120, { vatRate: "НДС20" })],
+    });
+    expect(r.isError, r.text).toBeFalsy();
+    expect(payloadOf(r)["НалогообложениеНДС"]).toBe("ПродажаОблагаетсяНДС");
+    expect(JSON.stringify(r.sc["notes"])).toContain("№ 0ТУТ-000200");
   });
 });
 
