@@ -619,6 +619,7 @@ describe("Бухгалтерия: прочие операции денежных
     const cases: Array<[Record<string, unknown>, string]> = [
       [{}, "укажите targetBankAccount"],
       [{ targetBankAccount: B1 }, "совпадает"],
+      [{ targetBankAccount: B1.toUpperCase() }, "совпадает"],
       [{ targetBankAccount: B3 }, "Валюта счёта-получателя"],
       [{ targetBankAccount: B4 }, "не банковский счёт этой организации"],
       [{ targetBankAccount: B2, counterpartyRef: CP }, "нет контрагента"],

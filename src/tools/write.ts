@@ -1496,9 +1496,9 @@ async function transferTarget(
     throw new InputError(
       "Для перевода укажите orgBankAccount — счёт-отправитель: основной счёт организации не определён. Ничего не записано.",
     );
-  const ref = await resolveOrgBankAccount(conn, orgKey, a.targetBankAccount);
+  const ref = (await resolveOrgBankAccount(conn, orgKey, a.targetBankAccount))?.toLowerCase();
   if (!ref) throw new InputError("Счёт-получатель не найден. Ничего не записано.");
-  if (ref === source)
+  if (ref === source.toLowerCase())
     throw new InputError("Счёт-получатель совпадает со счётом-отправителем. Ничего не записано.");
   const set = resolveEntity(CATALOGS.bankAccounts, await conn.available());
   if (!set) throw new InputError("Справочник банковских счетов не опубликован в OData. Ничего не записано.");
@@ -1507,11 +1507,14 @@ async function transferTarget(
       `${set}(${odataGuid(r)})${buildQuery({ select: ["Ref_Key", "Owner", "ВалютаДенежныхСредств_Key"] })}`,
     );
   const [src, dst] = await Promise.all([read(source), read(ref)]);
-  if (String(dst["Owner"] ?? "") !== orgKey)
+  if (String(dst["Owner"] ?? "").toLowerCase() !== orgKey.toLowerCase())
     throw new InputError(
       "Счёт-получатель — не банковский счёт этой организации. Перевод контрагенту — другой вид операции. Ничего не записано.",
     );
-  if (String(dst["ВалютаДенежныхСредств_Key"] ?? "") !== String(src["ВалютаДенежныхСредств_Key"] ?? ""))
+  if (
+    String(dst["ВалютаДенежныхСредств_Key"] ?? "").toLowerCase() !==
+    String(src["ВалютаДенежныхСредств_Key"] ?? "").toLowerCase()
+  )
     throw new InputError(
       "Валюта счёта-получателя другая: это покупка или продажа валюты — оформите её в 1С. Ничего не записано.",
     );
@@ -1541,7 +1544,7 @@ function writeoffKindRefusal(
       typeof target !== "string" ||
       !target ||
       target === EMPTY_REF ||
-      target === fields["СчетОрганизации_Key"]
+      target.toLowerCase() === String(fields["СчетОрганизации_Key"] ?? "").toLowerCase()
     )
       return "Перевод на другой счёт без счёта-получателя (или на тот же счёт) 1С проведёт Дт 51 Кт 51 по одному счёту. Укажите в fields СчетКонтрагента_Key — другой банковский счёт организации. Ничего не записано.";
   }
@@ -4620,10 +4623,13 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     a: Record<string, unknown> & { operationKind?: string; amount: number; confirm: boolean },
   ) => {
     if (!(await tradeMoneySet(conn, kind))) return undefined;
-    const bpOnly = ["corrAccount", "otherItemRef"].filter((k) => a[k] !== undefined);
+    const bpOnly = ["corrAccount", "otherItemRef", "targetBankAccount"].filter((k) => a[k] !== undefined);
     if (bpOnly.length)
       throw new InputError(
-        `Параметры ${bpOnly.join(", ")} — только для Бухгалтерии: в Управлении торговлей статья задаётся incomeItem или expenseItem. Ничего не записано.`,
+        `Параметры ${bpOnly.join(", ")} — только для Бухгалтерии` +
+          (bpOnly.includes("targetBankAccount") && bpOnly.length === 1
+            ? ". Ничего не записано."
+            : ": в Управлении торговлей статья задаётся incomeItem или expenseItem. Ничего не записано."),
       );
     if (!a.operationKind)
       throw new InputError(

@@ -880,3 +880,19 @@ describe("денежные инструменты в Бухгалтерии — 
     expect(s.posts).toEqual([]);
   });
 });
+
+describe("1.1: перевод между счетами — параметр Бухгалтерии", () => {
+  it("targetBankAccount в Управлении торговлей — отказ, а не тихий пропуск", async () => {
+    const s = setup();
+    const r = await s.call(BOUT, {
+      ...base,
+      operationKind: "ОплатаПоставщику",
+      orgBankAccount: BANK,
+      counterpartyRef: CP,
+      targetBankAccount: BANK2,
+    });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("targetBankAccount — только для Бухгалтерии");
+    expect(s.posts).toEqual([]);
+  });
+});
