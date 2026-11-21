@@ -15,13 +15,24 @@ standard OData interface. Ask your 1C database in plain language; nothing is ins
   agreements, items and their folders), warehouse documents, cash and bank documents, payment requests, sales and
   purchases (orders, invoices, shipments, purchases, returns, VAT invoices), with posting checked against the stock,
   cash and settlement registers. Per-tool evidence — [docs/SUPPORT.md](docs/SUPPORT.md) (in Russian).
-- **1C:Integrated Automation 2, ERP 2** — expected to work with both tool groups; not yet verified on a live base.
+- **1C:Integrated Automation 2, ERP 2** — expected to work with both tool groups; not yet verified on a live base and
+  not part of the full-support claim.
 - **Other and customised configurations** — documents, catalogs and the schema.
 
 **Safety.** Read-only by default. Writing requires two independent switches (`READ_ONLY=false` and a per-database
 `ODATA_WRITABLE=true` for a single database or `ODATA_DB_<NAME>_WRITABLE=true` for each of several), always shows a preview first and needs a confirmation with the same `operationId`;
 a retry after a network error does not create a duplicate. No hard deletes — only the 1C deletion mark. The server is a
 local process that talks only to your 1C; with a local model your data never leaves your network.
+
+**Server install (bot, own app).** `MCP_TRANSPORT=http` with a mandatory token: read-only by default. Writing over
+HTTP runs as a separate instance and only when all of these hold: `READ_ONLY=false`, a writable database, an explicit
+write journal on a volume (`ODATA_WRITE_JOURNAL_DIR`, checked at start), and the write tools plus
+`write.operation.status` listed by name in `TOOLS_ALLOW`. Who confirms a write is up to the integration — the server
+cannot tell a person from a program; it guarantees preview, no duplicates and a readback from 1C. Details and a compose
+example — [docs/CONNECTING.md](docs/CONNECTING.md#запись-по-http) (in Russian).
+
+**Versioning.** Semantic versioning from 1.0.0: tool names, parameters, response fields, error kinds and environment
+variables change incompatibly only in a major version — [docs/VERSIONING.md](docs/VERSIONING.md) (in Russian).
 
 **Quick start.** Publish OData in 1C, then add to your MCP client config:
 
