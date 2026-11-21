@@ -495,6 +495,7 @@ export async function verifyMoneyMovements(
     const found: Record<string, ODataEntity[]> = {};
     for (const r of [...new Set(registers)]) found[r] = await recordsOf(conn, r, entitySet, guid);
     const mismatches: string[] = [];
+    let foreign = false;
     if (!post) {
       for (const [r, rows] of Object.entries(found))
         if (rows.length) mismatches.push(`после отмены проведения в ${r} осталось записей: ${rows.length}`);
@@ -520,13 +521,14 @@ export async function verifyMoneyMovements(
       );
       if (other.length)
         mismatches.push(`${main.register}: лишние движения в обратную сторону: ${other.length}`);
-      if (party) {
+      if (party && settlementInDocCurrency(found[party.register]!, doc)) {
         const p = sum(found[party.register]!, party.direction);
         if (p !== amount) mismatches.push(`${party.register}: ${p / 100}, в документе ${amount / 100}`);
-      }
+      } else if (party) foreign = true;
     }
     const matched = !mismatches.length;
     return {
+      ...(foreign ? { movementsNote: FOREIGN_NOTE } : {}),
       movementsVerified: matched,
       movements: {
         register: registers.join(", "),
@@ -550,6 +552,22 @@ export async function verifyMoneyMovements(
     };
   }
 }
+
+/**
+ * Расчёты с партнёром в валюте документа: «Сумма» регистра расчётов — в валюте взаиморасчётов (Валюта_Key), и при
+ * договоре в у.е. она законно отличается от суммы документа (ревью выпуска 5). Валюта не опубликована — считаем, что
+ * в валюте документа, как раньше.
+ */
+export function settlementInDocCurrency(rows: readonly ODataEntity[], doc: ODataEntity): boolean {
+  const docCur = String(doc["Валюта_Key"] ?? "").toLowerCase();
+  if (!docCur || /^0{8}-/.test(docCur)) return true;
+  return rows.every((r) => {
+    const c = String(r["Валюта_Key"] ?? "").toLowerCase();
+    return !c || /^0{8}-/.test(c) || c === docCur;
+  });
+}
+export const FOREIGN_NOTE =
+  "Расчёты с партнёром — в валюте договора, отличной от валюты документа: сумма в расчётах не сверялась — по курсу коннектор её не пересчитывает.";
 
 /** Платёжное поручение Бухгалтерии в УТ — заявка на расходование и списание безналичных. */
 export const PAYOUT_ORDER_IN_TRADE =
@@ -640,7 +658,7 @@ async function withAmount(
     const p = await vatPercent(conn, rateRef);
     if (p === undefined)
       return "Ставка НДС строки расшифровки не распознана — НДС по новой сумме не пересчитать. Измените документ в 1С.";
-    const vat = Math.round((amount * p * 100) / (100 + p)) / 100;
+    const vat = Math.round(Number(((amount * p * 100) / (100 + p)).toFixed(6))) / 100;
     out["СуммаНДС"] = vat;
     if (vat !== oldVat) note = `НДС строки пересчитан по ставке ${p}% от новой суммы: ${oldVat} → ${vat}.`;
   } else if (oldVat !== 0)
@@ -718,8 +736,9 @@ export async function updateTradeMoney(
     (sentVat === undefined || cents(Number(rows[0]!["СуммаНДС"] ?? 0)) === cents(Number(sentVat)));
   return {
     ...result,
+    // Расшифровку сверили здесь: общая заметка «не сверялись (табличные части)» была бы неправдой.
     structuredContent: ok
-      ? { ...sc, verified: true }
+      ? { ...Object.fromEntries(Object.entries(sc).filter(([k]) => k !== "readbackNote")), verified: true }
       : {
           ...sc,
           verified: false,

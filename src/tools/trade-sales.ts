@@ -8,6 +8,7 @@ import { InputError } from "../errors.js";
 import { createCore, docDate, resolveCatalogItem, resolveOrgRef } from "./write.js";
 import { partnerOf } from "./trade-counterparty.js";
 import { orderedWarehouses, seriesSavedNote } from "./trade-warehouse.js";
+import { FOREIGN_NOTE, settlementInDocCurrency } from "./trade-money.js";
 
 /**
  * Продажи и закупки Управления торговлей: реализация (товары и услуги), приобретение, возвраты, счёт клиенту, заказы
@@ -52,8 +53,9 @@ const HEAD: Record<SalesKind, readonly string[]> = {
   invoice: ["Партнер_Key", "Договор_Key", "ДокументОснование"],
   customerOrder: ["ХозяйственнаяОперация", "Соглашение_Key", "Статус"],
   supplierOrder: ["ХозяйственнаяОперация", "Статус", "Склад_Key"],
-  issuedInvoice: ["ДокументОснование", "ДатаВыставления", "КодВидаОперации"],
-  receivedInvoice: ["ДатаСоставления", "КодВидаОперации", "Контрагент"],
+  // Партнёр — поле только УТ: без него сигнатура совпала бы со счётом-фактурой Бухгалтерии (ревью выпуска 5).
+  issuedInvoice: ["ДокументОснование", "ДатаВыставления", "КодВидаОперации", "Партнер_Key"],
+  receivedInvoice: ["ДатаСоставления", "КодВидаОперации", "Контрагент", "Партнер_Key"],
 };
 
 /** Документ продаж или закупок УТ: база без регистра бухгалтерии, у документа поля УТ. */
@@ -84,7 +86,8 @@ const RATE: Record<string, { percent: number; name: string }> = {
   НДС20: { percent: 20, name: "20%" },
   НДС22: { percent: 22, name: "22%" },
 };
-const round2 = (n: number) => Math.round(n * 100) / 100;
+/** Копейки по правилу «половина вверх»: 3.03 × 20 / 120 = 0.505 даёт 0.51, а не 0.50 из-за двоичной дроби. */
+export const round2 = (n: number) => Math.round(Number((n * 100).toFixed(6))) / 100;
 const guidOf = (s: string) => s.replace(/[{}']/g, "").trim();
 const refuse = (text: string): never => {
   throw new InputError(`${text} Ничего не записано.`);
@@ -534,6 +537,16 @@ export async function verifySalesMovements(
     const found: Record<string, ODataEntity[]> = {};
     for (const r of regs) found[r] = await recordsOf(conn, r, entitySet, guid);
     const mismatches: string[] = [];
+    const notes: string[] = [];
+    // Сколько сверок действительно выполнено: без единой признака «сверено» нет (ревью выпуска 5).
+    let compared = 0;
+    // Реализация не «Отгружено» (после смены статуса): какие движения ждать, коннектор не знает.
+    const status = kind === "shipment" ? String(doc["Статус"] ?? "") : "";
+    const unknownStatus = post && !!status && status !== "Отгружено";
+    if (unknownStatus)
+      notes.push(
+        `Статус реализации «${status}»: какие движения ждать, коннектор не знает — склад и расчёты не сверялись.`,
+      );
     // Ордерная схема: «в наличии» и серии меняют складские ордера, а не этот документ (как у складских документов).
     const goods = ((doc["Товары"] as ODataEntity[] | undefined) ?? []).map((r) =>
       String(r["Склад_Key"] ?? ""),
@@ -549,11 +562,13 @@ export async function verifySalesMovements(
     if (!post) {
       for (const [r, rows] of Object.entries(found))
         if (rows.length) mismatches.push(`после отмены проведения в ${r} осталось записей: ${rows.length}`);
-    } else if (!ordered.length) {
-      // Склад: позиции со складом в строке — у товаров он всегда в строке (без него 1С не проводит), у услуг его нет.
+    } else if (!ordered.length && !unknownStatus) {
+      // Склад: позиции со складом в строке — у товаров он всегда в строке (без него 1С не проводит). Услуга со
+      // складом в строке движения по складу не делает — её не ждём (ревью выпуска 5).
+      const services = await serviceItems(conn, (doc["Товары"] as ODataEntity[] | undefined) ?? []);
       const want = new Map<string, number>();
       for (const r of (doc["Товары"] as ODataEntity[] | undefined) ?? []) {
-        if (empty(r["Склад_Key"])) continue;
+        if (empty(r["Склад_Key"]) || services.has(low(r["Номенклатура_Key"]))) continue;
         const k = `${low(r["Склад_Key"])} ${low(r["Номенклатура_Key"])}`;
         want.set(k, (want.get(k) ?? 0) + qty(Number(r["Количество"] ?? 0)));
       }
@@ -569,9 +584,12 @@ export async function verifySalesMovements(
         got.delete(k);
       }
       for (const [k, n] of got) if (n) mismatches.push(`склад ${k}: лишнее движение ${n / 1000}`);
+      if (want.size || found[STOCK]!.length) compared++;
     }
-    if (post) {
-      if (party) {
+    if (post && !unknownStatus) {
+      if (party && !settlementInDocCurrency(found[party.register]!, doc)) notes.push(FOREIGN_NOTE);
+      else if (party) {
+        compared++;
         const sum = found[party.register]!.filter((r) => r["RecordType"] === party.dir).reduce(
           (a, r) => a + cents(Number(r["Сумма"] ?? 0)),
           0,
@@ -581,6 +599,7 @@ export async function verifySalesMovements(
       }
       if (!ordered.length)
         for (const s of (doc["Серии"] as ODataEntity[] | undefined) ?? []) {
+          compared++;
           const n = found[SERIES_REG]!.filter((r) => low(r["Серия_Key"]) === low(s["Серия_Key"])).reduce(
             (a, r) => a + qty(Number(r["Количество"] ?? 0)),
             0,
@@ -592,17 +611,16 @@ export async function verifySalesMovements(
         }
     }
     const matched = !mismatches.length;
+    if (ordered.length)
+      notes.unshift(
+        `Склад с ордерной схемой (${ordered.join(", ")}): товар и серии меняют складские ордера, а не этот ` +
+          "документ — движения по складу не сверялись.",
+      );
+    if (post && !compared) notes.push("Сверять было нечего: проверено состояние документа.");
     return {
-      ...(ordered.length
-        ? {
-            movementsNote:
-              `Склад с ордерной схемой (${ordered.join(", ")}): товар и серии меняют складские ордера, а не этот ` +
-              "документ — движения по складу не сверялись" +
-              (party ? ", расчёты сверены." : ". Проверено состояние документа."),
-          }
-        : {}),
-      // Ордерный склад без расчётов (приём на комиссию, возврат комитенту): сверять нечего — признака сверки нет.
-      ...(ordered.length && !party ? {} : { movementsVerified: matched }),
+      ...(notes.length ? { movementsNote: notes.join(" ") } : {}),
+      // Ни одной выполненной сверки (ордерный склад без расчётов, неизвестный статус, пустые строки) — признака нет.
+      ...(post && !compared ? {} : { movementsVerified: matched }),
       movements: {
         register: regs.join(", "),
         found: Object.values(found).reduce((a, r) => a + r.length, 0),
@@ -624,6 +642,24 @@ export async function verifySalesMovements(
       note: `Действие выполнено, но движения прочитать не удалось (${e instanceof Error ? e.message : String(e)}). Проверьте документ в 1С, прежде чем повторять.`,
     };
   }
+}
+
+/** Позиции-услуги среди строк: ТипНоменклатуры «Услуга» или «Работа». Поле не опубликовано — услуг нет. */
+async function serviceItems(conn: Connection, rows: readonly ODataEntity[]): Promise<Set<string>> {
+  const props = new Set(
+    (await conn.getMetadata()).entities.get("Catalog_Номенклатура")?.properties.map((p) => p.name) ?? [],
+  );
+  const out = new Set<string>();
+  if (!props.has("ТипНоменклатуры")) return out;
+  for (const ref of new Set(
+    rows.map((r) => low(r["Номенклатура_Key"])).filter((r) => r && !/^0{8}-/.test(r)),
+  )) {
+    const item = await conn.client.getEntity<ODataEntity>(
+      `Catalog_Номенклатура(${odataGuid(ref)})${buildQuery({ select: ["ТипНоменклатуры"] })}`,
+    );
+    if (["Услуга", "Работа"].includes(String(item["ТипНоменклатуры"] ?? ""))) out.add(ref);
+  }
+  return out;
 }
 
 // ─── Правка строк, копия и поля ───
@@ -679,6 +715,11 @@ function totals(doc: ODataEntity, rowsAfter: Row[]): Row | string {
 /** Новые строки по позициям — той же сборкой, что при создании; основание возврата — как у документа. */
 async function builtRows(conn: Connection, kind: SalesKind, doc: ODataEntity, lines: readonly SalesLine[]) {
   const warehouse = empty(doc["Склад_Key"]) ? undefined : String(doc["Склад_Key"]);
+  // Склады в строках разные, в шапке пусто (документ заведён в 1С): склад новой строки не угадать (ревью выпуска 5).
+  if (!warehouse && rowsOf(doc, "Товары").some((r) => !empty(r["Склад_Key"])))
+    refuse(
+      "Склад в шапке документа не указан, а у строк он свой: какой склад у новой строки, коннектор не знает. Измените строки в 1С.",
+    );
   const built = rows(lines, await rateRefs(conn, lines), {
     priceIncludesVat: doc["ЦенаВключаетНДС"] !== false,
     warehouse,
@@ -841,7 +882,15 @@ export async function copyTradeSales(
     const q = Number(l.fields["Количество"]);
     if (!(q > 0)) refuse("Количество должно быть больше нуля.");
     const k = q / Number(r!["Количество"] || 1);
-    for (const f of ["Сумма", "СуммаНДС", "СуммаСНДС", "СуммаВзаиморасчетов"])
+    // Скидки суммой — пропорционально, иначе цена × количество − скидка разошлась бы с суммой (ревью выпуска 5).
+    for (const f of [
+      "Сумма",
+      "СуммаНДС",
+      "СуммаСНДС",
+      "СуммаВзаиморасчетов",
+      "СуммаРучнойСкидки",
+      "СуммаАвтоматическойСкидки",
+    ])
       if (f in r!) r![f] = round2(Number(r![f]) * k);
     r!["Количество"] = q;
     if ("КоличествоУпаковок" in r!) r!["КоличествоУпаковок"] = q;

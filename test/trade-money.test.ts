@@ -609,6 +609,28 @@ describe("денежные документы УТ: проведение со с
   });
 });
 
+describe("денежные документы УТ: расчёты в валюте договора (ревью выпуска 5)", () => {
+  it("сумма в расчётах в другой валюте не сверяется — заметка, деньги сверены; в той же валюте расхождение видно", async () => {
+    const SET = "Document_РасходныйКассовыйОрдер";
+    const pay = { ...base, operationKind: "ОплатаПоставщику", cash: CASH, counterpartyRef: CP };
+    const USD = g("a", 8);
+    for (const [cur, verified] of [
+      [USD, true],
+      [RUB, false],
+    ] as const) {
+      const s = setup({
+        spoil: (r, rows) =>
+          r === "РасчетыСПоставщиками" ? rows.map((x) => ({ ...x, Сумма: 0.11, Валюта_Key: cur })) : rows,
+      });
+      const { ref } = await s.create(OUT, pay);
+      s.docs.get(ref)!.body["Валюта_Key"] = RUB;
+      const p = await s.post(SET, ref);
+      expect(p.sc).toMatchObject({ verified, movementsVerified: verified });
+      if (verified) expect(String(p.sc["movementsNote"])).toContain("в валюте договора");
+    }
+  });
+});
+
 describe("денежные документы УТ: копия и поля", () => {
   const SET = "Document_СписаниеБезналичныхДенежныхСредств";
   const pay = { ...base, operationKind: "ОплатаПоставщику", orgBankAccount: BANK, counterpartyRef: CP };
@@ -675,6 +697,18 @@ describe("денежные документы УТ: копия и поля", () 
       });
       expect(JSON.stringify(r.sc["notes"])).toContain("20 → 41.67");
       expect(r.sc).toMatchObject({ verified: true });
+      // Расшифровку сверили сами — заметки «не сверялись (табличные части)» нет (ревью выпуска 5).
+      expect(r.sc).not.toHaveProperty("readbackNote");
+    }
+    // Копейки «половина вверх»: 0.57 при 20% — 0.095 → 0.10 (двоичная дробь давала 0.09).
+    {
+      const s = setup();
+      const { ref } = await s.create(BOUT, pay);
+      s.docs.get(ref)!.body["РасшифровкаПлатежа"] = [
+        { LineNumber: 1, Сумма: 120, СуммаВзаиморасчетов: 120, СтавкаНДС_Key: VAT20IN, СуммаНДС: 20 },
+      ];
+      await twice(s, "write.entity.update_entity", { entitySet: SET, ref, fields: { СуммаДокумента: 0.57 } });
+      expect(s.patches.at(-1)).toMatchObject({ РасшифровкаПлатежа: [{ Сумма: 0.57, СуммаНДС: 0.1 }] });
     }
     // Копия с новой суммой — тот же пересчёт.
     const s = setup();

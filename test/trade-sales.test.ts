@@ -38,6 +38,10 @@ const TABLES: Record<string, Record<string, unknown>[]> = {
     { Ref_Key: VAT20, Description: "20%", Code: "2" },
   ],
   Catalog_Валюты: [{ Ref_Key: RUB, Description: "RUB", Code: "643" }],
+  Catalog_Номенклатура: [
+    { Ref_Key: ITEM, Description: "ZZ-TEST товар", ТипНоменклатуры: "Товар" },
+    { Ref_Key: SVC, Description: "ZZ-TEST услуга", ТипНоменклатуры: "Услуга" },
+  ],
 };
 
 function pick(rows: Record<string, unknown>[], filter: string): Record<string, unknown>[] {
@@ -616,7 +620,6 @@ describe("продажи и закупки УТ: проведение со св�
     const p = await s.post("Document_РеализацияТоваровУслуг", ref);
     expect(p.sc).toMatchObject({ done: true, verified: true, movementsVerified: true });
     expect(String(p.sc["movementsNote"])).toContain("ордерной схемой («Основной»)");
-    expect(String(p.sc["movementsNote"])).toContain("расчёты сверены");
     // Расчёты по-прежнему сверяются: порча суммы видна и на ордерном складе.
     const bad = setup({
       orderScheme: flagOut,
@@ -643,7 +646,7 @@ describe("продажи и закупки УТ: проведение со св�
     const ep = await com.post("Document_ПриобретениеТоваровУслуг", e.ref);
     expect(ep.sc).toMatchObject({ done: true, verified: true });
     expect(ep.sc).not.toHaveProperty("movementsVerified");
-    expect(String(ep.sc["movementsNote"])).toContain("Проверено состояние документа");
+    expect(String(ep.sc["movementsNote"])).toContain("Сверять было нечего");
     // Схема с 01.12 — на дату документа её нет: сверка идёт и видит пустой склад.
     const later = setup({
       spoil,
@@ -653,6 +656,64 @@ describe("продажи и закупки УТ: проведение со св�
     expect((await later.post("Document_РеализацияТоваровУслуг", d.ref)).sc).toMatchObject({
       verified: false,
     });
+  });
+
+  it("ревью выпуска 5: услуга со складом в строке, расчёты в у.е., статус не «Отгружено», нечего сверять", async () => {
+    // Услуга в реализации товаров: склад в строке есть, движения по складу 1С не делает — расхождения нет.
+    const svc = setup({
+      spoil: (r, rows) =>
+        r === "ТоварыНаСкладах" ? rows.filter((x) => x["Номенклатура_Key"] !== SVC) : rows,
+    });
+    const a = await svc.create(SHIP, {
+      ...base,
+      lines: [line(), { nomenclatureRef: SVC, quantity: 1, price: 30 }],
+    });
+    expect((await svc.post("Document_РеализацияТоваровУслуг", a.ref)).sc).toMatchObject({
+      verified: true,
+      movementsVerified: true,
+    });
+    // Расчёты в валюте договора: сумма в регистре другая — не сверяется, заметка; склад сверен.
+    const USD = g("a", 8);
+    const fx = setup({
+      spoil: (r, rows) =>
+        r === "РасчетыСКлиентами"
+          ? rows.map((x) => ({ ...x, Сумма: Number(x["Сумма"]) ? 1.25 : 0, Валюта_Key: USD }))
+          : rows,
+    });
+    const b = await fx.create(SHIP, { ...base, lines: [line()] });
+    fx.docs.get(b.ref)!.body["Валюта_Key"] = RUB;
+    const pb = await fx.post("Document_РеализацияТоваровУслуг", b.ref);
+    expect(pb.sc).toMatchObject({ verified: true, movementsVerified: true });
+    expect(String(pb.sc["movementsNote"])).toContain("в валюте договора");
+    // В той же валюте порча суммы видна, как раньше.
+    const same = setup({
+      spoil: (r, rows) =>
+        r === "РасчетыСКлиентами" ? rows.map((x) => ({ ...x, Сумма: 1, Валюта_Key: RUB })) : rows,
+    });
+    const c = await same.create(SHIP, { ...base, lines: [line()] });
+    same.docs.get(c.ref)!.body["Валюта_Key"] = RUB;
+    expect((await same.post("Document_РеализацияТоваровУслуг", c.ref)).sc).toMatchObject({ verified: false });
+    // Статус реализации сменили: движения не известны — без сверки и без признака «сверено».
+    const st = setup({ spoil: () => [] });
+    const d = await st.create(SHIP, { ...base, lines: [line()] });
+    st.docs.get(d.ref)!.body["Статус"] = "ВПути";
+    const pd = await st.post("Document_РеализацияТоваровУслуг", d.ref);
+    expect(pd.sc).toMatchObject({ done: true, verified: true });
+    expect(pd.sc).not.toHaveProperty("movementsVerified");
+    expect(String(pd.sc["movementsNote"])).toContain("«ВПути»");
+    // Приём на комиссию без складов в строках и без движений: сверять нечего — признака нет.
+    const nothing = setup({ spoil: () => [] });
+    const e = await nothing.create(PUR, {
+      ...base,
+      contractRef: CONTRACT,
+      operationKind: "ПриемНаКомиссию",
+      lines: [line()],
+    });
+    for (const r of nothing.docs.get(e.ref)!.body["Товары"] as Record<string, unknown>[])
+      delete r["Склад_Key"];
+    const pe = await nothing.post("Document_ПриобретениеТоваровУслуг", e.ref);
+    expect(pe.sc).not.toHaveProperty("movementsVerified");
+    expect(String(pe.sc["movementsNote"])).toContain("Сверять было нечего");
   });
 
   it("заказ, счёт и счёт-фактура — только состояние документа, с пояснением", async () => {
@@ -681,6 +742,41 @@ describe("продажи и закупки УТ: строки, копия, по�
       r["ОбъектРасчетов_Key"] = g("8", 1);
     return ref;
   };
+
+  it("ревью выпуска 5: копейки «половина вверх», скидка в копии пропорционально, склады только в строках — отказ", async () => {
+    // 0.57 с НДС 20%: 0.095 → 0.10 (двоичная дробь давала 0.09).
+    const s = setup();
+    const r = await s.call(SHIP, { ...base, lines: [line(1, 0.57, { vatRate: "НДС20" })] });
+    expect(payloadOf(r)["Товары"]).toMatchObject([{ Сумма: 0.57, СуммаНДС: 0.1 }]);
+    // Копия: скидка суммой масштабируется вместе с суммой.
+    const ref = await made(s, [line(2, 100)]);
+    Object.assign((s.docs.get(ref)!.body["Товары"] as Record<string, unknown>[])[0]!, {
+      Сумма: 180,
+      СуммаСНДС: 180,
+      СуммаРучнойСкидки: 20,
+      ПроцентРучнойСкидки: 10,
+    });
+    await s.create("write.document.copy_document", {
+      entitySet: SET,
+      ref,
+      lines: [{ lineNumber: 1, fields: { Количество: 4 } }],
+    });
+    expect(s.posts.at(-1)!.body["Товары"]).toEqual([
+      expect.objectContaining({ Количество: 4, Сумма: 360, СуммаРучнойСкидки: 40, ПроцентРучнойСкидки: 10 }),
+    ]);
+    // Склада в шапке нет, а у строк есть свой: склад новой строки не угадать — отказ без записи.
+    const multi = await made(s);
+    s.docs.get(multi)!.body["Склад_Key"] = "00000000-0000-0000-0000-000000000000";
+    const patches = s.patches.length;
+    const add = await s.call("write.document.add_document_line", {
+      entitySet: SET,
+      ref: multi,
+      line: line(1, 5),
+    });
+    expect(add.isError).toBe(true);
+    expect(add.text).toContain("Склад в шапке");
+    expect(s.patches).toHaveLength(patches);
+  });
 
   it("замена строк: та же сборка, итог и единственный этап графика пересчитаны; строки сверены", async () => {
     const s = setup();
