@@ -77,19 +77,19 @@ export const ERROR_KIND_META = "odata-1c/errorKind";
  * refused (отказ инструмента по содержанию запроса), input, not_published, overflow, internal.
  */
 /**
- * Пути на сервере, которые не уходят клиенту по сети (#67): каталог журнала записи. Сообщения ошибок файловой системы
- * Node содержат абсолютный путь — при сбое журнала во время работы он попал бы держателю токена.
+ * Сервер доступен по сети (HTTP): тексты внутренних ошибок клиенту не пересказываются — в ошибках файловой системы
+ * Node абсолютные пути (каталог журнала, его родители). Полный текст — в журнале сервера (#67, ревью 1.0: замена
+ * подстроки пути пропускала родительский каталог и задевала чужие тексты).
  */
-const redacted: string[] = [];
-export function redactInResponses(path: string): void {
-  if (path && !redacted.includes(path)) redacted.push(path);
+let networkResponses = false;
+export function hideInternalDetails(): void {
+  networkResponses = true;
 }
-export const redact = (text: string): string =>
-  redacted.reduce((t, p) => t.split(p).join("<ODATA_WRITE_JOURNAL_DIR>"), text);
+export const internalDetailsHidden = (): boolean => networkResponses;
 
 export function fail(message: string, kind = "refused"): CallToolResult {
   return {
-    content: [{ type: "text", text: redact(message) }],
+    content: [{ type: "text", text: message }],
     isError: true,
     _meta: { [ERROR_KIND_META]: kind },
   };
@@ -131,7 +131,12 @@ export async function guard(toolName: string, fn: () => Promise<CallToolResult>)
     }
     const msg = e instanceof Error ? e.message : String(e);
     logger.error({ tool: toolName }, msg);
-    return fail(`Внутренняя ошибка инструмента ${toolName}: ${msg}`, "internal");
+    return fail(
+      networkResponses
+        ? `Внутренняя ошибка инструмента ${toolName} — подробности в журнале сервера.`
+        : `Внутренняя ошибка инструмента ${toolName}: ${msg}`,
+      "internal",
+    );
   }
 }
 

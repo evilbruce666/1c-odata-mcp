@@ -332,6 +332,8 @@ describe("запись по HTTP: гарантии журнала", () => {
       });
       expect(c.isError).toBe(true);
       expect(JSON.stringify(c)).not.toContain(journal);
+      // Ни пути родителя, ни текста ошибки файловой системы (ревью 1.0: замена подстроки пропускала родителя).
+      expect(JSON.stringify([h, c])).not.toMatch(/EACCES|EPERM|\/tmp|\/var\/folders|permission denied/i);
       expect(posts(s.f)).toBe(0);
     } finally {
       for (const d of inner) chmodSync(d, 0o700);

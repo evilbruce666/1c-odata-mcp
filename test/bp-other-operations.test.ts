@@ -488,4 +488,72 @@ describe("Бухгалтерия: прочие операции денежных
     expect(ok.err, ok.text).toBe(false);
     expect(payloadOf(ok)).toMatchObject({ ВидОперации: "ПрочееПоступление", СубконтоКт1: ITEM91 });
   });
+
+  it("ревью 1.0: копия «Прочего списания» по договору — без ложного «пуст счёт расчётов»", async () => {
+    const E = "00000000-0000-0000-0000-000000000000";
+    const SET = "Document_СписаниеСРасчетногоСчета";
+    const SRC = g("d", 7);
+    const make = (kind: string) =>
+      fake1C(
+        {
+          READ_ONLY: "false",
+          ODATA_WRITABLE: "true",
+          ODATA_WRITE_JOURNAL_DIR: mkdtempSync(join(tmpdir(), "1c-odata-copywarn-")),
+        },
+        {
+          data: (q) =>
+            q.base === SET && !q.fn
+              ? [
+                  {
+                    Ref_Key: SRC,
+                    Posted: true,
+                    ВидОперации: kind,
+                    Контрагент: CP,
+                    Контрагент_Type: "StandardODATA.Catalog_Контрагенты",
+                    ДоговорКонтрагента_Key: CTR,
+                    СчетУчетаРасчетовСКонтрагентом_Key: A7609,
+                    СуммаДокумента: 1,
+                    РасшифровкаПлатежа: [
+                      {
+                        LineNumber: "1",
+                        СуммаПлатежа: 1,
+                        ДоговорКонтрагента_Key: kind === "ПрочееСписание" ? E : CTR,
+                        СчетУчетаРасчетовСКонтрагентом_Key: kind === "ПрочееСписание" ? E : A7609,
+                        СуммаВзаиморасчетов: 1,
+                      },
+                    ],
+                  },
+                ]
+              : undefined,
+        },
+      );
+    for (const [kind, warn] of [
+      ["ПрочееСписание", false],
+      ["ОплатаПоставщику", false],
+    ] as const) {
+      const fake = make(kind);
+      const t = (
+        createServer(fake.ctx) as unknown as {
+          _registeredTools: Record<
+            string,
+            {
+              inputSchema: { parse: (v: unknown) => Record<string, unknown> };
+              handler: (a: unknown, e: unknown) => Promise<{ structuredContent?: Record<string, unknown> }>;
+            }
+          >;
+        }
+      )._registeredTools["write.document.copy_document"]!;
+      const p = await t.handler(t.inputSchema.parse({ entitySet: SET, ref: SRC }), {});
+      const c = await t.handler(
+        t.inputSchema.parse({
+          entitySet: SET,
+          ref: SRC,
+          confirm: true,
+          operationId: p.structuredContent?.["operationId"],
+        }),
+        {},
+      );
+      expect(/пуст счёт расчётов/.test(JSON.stringify(c.structuredContent)), kind).toBe(warn);
+    }
+  });
 });

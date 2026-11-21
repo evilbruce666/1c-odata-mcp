@@ -1,17 +1,8 @@
+import { logger } from "../logger.js";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { ServerContext } from "../context.js";
-import {
-  ok,
-  fail,
-  guard,
-  databaseField,
-  offsetField,
-  pageOf,
-  redact,
-  snapshotField,
-  toolListed,
-} from "./_shared.js";
+import { ok, fail, guard, databaseField, offsetField, pageOf, snapshotField, toolListed } from "./_shared.js";
 import { listOrganizations } from "../odata/orgs.js";
 import type { EntityClass } from "../types/odata.js";
 import {
@@ -74,6 +65,9 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
         const conn = ctx.db(database);
         const meta = await conn.client.refreshMetadata();
         const journal = await conn.client.journalSummary();
+        // По сети клиент видит только факт сбоя журнала — полный текст (с путями) здесь, в журнале сервера.
+        if (journal?.error)
+          logger.warn({ db: conn.cfg.name, err: journal.error }, "журнал записи недоступен");
         return ok({
           status: "ok",
           database: conn.cfg.name,
@@ -100,7 +94,13 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
                   writable: journal.writable,
                   uncertainOperations: journal.uncertain.length,
                   ...(journal.uncertain.length ? { uncertainIds: journal.uncertain.slice(0, 20) } : {}),
-                  ...(journal.error ? { error: redact(journal.error) } : {}),
+                  ...(journal.error
+                    ? {
+                        error: conn.behavior.networkTransport
+                          ? "каталог журнала недоступен — подробности в журнале сервера"
+                          : journal.error,
+                      }
+                    : {}),
                   note: !journal.writable
                     ? "Каталог журнала недоступен для записи — подтверждение создания и правки строк не пройдёт. Проверьте ODATA_WRITE_JOURNAL_DIR (в Docker — том)."
                     : journal.uncertain.length

@@ -12,7 +12,7 @@ import {
 import type { HttpTransport } from "./config/env.js";
 import type { ServerContext } from "./context.js";
 import { createServer } from "./mcp/server.js";
-import { redactInResponses } from "./tools/_shared.js";
+import { hideInternalDetails } from "./tools/_shared.js";
 import { withConnection } from "./odata/call-context.js";
 import { logger } from "./logger.js";
 
@@ -101,8 +101,8 @@ export async function startHttpServer(
   // Ошибка настройки (опечатка в TOOLS_ALLOW, журнал без права записи) должна остановить запуск, а не первый запрос.
   createServer(ctx);
   if (!ctx.behavior.readOnly) await assertWriteJournalWritable(ctx.behavior.writeJournalDir);
-  // Путь к журналу клиенту по сети не отдаётся, в том числе в текстах ошибок файловой системы.
-  redactInResponses(ctx.behavior.writeJournalDir);
+  // По сети тексты внутренних ошибок (с путями файловой системы) клиенту не отдаются — только в журнал сервера.
+  hideInternalDetails();
   const handler = createHttpHandler(ctx, cfg);
   const node = toNodeHandler(handler, {
     // Адаптер читает тело до проверки токена: без этого чужой запрос занял бы 4 МиБ.

@@ -1,4 +1,9 @@
-import { NO_SETTLEMENT_KINDS, WRITEOFF_REFUSED, otherOperationFields } from "../odata/corr-account.js";
+import {
+  NO_SETTLEMENT_KINDS,
+  OTHER_OPERATIONS,
+  WRITEOFF_REFUSED,
+  otherOperationFields,
+} from "../odata/corr-account.js";
 import {
   ALIGN_HINT,
   bankPostingBlocker,
@@ -4197,7 +4202,16 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
                 "Счета расчётов — как в исходном документе: при копировании настройка договора не применяется.",
               ]
             : undefined,
-          { keepSettlement },
+          {
+            keepSettlement,
+            // Копия прочей операции сохраняет корреспондирующий счёт исходника (заданный corrAccount): ложного «пуст
+            // счёт расчётов» с советом, который перезаписал бы этот счёт, быть не должно (ревью 1.0).
+            corrAccountGiven:
+              keepSettlement &&
+              Object.hasOwn(OTHER_OPERATIONS, String(payload["ВидОперации"] ?? "")) &&
+              typeof payload[SETTLE_FIELD] === "string" &&
+              !/^0{8}-/.test(String(payload[SETTLE_FIELD])),
+          },
         );
       }),
   );
