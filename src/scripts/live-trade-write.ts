@@ -441,6 +441,71 @@ async function main(): Promise<number> {
     );
   } else check("деньги по банку", true, "пропущено: у организации нет банковского счёта");
 
+  // --- ответственный (responsibleRef): действующий пользователь из list_users. Списание безналичных — в
+  // «Ответственный», счёт клиенту — в «Менеджер»; у ПКО только «Автор» — отказ до записи.
+  const user = (
+    (await run("read.catalog.list_users", { limit: 1 })).sc["items"] as Json[] | undefined
+  )?.[0]?.["ref"];
+  if (typeof user !== "string") check("ответственный", false, "list_users не вернул пользователя");
+  else {
+    const field = async (set: string, ref: string | undefined, name: string) =>
+      ref
+        ? String((await conn.client.getEntity(`${set}(guid'${ref}')?$format=json&$select=${name}`))[name])
+        : "";
+    if (bankName) {
+      const item = await cf("Document_СписаниеБезналичныхДенежныхСредств", "ОплатаПоставщику");
+      const ref = await doc(
+        "списание с ответственным",
+        "Document_СписаниеБезналичныхДенежныхСредств",
+        "write.money.create_bank_writeoff",
+        {
+          ...party,
+          contractRef: ctrSupplier,
+          operationKind: "ОплатаПоставщику",
+          amount: 1,
+          orgBankAccount: bankName,
+          ...(item ? { cashflowItem: item } : {}),
+          responsibleRef: user,
+        },
+      );
+      check(
+        "ответственный → «Ответственный» списания",
+        (await field("Document_СписаниеБезналичныхДенежныхСредств", ref, "Ответственный_Key")) === user,
+      );
+    }
+    const inv = await apply("write.sales.create_invoice", {
+      ...party,
+      contractRef: ctrClient,
+      lines: L(1, 1),
+      comment: tag,
+      responsibleRef: user,
+    });
+    if (!inv.err)
+      made.push(["счёт клиенту с ответственным", "Document_СчетНаОплатуКлиенту", String(inv.sc["ref"])]);
+    check(
+      "ответственный → «Менеджер» счёта клиенту",
+      !inv.err &&
+        (await field("Document_СчетНаОплатуКлиенту", String(inv.sc["ref"]), "Менеджер_Key")) === user,
+      inv.err ? inv.text.slice(0, 160) : "",
+    );
+    if (cashName) {
+      const pkoItem = await cf("Document_ПриходныйКассовыйОрдер", "ПоступлениеОплатыОтКлиента");
+      const pko = await run("write.money.create_cash_receipt", {
+        ...party,
+        contractRef: ctrClient,
+        operationKind: "ПоступлениеОплатыОтКлиента",
+        amount: 1,
+        cash: cashName,
+        ...(pkoItem ? { cashflowItem: pkoItem } : {}),
+        responsibleRef: user,
+      });
+      check(
+        "ответственный в ПКО (только «Автор») — отказ",
+        pko.err && pko.text.includes("«Ответственный» или «Менеджер»"),
+      );
+    }
+  }
+
   // --- отмена проведения (в обратном порядке) и пометка удаления
   for (const [label, set, ref] of [...made].reverse()) {
     const posted = await conn.client.getEntity(`${set}(guid'${ref}')?$format=json&$select=Posted`);

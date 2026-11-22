@@ -66,6 +66,8 @@ export function readItemSales(conn: Connection, args: ItemSalesRead): Promise<OD
     args.to,
     args.warehouseSet ?? "",
     args.withBuyer ? "buyer" : "",
+    args.withManager ? "manager" : "",
+    args.withDepartment ? "department" : "",
     warehouses.join(","),
   ];
   // Следующие страницы списка берут строки первой, а не читают регистр заново.
@@ -81,11 +83,23 @@ interface ItemSalesRead {
   warehouseSet?: string | undefined;
   /** Покупатель строки: ещё одно измерение — без нужды строк больше (на УТ 11.5 за 45 дней +0,4 с, итоги те же). */
   withBuyer?: boolean;
+  /** Менеджер строки (измерение регистра): только когда нужен отбор или итоги по менеджерам. */
+  withManager?: boolean;
+  /** Подразделение строки (измерение регистра) — так же. */
+  withDepartment?: boolean;
 }
 
 async function readItemSalesFresh(
   conn: Connection,
-  { from, to, warehouses, warehouseSet, withBuyer = false }: ItemSalesRead,
+  {
+    from,
+    to,
+    warehouses,
+    warehouseSet,
+    withBuyer = false,
+    withManager = false,
+    withDepartment = false,
+  }: ItemSalesRead,
 ): Promise<ODataEntity[]> {
   const register = await requireEntity(conn, [SALES_REGISTER], SALES_LABEL);
   const read = async (condition?: string) =>
@@ -93,9 +107,15 @@ async function readItemSalesFresh(
       await fetchAllForAggregation(
         conn,
         turnoversPath(register, from, to, condition),
-        withBuyer
-          ? { select: [...SELECT, ...PARTNER_SELECT], expand: [KEY_NAV, PARTNER_NAV] }
-          : { select: SELECT, expand: [KEY_NAV] },
+        {
+          select: [
+            ...SELECT,
+            ...(withBuyer ? PARTNER_SELECT : []),
+            ...(withManager ? ["Менеджер_Key"] : []),
+            ...(withDepartment ? ["Подразделение_Key"] : []),
+          ],
+          expand: withBuyer ? [KEY_NAV, PARTNER_NAV] : [KEY_NAV],
+        },
         `${from}…${to}`,
       )
     ).rows;
@@ -122,6 +142,10 @@ export interface SalesRow {
   /** Покупатель (контрагент или организация) и его справочник; есть, только если читали с withBuyer. */
   buyerRef?: string;
   buyerSet?: string;
+  /** Менеджер (пользователь 1С); есть, только если читали с withManager. */
+  managerRef?: string;
+  /** Подразделение; есть, только если читали с withDepartment. */
+  departmentRef?: string;
   quantity: number;
   /**
    * Выручка с НДС и без НДС в копейках, в валюте управленческого учёта. Сверено на УТ 11.5: розница за месяц вместе с
@@ -142,7 +166,11 @@ export function toSalesRows(rows: readonly ODataEntity[], warehouseSets: readonl
     const partner = r[PARTNER_NAV] as ODataEntity | undefined;
     const buyerRef = partner ? refOf(partner["Контрагент"]) : undefined;
     const buyerSet = partner ? entitySetOfType(partner["Контрагент_Type"]) : undefined;
+    const managerRef = refOf(r["Менеджер_Key"]);
+    const departmentRef = refOf(r["Подразделение_Key"]);
     return {
+      ...(managerRef ? { managerRef } : {}),
+      ...(departmentRef ? { departmentRef } : {}),
       ...(buyerRef ? { buyerRef } : {}),
       ...(buyerRef && buyerSet ? { buyerSet } : {}),
       ...(itemRef ? { itemRef } : {}),

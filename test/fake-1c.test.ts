@@ -49,7 +49,14 @@ const OVERRIDES: Record<string, Record<string, unknown>> = {
   "write.money.create_payment": { counterpartyRef: id, contractRef: id },
   // groups — вместо group, не вместе с ним: список групп проверяют test/stock.test.ts и test/items.test.ts.
   "read.analytics.get_warehouse_stock": { warehouses: [id], groups: undefined },
-  "read.analytics.get_sales_register": { warehouses: [id], groups: undefined },
+  "read.analytics.get_sales_register": {
+    warehouses: [id],
+    groups: undefined,
+    managers: [id],
+    departments: [id],
+  },
+  // Массивы ссылок с минимумом одного элемента — подобрать по имени нельзя.
+  "read.catalog.list_users": { refs: [id] },
   "read.catalog.list_items": { groups: undefined },
   // Механизм — явно: синтетические записи есть в обоих регистрах цен.
   "read.analytics.get_prices": {
@@ -64,7 +71,7 @@ const OVERRIDES: Record<string, Record<string, unknown>> = {
     lines: [{ itemRef: id, price: 100 }],
     mechanism: "legacy",
   },
-  "read.analytics.get_partner_settlements": { partner: id },
+  "read.analytics.get_partner_settlements": { partner: id, managers: [id] },
   "read.document.get_document": { entitySet: "Document_РеализацияТоваровУслуг", ref: id },
   "read.document.search_documents": { entitySet: "Document_РеализацияТоваровУслуг" },
   "read.accounting.get_document_postings": {

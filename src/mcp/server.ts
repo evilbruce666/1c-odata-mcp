@@ -9,6 +9,8 @@ import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
 import { createResultSchema } from "../schemas/output.js";
 import { fingerprintWriteInput, withWriteOperation } from "../odata/write-operation-context.js";
+import { withResponsible } from "../odata/responsible-context.js";
+import { checkResponsible } from "../odata/users.js";
 import { callAbortError, withToolCall } from "../odata/call-context.js";
 import { registerMetaTools } from "../tools/meta.js";
 import { registerCounterpartyTools } from "../tools/counterparties.js";
@@ -670,6 +672,15 @@ export function createServer(ctx: ServerContext): McpServer {
     },
   );
 
+  // Инструменты, создающие документ (а не справочник): им — responsibleRef.
+  const DOCUMENT_CREATE =
+    /^write\.(sales|purchase|warehouse|money)\.create_|^write\.document\.copy_document$/;
+  const responsibleField = z
+    .string()
+    .optional()
+    .describe(
+      "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+    );
   // Оборачиваем registerTool, чтобы каждому инструменту проставить аннотации по имени.
   const original = server.registerTool.bind(server) as unknown as (
     name: string,
@@ -745,9 +756,16 @@ export function createServer(ctx: ServerContext): McpServer {
       .optional()
       .describe("UUID из предпросмотра. Передайте его при confirm=true, чтобы повтор не создал дубликат.");
     const base = config.inputSchema;
+    // Ответственный — у всех инструментов создания документов (свой параметр у установки цен и платёжки оставлен).
+    const ownResponsible =
+      base instanceof z.ZodObject && "responsibleRef" in (base.shape as Record<string, unknown>);
+    const addResponsible = isCreateTool && DOCUMENT_CREATE.test(name) && !ownResponsible;
     const inputSchema =
       base instanceof z.ZodObject
-        ? base.extend({ operationId: operationIdField })
+        ? base.extend({
+            operationId: operationIdField,
+            ...(addResponsible ? { responsibleRef: responsibleField } : {}),
+          })
         : { ...(base as Record<string, unknown>), operationId: operationIdField };
     const wrapped = async (args: Record<string, unknown>, extra: unknown): Promise<CallToolResult> => {
       if (name === "write.document.post_document" && args.expectedDataVersion === undefined)
@@ -827,8 +845,18 @@ export function createServer(ctx: ServerContext): McpServer {
           if (stale) return stale;
         }
       }
+      // Ответственный проверяется до сборки документа: нет пользователя, помечен, недействителен, служебный — отказ.
+      let responsible: string | undefined;
+      if (addResponsible && typeof args.responsibleRef === "string") {
+        const checked = await guard(name, async () => {
+          const conn = ctx.db(typeof args.database === "string" ? args.database : undefined);
+          responsible = (await checkResponsible(conn, args.responsibleRef as string))?.toLowerCase();
+          return ok({});
+        });
+        if (checked.isError) return checked;
+      }
       return withWriteOperation(token, requestHash, async () => {
-        const result = await cb(args, extra);
+        const result = await withResponsible(responsible, () => cb(args, extra));
         if (result?.isError || !result?.structuredContent || typeof result.structuredContent !== "object")
           return result;
         const structuredContent = { ...result.structuredContent, operationId: token };

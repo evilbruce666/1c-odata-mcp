@@ -169,3 +169,17 @@ describe("ревью 1.1", () => {
     expect(String(none.structuredContent["note"] ?? "")).not.toContain("Скрыто");
   });
 });
+
+describe("list_users: refs — проверка привязок", () => {
+  it("состояние названных пользователей независимо от includeInactive; ненайденные — в missing", async () => {
+    const { call } = await setup("ut11");
+    const r = await call("read.catalog.list_users", { refs: [g(1), `{${g(2).toUpperCase()}}`, g(3), g(77)] });
+    expect(r.isError, r.text).toBeFalsy();
+    const by = Object.fromEntries(
+      r.structuredContent.items!.map((i) => [i["ref"], [i["inactive"], i["service"]]]),
+    );
+    expect(by).toEqual({ [g(1)]: [false, false], [g(2)]: [true, false], [g(3)]: [false, true] });
+    expect(r.structuredContent["missing"]).toEqual([g(77)]);
+    expect(String(r.structuredContent["note"] ?? "")).not.toContain("Скрыто");
+  });
+});

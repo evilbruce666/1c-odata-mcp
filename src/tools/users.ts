@@ -25,10 +25,26 @@ export function registerUserTools(server: McpServer, ctx: ServerContext): void {
         "name, inactive (недействителен), service (служебный), deletionMark, department — подразделение, если задано. " +
         "Контактов, фото и кадровых данных нет. query — части слов имени (все, без учёта регистра, ё как е). По " +
         "умолчанию только действующие: без помеченных на удаление, недействительных и служебных — includeInactive=true, " +
-        "чтобы показать всех. count — всего; длинный список читайте с offset=nextOffset, пока он есть.",
+        "чтобы показать всех. refs — проверить привязки: состояние названных пользователей, ненайденные — в missing. count — всего; длинный список читайте с offset=nextOffset, пока он есть.",
       inputSchema: z.object({
         database: databaseField,
         query: z.string().trim().min(1).max(200).optional().describe("Части слов имени: «иван петр»"),
+        refs: z
+          .array(
+            z
+              .string()
+              .trim()
+              .regex(
+                /^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$/,
+                "Ref_Key пользователя (GUID)",
+              ),
+          )
+          .min(1)
+          .max(200)
+          .optional()
+          .describe(
+            "Проверить привязки: состояние этих пользователей по Ref_Key — действует, недействителен, служебный, помечен на удаление или не найден (missing). Показываются все, независимо от includeInactive",
+          ),
         includeInactive: z
           .boolean()
           .default(false)
@@ -37,13 +53,20 @@ export function registerUserTools(server: McpServer, ctx: ServerContext): void {
       }),
       outputSchema: listUsersResultSchema,
     },
-    ({ database, query, includeInactive, limit }) =>
+    ({ database, query, refs, includeInactive, limit }) =>
       guard("read.catalog.list_users", async () => {
         const t0 = Date.now();
         const conn = ctx.db(database);
         const { users, truncated } = await readUsers(conn);
-        const visible = users.filter(
-          (u) => includeInactive || (!u.deletionMark && !u.inactive && !u.service),
+        // Проверка привязок: названные пользователи — все, в каком бы состоянии ни были; ненайденные — в missing.
+        const wanted = refs ? new Set(refs.map((r) => r.replace(/[{}]/g, "").toLowerCase())) : undefined;
+        const missing = wanted
+          ? [...wanted].filter((r) => !users.some((u) => u.ref.toLowerCase() === r))
+          : [];
+        const visible = users.filter((u) =>
+          wanted
+            ? wanted.has(u.ref.toLowerCase())
+            : includeInactive || (!u.deletionMark && !u.inactive && !u.service),
         );
         // Как у номенклатуры: сначала буквально, похожие буквы кириллицы и латиницы — только если ничего нет.
         const literal = query ? visible.filter((u) => matches(u, query, strictText)) : visible;
@@ -64,7 +87,7 @@ export function registerUserTools(server: McpServer, ctx: ServerContext): void {
           notes.push(
             "Точных совпадений нет: найдено с учётом похожих букв кириллицы и латиницы, проверьте имена.",
           );
-        if (!includeInactive && hidden)
+        if (!wanted && !includeInactive && hidden)
           notes.push(
             `Скрыто ${hidden} — помеченные на удаление, недействительные и служебные; includeInactive=true, чтобы показать.`,
           );
@@ -72,6 +95,7 @@ export function registerUserTools(server: McpServer, ctx: ServerContext): void {
         return ok({
           database: conn.cfg.name,
           ...(query ? { query } : {}),
+          ...(missing.length ? { missing } : {}),
           count: sorted.length,
           ...(notes.length ? { note: notes.join(" ") } : {}),
           items: page.map((u) => {

@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/server";
+import { RESPONSIBLE_FIELDS } from "../odata/responsible-context.js";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
 import { CATALOGS, resolveEntity } from "../config/mapping.js";
@@ -48,6 +49,7 @@ export const HISTORY_HEADER_FIELDS = [
   "ВидОперации",
   "Состояние",
   "Ответственный_Key",
+  "Менеджер_Key",
 ] as const;
 
 export const RESPONSIBLE_FIELD = "Ответственный_Key";
@@ -189,8 +191,12 @@ export interface Responsible {
  * роняет инструмент и не превращается в «неизвестного автора»: ref сохраняется,
  * а resolution/detail говорят, что именно не удалось.
  */
-export async function resolveResponsible(conn: Connection, ref: string): Promise<Responsible> {
-  const source = `Document.${RESPONSIBLE_FIELD}`;
+export async function resolveResponsible(
+  conn: Connection,
+  ref: string,
+  field: string = RESPONSIBLE_FIELD,
+): Promise<Responsible> {
+  const source = `Document.${field}`;
   const users = resolveEntity(USERS_CATALOG, await conn.available());
   if (!users) {
     return {
@@ -323,17 +329,18 @@ export async function getDocumentHistory(conn: Connection, documentEntity: strin
   }
 
   // Ответственный — только реквизит документа, не автор/исполнитель.
+  // «Ответственный», где его нет — «Менеджер» (продажи и закупки УТ), как при записи и поиске (1.1).
   let responsible: Responsible | undefined;
-  if (!props.has(RESPONSIBLE_FIELD)) {
+  const respField = RESPONSIBLE_FIELDS.find((f) => props.has(f));
+  if (!respField) {
     limitations.push(
-      `У вида документа ${documentEntity} нет реквизита ${RESPONSIBLE_FIELD} — responsible не возвращается.`,
+      `У вида документа ${documentEntity} нет реквизита «Ответственный» или «Менеджер» — responsible не возвращается.`,
     );
   } else {
-    const respRef = refValue(doc[RESPONSIBLE_FIELD]);
-    if (!respRef)
-      limitations.push(`${RESPONSIBLE_FIELD} у документа не заполнен — responsible не возвращается.`);
+    const respRef = refValue(doc[respField]);
+    if (!respRef) limitations.push(`${respField} у документа не заполнен — responsible не возвращается.`);
     else {
-      responsible = await resolveResponsible(conn, respRef);
+      responsible = await resolveResponsible(conn, respRef, respField);
       if (responsible.resolution !== "resolved") {
         limitations.push(
           `Имя ответственного не получено (${responsible.resolution}): ${responsible.detail ?? ""}`.trim(),

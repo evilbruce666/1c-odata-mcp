@@ -1,4 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
+import { USERS } from "../odata/users.js";
+/** Подразделение строки продаж: в УТ — структура предприятия. */
+const DEPARTMENT_SETS = ["Catalog_СтруктураПредприятия", "Catalog_ПодразделенияОрганизаций"] as const;
 import { z } from "zod";
 import type { ServerContext } from "../context.js";
 import { CATALOGS, resolveEntity } from "../config/mapping.js";
@@ -59,7 +62,7 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
         "видна по всем складам выборки, latest — самый свежий отчёт; какой склад отстаёт — отбор warehouses. Отбор: warehouses — Ref_Key складов (как в get_warehouse_stock), group — группа " +
         "номенклатуры с подгруппами (Ref_Key, название или путь «Телефоны/Смартфоны/Apple»), groups — несколько групп за " +
         "один вызов (итоги каждой в byGroup, у позиции matchedGroupRef), query — часть названия или " +
-        "артикул. groupBy=warehouse — по складам. excludeOwnOrganizations=true — без продаж своим организациям: в УТ это " +
+        "артикул. managers — только продажи этих менеджеров (Ref_Key пользователей 1С, read.catalog.list_users); byManager=true — итоги по менеджерам в byManager; departments и byDepartment — то же по подразделениям. groupBy=warehouse — по складам. excludeOwnOrganizations=true — без продаж своим организациям: в УТ это " +
         "обычная продажа клиенту, и покупатель узнаётся по ИНН, совпавшему с ИНН организации базы; исключённые штуки и " +
         "выручка и все контрагенты, признанные своими по ИНН, — в excludedOwnOrganizations (организация без ИНН так не узнаётся, их число там же). revenue и revenueExVat — выручка с НДС и без НДС, нетто (возвраты и сторно " +
         "вычитаются), в валюте управленческого учёта базы (обычно рубли): розница с комиссионным товаром сверена с отчётами " +
@@ -108,6 +111,30 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
           .max(200)
           .optional()
           .describe("Поиск товара: части слов из названия или артикул. Можно вместе с group или groups"),
+        managers: z
+          .array(z.string().trim().regex(GUID, "Ref_Key пользователя (GUID)"))
+          .min(1)
+          .max(50)
+          .optional()
+          .describe(
+            "Только продажи этих менеджеров — Ref_Key пользователей 1С (read.catalog.list_users); менеджер — измерение регистра продаж",
+          ),
+        byManager: z
+          .boolean()
+          .default(false)
+          .describe(
+            "Итоги по менеджерам (byManager) на первой странице: штуки и выручка каждого, без менеджера — отдельно",
+          ),
+        departments: z
+          .array(z.string().trim().regex(GUID, "Ref_Key подразделения (GUID)"))
+          .min(1)
+          .max(50)
+          .optional()
+          .describe("Только продажи этих подразделений — Ref_Key (их ссылки и названия — в byDepartment)"),
+        byDepartment: z
+          .boolean()
+          .default(false)
+          .describe("Итоги по подразделениям (byDepartment) на первой странице: штуки и выручка каждого"),
         excludeOwnOrganizations: z
           .boolean()
           .default(false)
@@ -129,6 +156,10 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
       groups: groupList,
       query,
       excludeOwnOrganizations,
+      managers,
+      byManager,
+      departments,
+      byDepartment,
       limit,
       snapshot,
     }) =>
@@ -148,10 +179,23 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
           warehouses: filter?.map((w) => w.ref),
           warehouseSet,
           withBuyer: excludeOwnOrganizations,
+          withManager: byManager || !!managers?.length,
+          withDepartment: byDepartment || !!departments?.length,
         });
         const nomSet = await nomenclatureSet(conn);
         // Отбор по товару — по строкам до свёртки: из них же считаются итоги по операциям.
-        const sel = await selectByItem(conn, nomSet, toSalesRows(raw, CATALOGS.warehouses), {
+        const wanted = managers?.length
+          ? new Set(managers.map((m) => m.replace(/[{}]/g, "").toLowerCase()))
+          : undefined;
+        const wantedDeps = departments?.length
+          ? new Set(departments.map((d) => d.replace(/[{}]/g, "").toLowerCase()))
+          : undefined;
+        const salesRows = toSalesRows(raw, CATALOGS.warehouses).filter(
+          (r) =>
+            (!wanted || (!!r.managerRef && wanted.has(r.managerRef.toLowerCase()))) &&
+            (!wantedDeps || (!!r.departmentRef && wantedDeps.has(r.departmentRef.toLowerCase()))),
+        );
+        const sel = await selectByItem(conn, nomSet, salesRows, {
           group,
           groups: groupList,
           query,
@@ -340,11 +384,98 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
           byWarehouseTotals.set(r.warehouseRef ?? "", t);
         }
 
+        // Итоги по менеджерам (пользователи 1С): на первой странице, по всем строкам отбора.
+        const managerTotals = new Map<
+          string,
+          { quantity: number; revenueCents: number; revenueExVatCents: number }
+        >();
+        if (byManager && first)
+          for (const r of kept) {
+            const t = managerTotals.get(r.managerRef ?? "") ?? {
+              quantity: 0,
+              revenueCents: 0,
+              revenueExVatCents: 0,
+            };
+            t.quantity += r.quantity;
+            t.revenueCents += r.revenueCents;
+            t.revenueExVatCents += r.revenueExVatCents;
+            managerTotals.set(r.managerRef ?? "", t);
+          }
+        const departmentTotals = new Map<
+          string,
+          { quantity: number; revenueCents: number; revenueExVatCents: number }
+        >();
+        if (byDepartment && first)
+          for (const r of kept) {
+            const t = departmentTotals.get(r.departmentRef ?? "") ?? {
+              quantity: 0,
+              revenueCents: 0,
+              revenueExVatCents: 0,
+            };
+            t.quantity += r.quantity;
+            t.revenueCents += r.revenueCents;
+            t.revenueExVatCents += r.revenueExVatCents;
+            departmentTotals.set(r.departmentRef ?? "", t);
+          }
+        const depSet = resolveEntity(DEPARTMENT_SETS, await conn.available());
+        const depRefs = [...departmentTotals.keys(), ...(departments ?? [])].filter(Boolean);
+        const departmentNames =
+          depSet && depRefs.length
+            ? await resolveNames(conn, depSet, depRefs).catch(() => new Map<string, string>())
+            : new Map<string, string>();
+        const managerRefs = [...managerTotals.keys(), ...(managers ?? [])].filter(Boolean);
+        const managerNames = managerRefs.length
+          ? await resolveNames(conn, USERS, managerRefs).catch(() => new Map<string, string>())
+          : new Map<string, string>();
+
         return ok({
           database: conn.cfg.name,
           from,
           to,
           ...(byWarehouse ? { groupBy } : {}),
+          ...(managers?.length
+            ? {
+                managerFilter: managers.map((m) => ({
+                  ref: m,
+                  name: managerNames.get(m) ?? managerNames.get(m.toLowerCase()) ?? null,
+                })),
+              }
+            : {}),
+          ...(departments?.length
+            ? { departmentFilter: departments.map((d) => ({ ref: d, name: departmentNames.get(d) ?? null })) }
+            : {}),
+          ...(byDepartment && first
+            ? {
+                byDepartment: [...departmentTotals]
+                  .map(([ref, t]) => ({
+                    department: ref ? (departmentNames.get(ref) ?? ref) : null,
+                    ...(ref ? { departmentRef: ref } : {}),
+                    quantity: qty(t.quantity),
+                    revenue: t.revenueCents / 100,
+                    revenueExVat: t.revenueExVatCents / 100,
+                  }))
+                  .sort(
+                    (a, b) =>
+                      b.revenue - a.revenue || String(a.departmentRef).localeCompare(String(b.departmentRef)),
+                  ),
+              }
+            : {}),
+          ...(byManager && first
+            ? {
+                byManager: [...managerTotals]
+                  .map(([ref, t]) => ({
+                    manager: ref ? (managerNames.get(ref) ?? ref) : null,
+                    ...(ref ? { managerRef: ref } : {}),
+                    quantity: qty(t.quantity),
+                    revenue: t.revenueCents / 100,
+                    revenueExVat: t.revenueExVatCents / 100,
+                  }))
+                  .sort(
+                    (a, b) =>
+                      b.revenue - a.revenue || String(a.managerRef).localeCompare(String(b.managerRef)),
+                  ),
+              }
+            : {}),
           ...(filter ? { warehouseFilter: filter } : {}),
           ...(selectedGroup
             ? { itemGroup: { name: selectedGroup.name, ref: selectedGroup.ref, includesSubgroups: true } }

@@ -1,4 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
+import { resolveNames } from "../odata/accounting.js";
+import { USERS } from "../odata/users.js";
+import { RESPONSIBLE_FIELDS } from "../odata/responsible-context.js";
 import { z } from "zod";
 import type { Connection, ServerContext } from "../context.js";
 import { ok, guard, offsetField, pageOf, databaseField, organizationField } from "./_shared.js";
@@ -61,6 +64,9 @@ const ONLY_EXPLICIT_NAMES: ReadonlySet<string> = new Set([
 
 function toSummary(r: ODataEntity, set: string): DocumentSummary {
   const incoming = typeof r[INCOMING_NUMBER] === "string" ? r[INCOMING_NUMBER].trim() : "";
+  const responsible = RESPONSIBLE_FIELDS.map((f) => r[f]).find(
+    (v): v is string => typeof v === "string" && !!v && !v.startsWith("00000000-0000-0000-0000-000000000000"),
+  );
   return {
     ref: String(r[DOC_FIELDS.ref] ?? ""),
     type: set,
@@ -72,6 +78,7 @@ function toSummary(r: ODataEntity, set: string): DocumentSummary {
       typeof r[DOC_FIELDS.deletionMark] === "boolean" ? (r[DOC_FIELDS.deletionMark] as boolean) : undefined,
     amount: typeof r[DOC_FIELDS.amount] === "number" ? (r[DOC_FIELDS.amount] as number) : undefined,
     ...(incoming ? { incomingNumber: incoming } : {}),
+    ...(responsible ? { responsibleRef: responsible } : {}),
   };
 }
 
@@ -80,6 +87,8 @@ interface SearchParams {
   to?: string | undefined;
   orgKey?: string | undefined;
   counterpartyRef?: string | undefined;
+  /** Ответственный или менеджер документа — пользователь 1С (1.1). */
+  responsibleRef?: string | undefined;
   postedOnly: boolean;
   minAmount?: number | undefined;
   number?: NumberQuery | undefined;
@@ -114,6 +123,10 @@ async function searchSet(conn: Connection, set: string, p: SearchParams): Promis
     return { set, skipped: `нет поля «${DOC_FIELDS.amount}» — фильтр minAmount неприменим` };
   if (p.orgKey && !props.has(DOC_FIELDS.organization))
     return { set, skipped: "нет поля организации — фильтр по организации неприменим" };
+  // Ответственный: «Ответственный», иначе «Менеджер» (продажи и закупки УТ) — как при записи документа.
+  const responsibleField = p.responsibleRef ? RESPONSIBLE_FIELDS.find((f) => props.has(f)) : undefined;
+  if (p.responsibleRef && !responsibleField)
+    return { set, skipped: "нет поля «Ответственный» или «Менеджер» — фильтр по ответственному неприменим" };
 
   // Контрагент бывает типизированным (Контрагент_Key) или полиморфным (Контрагент + Контрагент_Type): второй
   // 1С сравнивает только через cast, и он находит лишь контрагентов — см. poly-counterparty.ts.
@@ -158,6 +171,7 @@ async function searchSet(conn: Connection, set: string, p: SearchParams): Promis
     p.from ? cmp(DOC_FIELDS.date, "ge", `datetime'${p.from}T00:00:00'`) : undefined,
     p.to ? cmp(DOC_FIELDS.date, "le", `datetime'${p.to}T23:59:59'`) : undefined,
     p.orgKey ? cmp(DOC_FIELDS.organization, "eq", odataGuid(p.orgKey)) : undefined,
+    responsibleField ? cmp(responsibleField, "eq", odataGuid(p.responsibleRef!)) : undefined,
     cpServer,
     p.postedOnly ? cmp(DOC_FIELDS.posted, "eq", "true") : undefined,
     typeof p.minAmount === "number" ? cmp(DOC_FIELDS.amount, "ge", String(p.minAmount)) : undefined,
@@ -173,6 +187,8 @@ async function searchSet(conn: Connection, set: string, p: SearchParams): Promis
     DOC_FIELDS.amount,
     ...(cpClientRef ? [POLY_COUNTERPARTY] : []),
     INCOMING_NUMBER,
+    // Ответственный документа — по схеме: «Ответственный», иначе «Менеджер» (1.1, имя — одним запросом на страницу).
+    ...RESPONSIBLE_FIELDS.filter((f) => props.has(f)).slice(0, 1),
   ].filter((f) => props.has(f));
 
   // При клиентской фильтрации тянем больше строк (до maxRows), затем режем до limit.
@@ -296,6 +312,17 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
         from: z.string().optional().describe("Дата начала (YYYY-MM-DD)"),
         to: z.string().optional().describe("Дата конца (YYYY-MM-DD)"),
         counterpartyRef: z.string().optional().describe("Ref_Key контрагента для фильтра"),
+        responsibleRef: z
+          .string()
+          .trim()
+          .regex(
+            /^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$/,
+            "Ref_Key пользователя (GUID)",
+          )
+          .optional()
+          .describe(
+            "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): поле «Ответственный», где его нет — «Менеджер» (продажи и закупки УТ). Документы без этих полей пропускаются (skipped)",
+          ),
         postedOnly: z.boolean().default(false).describe("Только проведённые документы"),
         minAmount: z.number().optional().describe("Минимальная сумма документа"),
         limit: z.number().int().positive().max(500).default(50).describe("Сколько документов вернуть"),
@@ -312,6 +339,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
       from,
       to,
       counterpartyRef,
+      responsibleRef,
       postedOnly,
       minAmount,
       limit,
@@ -330,6 +358,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
           to,
           orgKey,
           counterpartyRef,
+          responsibleRef: responsibleRef?.replace(/[{}]/g, ""),
           postedOnly,
           minAmount,
           number: q,
@@ -359,7 +388,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
             ...head,
             ...page,
             count: items.length,
-            rows: items,
+            rows: responsibleRef ? await withResponsibleNames(conn, items) : items,
             ...(r.capHit ? { cappedSets: [entitySet] } : {}),
             ...(note ? { note } : {}),
           });
@@ -426,7 +455,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
           ...head,
           ...page,
           count: items.length,
-          rows: items,
+          rows: responsibleRef ? await withResponsibleNames(conn, items) : items,
           ...(capped.length ? { cappedSets: capped } : {}),
           ...(note ? { note } : {}),
         });
@@ -462,6 +491,22 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
  * Совпавшие по своему номеру — выше совпавших по входящему: «счёт №33» — это обычно свой номер, а
  * входящий «33» бывает у десятков банковских выписок. Внутри — новые сверху.
  */
+/**
+ * Имя ответственного у документов страницы — одним запросом к справочнику пользователей; сбой — без имён. Только при
+ * отборе по ответственному: без него поиск делал бы лишний запрос к 1С на каждый вызов (норма запросов).
+ */
+async function withResponsibleNames(conn: Connection, rows: DocumentSummary[]): Promise<DocumentSummary[]> {
+  const refs = [
+    ...new Set(rows.flatMap((r) => (typeof r.responsibleRef === "string" ? [r.responsibleRef] : []))),
+  ];
+  if (!refs.length || !(await conn.available()).has(USERS)) return rows;
+  const names = await resolveNames(conn, USERS, refs).catch(() => new Map<string, string>());
+  return rows.map((r) => {
+    const name = typeof r.responsibleRef === "string" ? names.get(r.responsibleRef) : undefined;
+    return name ? { ...r, responsible: name } : r;
+  });
+}
+
 function byNumberMatchThenDate(a: DocumentSummary, b: DocumentSummary): number {
   const rank = (d: DocumentSummary) => (d["matchedBy"] === "incomingNumber" ? 1 : 0);
   return rank(a) - rank(b) || String(b.date ?? "").localeCompare(String(a.date ?? ""));

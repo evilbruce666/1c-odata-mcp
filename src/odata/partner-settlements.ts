@@ -29,6 +29,7 @@ const REGISTERS: Record<Side, { set: string; label: string }> = {
 };
 
 const KEY_NAV = "АналитикаУчетаПоПартнерам";
+const OBJECT_NAV = "ОбъектРасчетов";
 export const PARTNERS_CATALOG = "Catalog_Партнеры";
 
 export interface SettlementRow {
@@ -38,6 +39,8 @@ export interface SettlementRow {
   dueDate?: string;
   debtCents: number;
   prepaymentCents: number;
+  /** Менеджер объекта расчётов (пользователь 1С); есть, только если читали с withManager. */
+  managerRef?: string;
 }
 
 /** Строки остатков «по срокам» с партнёром и организацией из ключа аналитики (тем же запросом, через $expand). */
@@ -49,6 +52,8 @@ export async function readSettlements(
   conn: Connection,
   side: Side,
   asOf?: string,
+  /** Менеджер — из объекта расчётов строки, тем же запросом ($expand): только когда нужен отбор или итоги по нему. */
+  withManager = false,
 ): Promise<{ rows: SettlementRow[]; scanned: number }> {
   const { set, label } = REGISTERS[side];
   const register = await requireEntity(conn, [set], label);
@@ -64,8 +69,9 @@ export async function readSettlements(
         "ДатаПлановогоПогашения",
         "ДолгРеглBalance",
         "ПредоплатаРеглBalance",
+        ...(withManager ? [`${OBJECT_NAV}/Менеджер_Key`] : []),
       ],
-      expand: [KEY_NAV],
+      expand: withManager ? [KEY_NAV, OBJECT_NAV] : [KEY_NAV],
     },
     `расчёты на ${asOf ?? "сейчас"}`,
   );
@@ -74,12 +80,14 @@ export async function readSettlements(
     rows: rows.map((r) => {
       const key = (r[KEY_NAV] ?? {}) as ODataEntity;
       const partnerRef = refOf(key["Партнер_Key"]);
+      const managerRef = refOf(((r[OBJECT_NAV] ?? {}) as ODataEntity)["Менеджер_Key"]);
       const organizationRef = refOf(key["Организация_Key"]);
       const due =
         typeof r["ДатаПлановогоПогашения"] === "string" ? r["ДатаПлановогоПогашения"].slice(0, 10) : "";
       return {
         ...(partnerRef ? { partnerRef } : {}),
         ...(organizationRef ? { organizationRef } : {}),
+        ...(managerRef ? { managerRef } : {}),
         ...(due && !due.startsWith("0001") ? { dueDate: due } : {}),
         debtCents: Math.round(num(r["ДолгРеглBalance"]) * 100),
         prepaymentCents: Math.round(num(r["ПредоплатаРеглBalance"]) * 100),

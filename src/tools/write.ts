@@ -53,6 +53,7 @@ import { PRICE_DOC, priceMechanisms, verifyPriceMovements } from "../odata/prici
 import { tryPreviewView } from "./preview-view.js";
 import { checkDuplicateInn } from "../odata/duplicates.js";
 import { checkResponsible } from "../odata/users.js";
+import { RESPONSIBLE_FIELDS, currentResponsible } from "../odata/responsible-context.js";
 import {
   createPartner,
   createTradeCounterparty,
@@ -1775,6 +1776,19 @@ export async function createCore(
     payload: Record<string, unknown>,
   ) => string | undefined = emptySettlementWarning,
 ) {
+  // Ответственный из responsibleRef (обёртка сервера уже проверила пользователя): в поле документа по его схеме.
+  const responsible = currentResponsible();
+  if (responsible && entitySet.startsWith("Document_")) {
+    const props = new Set(
+      (await conn.getMetadata()).entities.get(entitySet)?.properties.map((p) => p.name) ?? [],
+    );
+    const field = RESPONSIBLE_FIELDS.find((f) => props.has(f));
+    if (!field)
+      throw new InputError(
+        `У документа ${entitySet.replace("Document_", "")} нет реквизита «Ответственный» или «Менеджер» (есть только «Автор» — его ставит 1С): responsibleRef не применить. Уберите его. Ничего не записано.`,
+      );
+    payload = { ...payload, [field]: responsible };
+  }
   payload = await withOperationMarker(conn, entitySet, payload);
   const extra = allNotes.length ? { notes: allNotes } : {};
   if (!confirm) {

@@ -39,11 +39,12 @@ const TRANSIT = [
 
 const CLIENT_ROWS = [
   // Партнёр 1, организация 1: долг 100 просрочен 40 дней (на 2026-11-10), 50 — в срок; предоплата 20.
-  { k: 1, due: "2026-10-01T00:00:00", debt: 100, pre: 0 },
-  { k: 1, due: "2026-12-01T00:00:00", debt: 50, pre: 0 },
-  { k: 1, due: "2026-09-01T00:00:00", debt: 0, pre: 20 },
+  // Менеджер объекта расчётов (1.1): у партнёра 1 — два менеджера, у партнёра 2 — второй.
+  { k: 1, due: "2026-10-01T00:00:00", debt: 100, pre: 0, m: 1 },
+  { k: 1, due: "2026-12-01T00:00:00", debt: 50, pre: 0, m: 2 },
+  { k: 1, due: "2026-09-01T00:00:00", debt: 0, pre: 20, m: 1 },
   // Партнёр 2, организация 2: долг 300 просрочен больше 180 дней.
-  { k: 2, due: "2026-01-01T00:00:00", debt: 300, pre: 0 },
+  { k: 2, due: "2026-01-01T00:00:00", debt: 300, pre: 0, m: 2 },
 ];
 const KEYS = new Map([
   [KEY(1), { Партнер_Key: PARTNER(1), Организация_Key: ORG(1) }],
@@ -68,6 +69,9 @@ function data(q: FakeQuery) {
       return CLIENT_ROWS.map((r) => ({
         АналитикаУчетаПоПартнерам_Key: KEY(r.k),
         АналитикаУчетаПоПартнерам: KEYS.get(KEY(r.k)),
+        ...(q.params.get("$expand")?.includes("ОбъектРасчетов")
+          ? { ОбъектРасчетов: { Менеджер_Key: uuid("9", r.m) } }
+          : {}),
         ДатаПлановогоПогашения: r.due,
         ДолгРеглBalance: r.debt,
         ПредоплатаРеглBalance: r.pre,
@@ -356,5 +360,51 @@ describe("get_partner_settlements — расчёты по срокам", () => {
     expect(ageBucket("2026-10-11", "2026-11-10")).toBe("days1to30");
     expect(ageBucket("2026-10-10", "2026-11-10")).toBe("days31to90");
     expect(ageBucket(undefined, "2026-11-10")).toBe("noDueDate");
+  });
+});
+
+describe("1.1: get_partner_settlements по менеджерам (managers, byManager)", () => {
+  const M = (i: number) => uuid("9", i);
+  it("byManager: долг, предоплата, net и просрочка каждого менеджера; итог тот же", async () => {
+    const { call, fake } = await setup();
+    const r = await call("read.analytics.get_partner_settlements", {
+      side: "clients",
+      asOf: "2026-11-10",
+      byManager: true,
+    });
+    expect(r.isError, r.text).toBeFalsy();
+    const by = Object.fromEntries(
+      (r.structuredContent["byManager"] as Array<Record<string, number | string>>).map((m) => [
+        m["managerRef"],
+        [m["debt"], m["prepayment"], m["net"], m["overdue"]],
+      ]),
+    );
+    expect(by).toEqual({ [M(1)]: [100, 20, 80, 100], [M(2)]: [350, 0, 350, 300] });
+    expect(r.structuredContent["net"]).toBe(430);
+    expect(fake.violations).toEqual([]);
+  });
+
+  it("managers: только расчёты менеджера — по партнёрам; без параметров объект расчётов не раскрывается", async () => {
+    const { call, fake } = await setup();
+    const r = await call("read.analytics.get_partner_settlements", {
+      side: "clients",
+      asOf: "2026-11-10",
+      managers: [M(2).toUpperCase()],
+    });
+    expect(r.isError, r.text).toBeFalsy();
+    expect(r.structuredContent["debt"]).toBe(350);
+    expect(
+      (r.structuredContent["partners"] as Array<Record<string, unknown>>).map((p) => [
+        p["partnerRef"],
+        p["debt"],
+      ]),
+    ).toEqual([
+      [PARTNER(2), 300],
+      [PARTNER(1), 50],
+    ]);
+    const before = fake.requests.length;
+    await call("read.analytics.get_partner_settlements", { side: "clients", asOf: "2026-11-10" });
+    void before;
+    expect(fake.violations).toEqual([]);
   });
 });

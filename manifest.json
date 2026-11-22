@@ -793,6 +793,12 @@
                 },
                 "amount": {
                   "type": "number"
+                },
+                "responsibleRef": {
+                  "type": "string"
+                },
+                "responsible": {
+                  "type": "string"
                 }
               },
               "required": [
@@ -927,6 +933,12 @@
                 },
                 "amount": {
                   "type": "number"
+                },
+                "responsibleRef": {
+                  "type": "string"
+                },
+                "responsible": {
+                  "type": "string"
                 }
               },
               "required": [
@@ -1014,6 +1026,11 @@
             "description": "Ref_Key контрагента для фильтра",
             "type": "string"
           },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): поле «Ответственный», где его нет — «Менеджер» (продажи и закупки УТ). Документы без этих полей пропускаются (skipped)",
+            "type": "string",
+            "pattern": "^\\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}?$"
+          },
           "postedOnly": {
             "default": false,
             "description": "Только проведённые документы",
@@ -1077,6 +1094,12 @@
                 },
                 "amount": {
                   "type": "number"
+                },
+                "responsibleRef": {
+                  "type": "string"
+                },
+                "responsible": {
+                  "type": "string"
                 }
               },
               "required": [
@@ -2544,7 +2567,7 @@
     {
       "name": "read.analytics.get_sales_register",
       "title": "Продажи по номенклатуре (УТ 11, КА 2, ERP 2)",
-      "description": "Продажи товаров в штуках за период по регистру «Выручка и себестоимость продаж» (УТ 11, КА 2, ERP 2; проверено на УТ 11.5), включая розницу (в Бухгалтерии продажи по документам — get_sales_breakdown). quantity — нетто: sold (продано) минус returns (возвраты и сторно продаж, в регистре они с минусом); byOperation — то же по хозяйственным операциям (РеализацияВРозницу, РеализацияКлиенту, ВозвратТоваровОтКлиентаПрошлыхПериодов, СторноРеализации…). Розница попадает в регистр только отчётом о розничных продажах после закрытия смены: retailReports.completeThrough — дата, по которую розница видна по всем складам выборки, latest — самый свежий отчёт; какой склад отстаёт — отбор warehouses. Отбор: warehouses — Ref_Key складов (как в get_warehouse_stock), group — группа номенклатуры с подгруппами (Ref_Key, название или путь «Телефоны/Смартфоны/Apple»), groups — несколько групп за один вызов (итоги каждой в byGroup, у позиции matchedGroupRef), query — часть названия или артикул. groupBy=warehouse — по складам. excludeOwnOrganizations=true — без продаж своим организациям: в УТ это обычная продажа клиенту, и покупатель узнаётся по ИНН, совпавшему с ИНН организации базы; исключённые штуки и выручка и все контрагенты, признанные своими по ИНН, — в excludedOwnOrganizations (организация без ИНН так не узнаётся, их число там же). revenue и revenueExVat — выручка с НДС и без НДС, нетто (возвраты и сторно вычитаются), в валюте управленческого учёта базы (обычно рубли): розница с комиссионным товаром сверена с отчётами о розничных продажах до рубля. count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть: следующие страницы в течение минуты берут строки первой, регистр заново не читается.",
+      "description": "Продажи товаров в штуках за период по регистру «Выручка и себестоимость продаж» (УТ 11, КА 2, ERP 2; проверено на УТ 11.5), включая розницу (в Бухгалтерии продажи по документам — get_sales_breakdown). quantity — нетто: sold (продано) минус returns (возвраты и сторно продаж, в регистре они с минусом); byOperation — то же по хозяйственным операциям (РеализацияВРозницу, РеализацияКлиенту, ВозвратТоваровОтКлиентаПрошлыхПериодов, СторноРеализации…). Розница попадает в регистр только отчётом о розничных продажах после закрытия смены: retailReports.completeThrough — дата, по которую розница видна по всем складам выборки, latest — самый свежий отчёт; какой склад отстаёт — отбор warehouses. Отбор: warehouses — Ref_Key складов (как в get_warehouse_stock), group — группа номенклатуры с подгруппами (Ref_Key, название или путь «Телефоны/Смартфоны/Apple»), groups — несколько групп за один вызов (итоги каждой в byGroup, у позиции matchedGroupRef), query — часть названия или артикул. managers — только продажи этих менеджеров (Ref_Key пользователей 1С, read.catalog.list_users); byManager=true — итоги по менеджерам в byManager; departments и byDepartment — то же по подразделениям. groupBy=warehouse — по складам. excludeOwnOrganizations=true — без продаж своим организациям: в УТ это обычная продажа клиенту, и покупатель узнаётся по ИНН, совпавшему с ИНН организации базы; исключённые штуки и выручка и все контрагенты, признанные своими по ИНН, — в excludedOwnOrganizations (организация без ИНН так не узнаётся, их число там же). revenue и revenueExVat — выручка с НДС и без НДС, нетто (возвраты и сторно вычитаются), в валюте управленческого учёта базы (обычно рубли): розница с комиссионным товаром сверена с отчётами о розничных продажах до рубля. count — всего позиций; длинный список читайте с offset=nextOffset, пока он есть: следующие страницы в течение минуты берут строки первой, регистр заново не читается.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2604,6 +2627,36 @@
             "minLength": 1,
             "maxLength": 200
           },
+          "managers": {
+            "description": "Только продажи этих менеджеров — Ref_Key пользователей 1С (read.catalog.list_users); менеджер — измерение регистра продаж",
+            "minItems": 1,
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}?$"
+            }
+          },
+          "byManager": {
+            "default": false,
+            "description": "Итоги по менеджерам (byManager) на первой странице: штуки и выручка каждого, без менеджера — отдельно",
+            "type": "boolean"
+          },
+          "departments": {
+            "description": "Только продажи этих подразделений — Ref_Key (их ссылки и названия — в byDepartment)",
+            "minItems": 1,
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}?$"
+            }
+          },
+          "byDepartment": {
+            "default": false,
+            "description": "Итоги по подразделениям (byDepartment) на первой странице: штуки и выручка каждого",
+            "type": "boolean"
+          },
           "excludeOwnOrganizations": {
             "default": false,
             "description": "Не считать продажи своим организациям: покупатель-контрагент с ИНН одной из организаций базы. Исключённое — в excludedOwnOrganizations",
@@ -2648,6 +2701,116 @@
           },
           "groupBy": {
             "type": "string"
+          },
+          "departmentFilter": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ref": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "ref",
+                "name"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "byDepartment": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "department": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "departmentRef": {
+                  "type": "string"
+                },
+                "quantity": {
+                  "type": "number"
+                },
+                "revenue": {
+                  "type": "number"
+                },
+                "revenueExVat": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "department",
+                "quantity",
+                "revenue",
+                "revenueExVat"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "managerFilter": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ref": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "ref",
+                "name"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "byManager": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "manager": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "managerRef": {
+                  "type": "string"
+                },
+                "quantity": {
+                  "type": "number"
+                },
+                "revenue": {
+                  "type": "number"
+                },
+                "revenueExVat": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "manager",
+                "quantity",
+                "revenue",
+                "revenueExVat"
+              ],
+              "additionalProperties": {}
+            }
           },
           "warehouseFilter": {
             "type": "array",
@@ -3070,7 +3233,7 @@
     {
       "name": "read.analytics.get_partner_settlements",
       "title": "Расчёты с партнёрами (УТ 11, КА 2, ERP 2)",
-      "description": "Кто кому должен по управленческим расчётам с партнёрами: регистры «Расчёты с клиентами / поставщиками по срокам» (УТ 11, КА 2, ERP 2; проверено на УТ 11.5). Это не счёт 62/60 бухучёта (в Бухгалтерии — get_debtors / get_creditors; в КА и ERP суммы могут расходиться). side=clients — долг клиентов нам, side=suppliers — наш долг поставщикам. debt — долг, prepayment — предоплата (аванс), net = debt − prepayment, всё в регламентированной валюте. overdue — долг с плановой датой погашения раньше даты расчёта (on: asOf или сегодня), aging — долг по срокам просрочки (сторно с минусом может сделать отдельную корзину отрицательной, сумма корзин всегда равна debt), maxOverdueDays — самая старая просрочка партнёра. Отбор: organization, partner (Ref_Key партнёра), overdueOnly — только партнёры с просрочкой. partners — по убыванию net; count — всего партнёров, длинный список читайте с offset=nextOffset.",
+      "description": "Кто кому должен по управленческим расчётам с партнёрами: регистры «Расчёты с клиентами / поставщиками по срокам» (УТ 11, КА 2, ERP 2; проверено на УТ 11.5). Это не счёт 62/60 бухучёта (в Бухгалтерии — get_debtors / get_creditors; в КА и ERP суммы могут расходиться). side=clients — долг клиентов нам, side=suppliers — наш долг поставщикам. debt — долг, prepayment — предоплата (аванс), net = debt − prepayment, всё в регламентированной валюте. overdue — долг с плановой датой погашения раньше даты расчёта (on: asOf или сегодня), aging — долг по срокам просрочки (сторно с минусом может сделать отдельную корзину отрицательной, сумма корзин всегда равна debt), maxOverdueDays — самая старая просрочка партнёра. Отбор: organization, partner (Ref_Key партнёра), overdueOnly — только партнёры с просрочкой, managers — расчёты этих менеджеров (Ref_Key пользователей 1С, read.catalog.list_users; менеджер — у объекта расчётов); byManager=true — итоги по менеджерам в byManager. partners — по убыванию net; count — всего партнёров, длинный список читайте с offset=nextOffset.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3106,6 +3269,21 @@
             "description": "Только партнёры с просроченным долгом",
             "type": "boolean"
           },
+          "managers": {
+            "description": "Только расчёты этих менеджеров — Ref_Key пользователей 1С (read.catalog.list_users); менеджер — у объекта расчётов (заказ, договор, документ)",
+            "minItems": 1,
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}?$"
+            }
+          },
+          "byManager": {
+            "default": false,
+            "description": "Итоги по менеджерам (byManager): долг, предоплата, net и просрочка каждого; без менеджера — отдельно",
+            "type": "boolean"
+          },
           "limit": {
             "default": 100,
             "description": "Сколько партнёров вернуть",
@@ -3129,6 +3307,65 @@
       "outputSchema": {
         "type": "object",
         "properties": {
+          "managerFilter": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ref": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "ref",
+                "name"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "byManager": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "manager": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "managerRef": {
+                  "type": "string"
+                },
+                "debt": {
+                  "type": "number"
+                },
+                "prepayment": {
+                  "type": "number"
+                },
+                "net": {
+                  "type": "number"
+                },
+                "overdue": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "manager",
+                "debt",
+                "prepayment",
+                "net",
+                "overdue"
+              ],
+              "additionalProperties": {}
+            }
+          },
           "database": {
             "type": "string"
           },
@@ -3609,7 +3846,7 @@
     {
       "name": "read.catalog.list_users",
       "title": "Пользователи 1С",
-      "description": "Пользователи 1С (справочник «Пользователи», Бухгалтерия и Управление торговлей) — чтобы выбрать ответственного документа (responsibleRef в create_price_setting, create_payout_order). Поля: ref (Ref_Key), name, inactive (недействителен), service (служебный), deletionMark, department — подразделение, если задано. Контактов, фото и кадровых данных нет. query — части слов имени (все, без учёта регистра, ё как е). По умолчанию только действующие: без помеченных на удаление, недействительных и служебных — includeInactive=true, чтобы показать всех. count — всего; длинный список читайте с offset=nextOffset, пока он есть.",
+      "description": "Пользователи 1С (справочник «Пользователи», Бухгалтерия и Управление торговлей) — чтобы выбрать ответственного документа (responsibleRef в create_price_setting, create_payout_order). Поля: ref (Ref_Key), name, inactive (недействителен), service (служебный), deletionMark, department — подразделение, если задано. Контактов, фото и кадровых данных нет. query — части слов имени (все, без учёта регистра, ё как е). По умолчанию только действующие: без помеченных на удаление, недействительных и служебных — includeInactive=true, чтобы показать всех. refs — проверить привязки: состояние названных пользователей, ненайденные — в missing. count — всего; длинный список читайте с offset=nextOffset, пока он есть.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3622,6 +3859,16 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 200
+          },
+          "refs": {
+            "description": "Проверить привязки: состояние этих пользователей по Ref_Key — действует, недействителен, служебный, помечен на удаление или не найден (missing). Показываются все, независимо от includeInactive",
+            "minItems": 1,
+            "maxItems": 200,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}?$"
+            }
           },
           "includeInactive": {
             "default": false,
@@ -3653,6 +3900,12 @@
           },
           "query": {
             "type": "string"
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "count": {
             "type": "number"
@@ -7894,6 +8147,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [
@@ -8604,6 +8861,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [
@@ -8785,6 +9046,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [
@@ -9193,6 +9458,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [
@@ -9553,6 +9822,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [
@@ -9750,6 +10023,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [
@@ -9959,6 +10236,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [
@@ -10152,6 +10433,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [
@@ -10306,6 +10591,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [
@@ -10465,6 +10754,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [
@@ -10618,6 +10911,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [
@@ -10761,6 +11058,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [
@@ -11071,6 +11372,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [
@@ -11390,6 +11695,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [
@@ -11575,6 +11884,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [
@@ -11833,6 +12146,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [
@@ -12062,6 +12379,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [
@@ -12317,6 +12638,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [
@@ -12538,6 +12863,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [
@@ -12759,6 +13088,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [
@@ -12872,6 +13205,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [
@@ -12988,6 +13325,10 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "responsibleRef": {
+            "description": "Ответственный документа — Ref_Key пользователя 1С (read.catalog.list_users): ставится в «Ответственный» или, где его нет (продажи и закупки УТ), в «Менеджер». Помеченный, недействительный и служебный — отказ",
+            "type": "string"
           }
         },
         "required": [

@@ -2503,6 +2503,9 @@
 				<Property Name="ТипОбъектаРасчетов"
 						Type="Edm.String"
 						Nullable="true"/>
+				<Property Name="Менеджер_Key"
+						Type="Edm.Guid"
+						Nullable="true"/>
 				<Property Name="Партнер_Key"
 						Type="Edm.Guid"
 						Nullable="true"/>

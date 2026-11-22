@@ -523,3 +523,76 @@ describe("aggregateSales", () => {
     ]);
   });
 });
+
+describe("1.1: продажи по менеджерам (managers, byManager)", () => {
+  const M1 = uuid("e", 1);
+  const M2 = uuid("e", 2);
+  // Менеджер — измерение регистра: продажи I(1) — у M1, I(2) — у M2, остальное без менеджера.
+  const withManagers = SALES.map((r) => ({
+    ...r,
+    Менеджер_Key:
+      r.АналитикаУчетаНоменклатуры.Номенклатура_Key === I(1)
+        ? M1
+        : r.АналитикаУчетаНоменклатуры.Номенклатура_Key === I(2)
+          ? M2
+          : "00000000-0000-0000-0000-000000000000",
+  }));
+  const sum = (f: (r: (typeof withManagers)[number]) => boolean) =>
+    withManagers.filter(f).reduce((t, r) => t + Math.round(r.СуммаВыручкиTurnover * 100), 0) / 100;
+
+  it("byManager: штуки и выручка каждого менеджера, без менеджера — отдельно; итог тот же", async () => {
+    const { call, seen } = await setup("ut11", { sales: withManagers as typeof SALES });
+    const r = await call({ byManager: true });
+    expect(r.isError, r.text).toBeFalsy();
+    const s = r.structuredContent as Sales & {
+      byManager: { managerRef?: string; quantity: number; revenue: number }[];
+      revenue: number;
+    };
+    const by = Object.fromEntries(s.byManager.map((m) => [m.managerRef ?? "-", [m.quantity, m.revenue]]));
+    expect(by[M1]).toEqual([8, sum((x) => x.Менеджер_Key === M1)]);
+    expect(by[M2]).toEqual([5, sum((x) => x.Менеджер_Key === M2)]);
+    expect(by["-"]![0]).toBe(3);
+    expect(s.byManager.reduce((t, m) => t + m.revenue, 0)).toBeCloseTo(s.revenue, 2);
+    expect(seen.find((q) => q.fn === "Turnovers")!.params.get("$select")).toContain("Менеджер_Key");
+  });
+
+  it("managers: только продажи этих менеджеров; без параметров менеджер из регистра не читается", async () => {
+    const { call, seen } = await setup("ut11", { sales: withManagers as typeof SALES });
+    const r = await call({ managers: [M2.toUpperCase()] });
+    expect(r.isError, r.text).toBeFalsy();
+    expect(r.structuredContent.items.map((i) => i.ref)).toEqual([I(2), I(2)]);
+    expect(r.structuredContent.totalQuantity).toBe(5);
+    const plain = await setup("ut11", { sales: withManagers as typeof SALES });
+    await plain.call();
+    expect(plain.seen.find((q) => q.fn === "Turnovers")!.params.get("$select")).not.toContain("Менеджер_Key");
+    void seen;
+  });
+});
+
+describe("1.1: продажи по подразделениям (departments, byDepartment)", () => {
+  const D1 = uuid("d", 91);
+  const D2 = uuid("d", 92);
+  const withDeps = SALES.map((r, i) => ({ ...r, Подразделение_Key: i % 2 ? D2 : D1 }));
+  it("byDepartment сходится с итогом; departments — только продажи подразделения; без них поле не читается", async () => {
+    const { call, seen } = await setup("ut11", { sales: withDeps as typeof SALES });
+    const r = await call({ byDepartment: true });
+    expect(r.isError, r.text).toBeFalsy();
+    const s = r.structuredContent as Sales & {
+      byDepartment: { departmentRef?: string; quantity: number; revenue: number }[];
+      revenue: number;
+    };
+    const q = (d: string) =>
+      withDeps.filter((x) => x.Подразделение_Key === d).reduce((t, x) => t + x.КоличествоTurnover, 0);
+    const by = Object.fromEntries(s.byDepartment.map((d) => [d.departmentRef, d.quantity]));
+    expect(by).toEqual({ [D1]: q(D1), [D2]: q(D2) });
+    expect(s.byDepartment.reduce((t, d) => t + d.revenue, 0)).toBeCloseTo(s.revenue, 2);
+    expect(seen.find((x) => x.fn === "Turnovers")!.params.get("$select")).toContain("Подразделение_Key");
+    const only = await call({ departments: [D2] });
+    expect(only.structuredContent.totalQuantity).toBe(q(D2));
+    const plain = await setup("ut11", { sales: withDeps as typeof SALES });
+    await plain.call();
+    expect(plain.seen.find((x) => x.fn === "Turnovers")!.params.get("$select")).not.toContain(
+      "Подразделение_Key",
+    );
+  });
+});

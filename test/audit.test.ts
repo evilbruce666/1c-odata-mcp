@@ -574,7 +574,7 @@ describe("read.audit.get_document_history", () => {
         return { ...r, calls: s.calls };
       })();
       expect(responsible).toBeUndefined();
-      expect(limitations.some((l) => l.includes("нет реквизита Ответственный_Key"))).toBe(true);
+      expect(limitations.some((l) => l.includes("нет реквизита «Ответственный» или «Менеджер»"))).toBe(true);
       expect(calls.some((c) => c.path.includes(USERS))).toBe(false);
     });
 

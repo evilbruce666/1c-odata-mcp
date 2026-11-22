@@ -194,6 +194,28 @@ async function main(): Promise<number> {
       "write.catalog.create_contract (поставщик)",
     );
     const inv = await flow("write.sales.create_invoice", { counterpartyRef: cpRef, lines: L });
+    // Ответственный (responsibleRef): действующий пользователь из list_users — в «Ответственный» документа.
+    {
+      const user = (
+        (await run("read.catalog.list_users", { limit: 1 })).sc["items"] as Json[] | undefined
+      )?.[0]?.["ref"];
+      const withUser =
+        typeof user === "string"
+          ? await flow(
+              "write.sales.create_invoice",
+              { counterpartyRef: cpRef, lines: L, responsibleRef: user },
+              "счёт с ответственным",
+            )
+          : undefined;
+      const got = withUser
+        ? (
+            await client.getEntity(
+              `${String(withUser["entitySet"])}(guid'${String(withUser["ref"])}')?$format=json&$select=Ответственный_Key`,
+            )
+          )["Ответственный_Key"]
+        : undefined;
+      check("ответственный → «Ответственный» счёта", typeof user === "string" && got === user);
+    }
     const pur = await flow("write.purchase.create_purchase", { counterpartyRef: cpRef, lines: L });
     await flow("write.purchase.create_supplier_invoice", { counterpartyRef: cpRef, lines: L });
     await flow("write.money.create_payout_order", {

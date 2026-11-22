@@ -41,6 +41,8 @@ export const documentSummarySchema = z
     organization: z.string().optional(),
     counterparty: z.string().optional(),
     amount: z.number().optional(),
+    responsibleRef: z.string().optional(),
+    responsible: z.string().optional(),
   })
   .passthrough();
 
@@ -548,6 +550,7 @@ export const listUsersResultSchema = z
   .object({
     database: z.string(),
     query: z.string().optional(),
+    missing: z.array(z.string()).optional(),
     count: z.number(),
     note: z.string().optional(),
     items: z.array(
@@ -602,6 +605,23 @@ export const listItemsResultSchema = z
 
 export const partnerSettlementsResultSchema = z
   .object({
+    managerFilter: z
+      .array(z.object({ ref: z.string(), name: z.string().nullable() }).passthrough())
+      .optional(),
+    byManager: z
+      .array(
+        z
+          .object({
+            manager: z.string().nullable(),
+            managerRef: z.string().optional(),
+            debt: z.number(),
+            prepayment: z.number(),
+            net: z.number(),
+            overdue: z.number(),
+          })
+          .passthrough(),
+      )
+      .optional(),
     database: z.string(),
     side: z.enum(["clients", "suppliers"]),
     on: z.string(),
@@ -652,6 +672,38 @@ export const getItemSalesResultSchema = z
     from: z.string(),
     to: z.string(),
     groupBy: z.string().optional(),
+    departmentFilter: z
+      .array(z.object({ ref: z.string(), name: z.string().nullable() }).passthrough())
+      .optional(),
+    byDepartment: z
+      .array(
+        z
+          .object({
+            department: z.string().nullable(),
+            departmentRef: z.string().optional(),
+            quantity: z.number(),
+            revenue: z.number(),
+            revenueExVat: z.number(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+    managerFilter: z
+      .array(z.object({ ref: z.string(), name: z.string().nullable() }).passthrough())
+      .optional(),
+    byManager: z
+      .array(
+        z
+          .object({
+            manager: z.string().nullable(),
+            managerRef: z.string().optional(),
+            quantity: z.number(),
+            revenue: z.number(),
+            revenueExVat: z.number(),
+          })
+          .passthrough(),
+      )
+      .optional(),
     warehouseFilter: warehouseFilterSchema,
     itemGroup: z.object({ name: z.string(), ref: z.string() }).passthrough().optional(),
     itemGroups: itemGroupsSchema,

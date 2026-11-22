@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/server";
+import { USERS } from "../odata/users.js";
 import { z } from "zod";
 import type { ServerContext } from "../context.js";
 import { CATALOGS, resolveEntity } from "../config/mapping.js";
@@ -78,7 +79,7 @@ export function registerPartnerSettlementTools(server: McpServer, ctx: ServerCon
         "поставщикам. debt — долг, prepayment — предоплата (аванс), net = debt − prepayment, всё в регламентированной " +
         "валюте. overdue — долг с плановой датой погашения раньше даты расчёта (on: asOf или сегодня), aging — долг по " +
         "срокам просрочки (сторно с минусом может сделать отдельную корзину отрицательной, сумма корзин всегда равна debt), maxOverdueDays — самая старая просрочка партнёра. Отбор: organization, partner (Ref_Key " +
-        "партнёра), overdueOnly — только партнёры с просрочкой. partners — по убыванию net; count — всего партнёров, " +
+        "партнёра), overdueOnly — только партнёры с просрочкой, managers — расчёты этих менеджеров (Ref_Key пользователей 1С, read.catalog.list_users; менеджер — у объекта расчётов); byManager=true — итоги по менеджерам в byManager. partners — по убыванию net; count — всего партнёров, " +
         "длинный список читайте с offset=nextOffset.",
       inputSchema: z.object({
         database: databaseField,
@@ -99,11 +100,25 @@ export function registerPartnerSettlementTools(server: McpServer, ctx: ServerCon
           .optional()
           .describe("Ref_Key партнёра"),
         overdueOnly: z.boolean().default(false).describe("Только партнёры с просроченным долгом"),
+        managers: z
+          .array(z.string().trim().regex(GUID, "Ref_Key пользователя (GUID)"))
+          .min(1)
+          .max(50)
+          .optional()
+          .describe(
+            "Только расчёты этих менеджеров — Ref_Key пользователей 1С (read.catalog.list_users); менеджер — у объекта расчётов (заказ, договор, документ)",
+          ),
+        byManager: z
+          .boolean()
+          .default(false)
+          .describe(
+            "Итоги по менеджерам (byManager): долг, предоплата, net и просрочка каждого; без менеджера — отдельно",
+          ),
         limit: z.number().int().positive().max(1000).default(100).describe("Сколько партнёров вернуть"),
       }),
       outputSchema: partnerSettlementsResultSchema,
     },
-    ({ database, side, asOf, organization, partner, overdueOnly, limit }) =>
+    ({ database, side, asOf, organization, partner, overdueOnly, managers, byManager, limit }) =>
       guard("read.analytics.get_partner_settlements", async () => {
         const t0 = Date.now();
         const conn = ctx.db(database);
@@ -116,12 +131,31 @@ export function registerPartnerSettlementTools(server: McpServer, ctx: ServerCon
         const partnerRef = resolved?.ref.toLowerCase();
         // Местная дата, как у дебиторки Бухгалтерии: по UTC на востоке России утром «сегодня» было бы вчера.
         const on = asOf ?? localToday();
-        const { rows, scanned } = await readSettlements(conn, side, asOf);
+        const { rows, scanned } = await readSettlements(conn, side, asOf, byManager || !!managers?.length);
+        const wanted = managers?.length
+          ? new Set(managers.map((m) => m.replace(/[{}]/g, "").toLowerCase()))
+          : undefined;
         const selected = rows.filter(
           (r) =>
             (!org || r.organizationRef?.toLowerCase() === org.ref.toLowerCase()) &&
-            (!partnerRef || r.partnerRef?.toLowerCase() === partnerRef),
+            (!partnerRef || r.partnerRef?.toLowerCase() === partnerRef) &&
+            (!wanted || (!!r.managerRef && wanted.has(r.managerRef.toLowerCase()))),
         );
+        // Итоги по менеджерам — по тем же строкам отбора, что и общий итог.
+        const byManagerTotals = new Map<string, Totals>();
+        if (byManager)
+          for (const r of selected) {
+            const t = byManagerTotals.get(r.managerRef ?? "") ?? emptyTotals();
+            t.debt += r.debtCents;
+            t.prepayment += r.prepaymentCents;
+            const bucket = ageBucket(r.dueDate, on);
+            if (r.dueDate && bucket !== "notDue" && bucket !== "noDueDate") t.overdue += r.debtCents;
+            byManagerTotals.set(r.managerRef ?? "", t);
+          }
+        const managerRefs = [...byManagerTotals.keys(), ...(managers ?? [])].filter(Boolean);
+        const managerNames = managerRefs.length
+          ? await resolveNames(conn, USERS, managerRefs).catch(() => new Map<string, string>())
+          : new Map<string, string>();
 
         const byPartner = new Map<string, Totals>();
         const total = emptyTotals();
@@ -196,6 +230,24 @@ export function registerPartnerSettlementTools(server: McpServer, ctx: ServerCon
           net: rub(total.debt - total.prepayment),
           overdue: rub(total.overdue),
           aging: Object.fromEntries(AGE_BUCKETS.map((b) => [b, rub(total.ages[b])])),
+          ...(managers?.length
+            ? { managerFilter: managers.map((m) => ({ ref: m, name: managerNames.get(m) ?? null })) }
+            : {}),
+          ...(byManager && callPageStart() === 0
+            ? {
+                byManager: [...byManagerTotals]
+                  .filter(([, t]) => t.debt !== 0 || t.prepayment !== 0)
+                  .map(([ref, t]) => ({
+                    manager: ref ? (managerNames.get(ref) ?? ref) : null,
+                    ...(ref ? { managerRef: ref } : {}),
+                    debt: rub(t.debt),
+                    prepayment: rub(t.prepayment),
+                    net: rub(t.debt - t.prepayment),
+                    overdue: rub(t.overdue),
+                  }))
+                  .sort((a, b) => b.net - a.net || String(a.managerRef).localeCompare(String(b.managerRef))),
+              }
+            : {}),
           // Всего, а не на странице: сколько в этом ответе — длина списка и returned.
           count: list.length,
           note: notes.join(" "),
