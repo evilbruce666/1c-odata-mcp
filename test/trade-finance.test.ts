@@ -393,6 +393,8 @@ describe("1.1: get_partner_settlements по менеджерам (managers, byMa
     });
     expect(r.isError, r.text).toBeFalsy();
     expect(r.structuredContent["debt"]).toBe(350);
+    // Ссылка в верхнем регистре — в managerFilter нормализована (имя ищется по ней же).
+    expect(r.structuredContent["managerFilter"]).toEqual([{ ref: M(2), name: expect.anything() }]);
     expect(
       (r.structuredContent["partners"] as Array<Record<string, unknown>>).map((p) => [
         p["partnerRef"],

@@ -418,12 +418,18 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
             departmentTotals.set(r.departmentRef ?? "", t);
           }
         const depSet = resolveEntity(DEPARTMENT_SETS, await conn.available());
-        const depRefs = [...departmentTotals.keys(), ...(departments ?? [])].filter(Boolean);
+        const depRefs = [
+          ...departmentTotals.keys(),
+          ...(departments ?? []).map((d) => d.replace(/[{}]/g, "").toLowerCase()),
+        ].filter(Boolean);
         const departmentNames =
           depSet && depRefs.length
             ? await resolveNames(conn, depSet, depRefs).catch(() => new Map<string, string>())
             : new Map<string, string>();
-        const managerRefs = [...managerTotals.keys(), ...(managers ?? [])].filter(Boolean);
+        const managerRefs = [
+          ...managerTotals.keys(),
+          ...(managers ?? []).map((m) => m.replace(/[{}]/g, "").toLowerCase()),
+        ].filter(Boolean);
         const managerNames = managerRefs.length
           ? await resolveNames(conn, USERS, managerRefs).catch(() => new Map<string, string>())
           : new Map<string, string>();
@@ -435,14 +441,20 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
           ...(byWarehouse ? { groupBy } : {}),
           ...(managers?.length
             ? {
-                managerFilter: managers.map((m) => ({
-                  ref: m,
-                  name: managerNames.get(m) ?? managerNames.get(m.toLowerCase()) ?? null,
-                })),
+                managerFilter: [...new Set(managers.map((m) => m.replace(/[{}]/g, "").toLowerCase()))].map(
+                  (m) => ({
+                    ref: m,
+                    name: managerNames.get(m) ?? null,
+                  }),
+                ),
               }
             : {}),
           ...(departments?.length
-            ? { departmentFilter: departments.map((d) => ({ ref: d, name: departmentNames.get(d) ?? null })) }
+            ? {
+                departmentFilter: [
+                  ...new Set(departments.map((d) => d.replace(/[{}]/g, "").toLowerCase())),
+                ].map((d) => ({ ref: d, name: departmentNames.get(d) ?? null })),
+              }
             : {}),
           ...(byDepartment && first
             ? {

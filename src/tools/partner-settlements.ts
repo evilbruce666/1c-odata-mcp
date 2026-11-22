@@ -152,7 +152,10 @@ export function registerPartnerSettlementTools(server: McpServer, ctx: ServerCon
             if (r.dueDate && bucket !== "notDue" && bucket !== "noDueDate") t.overdue += r.debtCents;
             byManagerTotals.set(r.managerRef ?? "", t);
           }
-        const managerRefs = [...byManagerTotals.keys(), ...(managers ?? [])].filter(Boolean);
+        const managerRefs = [
+          ...byManagerTotals.keys(),
+          ...(managers ?? []).map((m) => m.replace(/[{}]/g, "").toLowerCase()),
+        ].filter(Boolean);
         const managerNames = managerRefs.length
           ? await resolveNames(conn, USERS, managerRefs).catch(() => new Map<string, string>())
           : new Map<string, string>();
@@ -231,7 +234,11 @@ export function registerPartnerSettlementTools(server: McpServer, ctx: ServerCon
           overdue: rub(total.overdue),
           aging: Object.fromEntries(AGE_BUCKETS.map((b) => [b, rub(total.ages[b])])),
           ...(managers?.length
-            ? { managerFilter: managers.map((m) => ({ ref: m, name: managerNames.get(m) ?? null })) }
+            ? {
+                managerFilter: [...new Set(managers.map((m) => m.replace(/[{}]/g, "").toLowerCase()))].map(
+                  (m) => ({ ref: m, name: managerNames.get(m) ?? null }),
+                ),
+              }
             : {}),
           ...(byManager && callPageStart() === 0
             ? {
