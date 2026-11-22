@@ -790,9 +790,12 @@ export function createServer(ctx: ServerContext): McpServer {
       // инструмент — создание ответит из журнала или найдёт объект по ссылке, а шаг у владельца выполнится снова
       // (он идемпотентен). Раньше ответ из журнала шаг пропускал молча (ревью 1.1).
       const sideEffect = POST_CREATE_STEP.has(name) && args.makeMain === true;
-      if (args.confirm === true && operationId && !sideEffect) {
+      if (args.confirm === true && operationId) {
         let replay: CallToolResult | undefined;
         const checked = await guard(name, async () => {
+          // makeMain: ответ из журнала пропускаем, а срок предпросмотра ниже — нет (ревью 1.1: подтверждение
+          // трёхчасового предпросмотра с makeMain создавало счёт в обход ODATA_WRITE_PREVIEW_MAX_AGE).
+          if (sideEffect) return ok({});
           const conn = ctx.db(typeof args.database === "string" ? args.database : undefined);
           const settled = await conn.client.operationSettled(operationId, requestHash);
           if (settled) {

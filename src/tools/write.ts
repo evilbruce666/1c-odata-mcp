@@ -2101,9 +2101,21 @@ async function createSubordinate(
   if (!confirm) return createOrPreview(conn, set, payload, false);
   const created = await conn.client.create<ODataEntity>(set, payload);
   const ref = String(created["Ref_Key"] ?? "");
-  if (main && ref) {
+  // Найденный по ссылке объект помечен на удаление — основным его не ставим (ревью 1.1).
+  if (main && ref && created["DeletionMark"] !== true) {
     const g = main.ownerRef.replace(/[{}']/g, "");
-    await conn.client.patch(`${main.ownerSet}(guid'${g}')?$format=json`, { [main.field]: ref });
+    try {
+      await conn.client.patch(`${main.ownerSet}(guid'${g}')?$format=json`, { [main.field]: ref });
+    } catch (e) {
+      // Объект уже создан: без этого текста агент сделал бы новый предпросмотр и второй объект (ревью 1.1).
+      const why = e instanceof Error ? e.message : String(e);
+      throw new ODataError({
+        kind: e instanceof ODataError ? e.kind : "unknown",
+        message:
+          `Объект создан (${set}, ${ref}), но основным у владельца не стал: ${why}. Повторите подтверждение с тем же ` +
+          "operationId и аргументами — объект не задвоится, а владельцу поставится эта ссылка. Новый предпросмотр не делайте.",
+      });
+    }
   }
   return ok({
     created: true,
@@ -2112,7 +2124,7 @@ async function createSubordinate(
     entitySet: set,
     ref,
     description: created["Description"],
-    ...(main ? { setAsMain: true } : {}),
+    ...(main ? { setAsMain: created["DeletionMark"] !== true } : {}),
   });
 }
 // Повтор с makeMain приходит сюда же (обёртка сервера не отвечает из журнала): create() отдаёт сохранённый или

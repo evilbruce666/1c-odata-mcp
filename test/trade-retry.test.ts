@@ -625,4 +625,52 @@ describe("1.1: повтор создания с makeMain — владелец п
     expect(again.sc).toMatchObject({ replayed: true });
     expect(mainPatches(w)).toHaveLength(0);
   });
+
+  // Ревью 1.1: флаг makeMain выводил подтверждение из-под проверки срока предпросмотра.
+  it("срок предпросмотра действует и с makeMain: давний предпросмотр — отказ без записи", async () => {
+    const w = world({ schema: "bp30", env: { ODATA_WRITE_PREVIEW_MAX_AGE: "15" } });
+    const p = await w.call(BT, args);
+    const op = p.sc.operationId as string;
+    const file = journalFile(w.dir, op);
+    const entry = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    writeFileSync(
+      file,
+      JSON.stringify({ ...entry, createdAt: new Date(Date.now() - 3 * 3600_000).toISOString() }),
+    );
+    const c = await w.call(BT, { ...args, confirm: true, operationId: op });
+    expect(c.isError).toBe(true);
+    expect(c.text).toContain("ODATA_WRITE_PREVIEW_MAX_AGE");
+    expect(w.writes).toHaveLength(0);
+  });
+
+  // Ревью 1.1: повтор уже созданного через инструмент сверял заново собранное тело — сменившаяся подстановка из 1С
+  // давала совет «новый предпросмотр», а он создал бы второй счёт.
+  it("счёт создан, PATCH не дошёл, тело собралось иначе — повтор всё равно из журнала, второго счёта нет", async () => {
+    const w = world({ schema: "bp30" });
+    w.patchFails.push("lostNoWrite");
+    const p = await w.call(BT, args);
+    const op = p.sc.operationId as string;
+    const c1 = await w.call(BT, { ...args, confirm: true, operationId: op });
+    expect(c1.text).toContain("Объект создан");
+    expect(c1.text).toContain("Новый предпросмотр не делайте");
+    const file = journalFile(w.dir, op);
+    const entry = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    writeFileSync(file, JSON.stringify({ ...entry, payloadHash: "changed" }));
+    const c2 = await w.call(BT, { ...args, confirm: true, operationId: op });
+    expect(c2.isError, c2.text.slice(0, 300)).toBe(false);
+    expect(c2.sc).toMatchObject({ replayed: true, setAsMain: true });
+    expect(w.writes.filter((x) => x.method === "POST" && x.set === BA)).toHaveLength(1);
+  });
+
+  it("найденный по ссылке счёт помечен на удаление — основным не ставится", async () => {
+    const w = world({ schema: "bp30" });
+    w.fails[BA] = ["lost"];
+    const p = await w.call(BT, args);
+    const op = p.sc.operationId as string;
+    await w.call(BT, { ...args, confirm: true, operationId: op });
+    w.store[BA]!.get(String(p.sc.ref))!["DeletionMark"] = true;
+    const c = await w.call(BT, { ...args, confirm: true, operationId: op });
+    expect(c.sc).toMatchObject({ reconciled: true, deletionMark: true, setAsMain: false });
+    expect(mainPatches(w)).toHaveLength(0);
+  });
 });

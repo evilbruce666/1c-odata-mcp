@@ -163,6 +163,16 @@ export class WriteOperationJournal {
     let entry = await this.read(operationId);
     if (findExisting && isRetryableCreate(entry))
       return this.retryCreate(entry, entitySet, payload, requestHash, send, findExisting);
+    // Уже созданный объект при повторе через инструмент (makeMain): данные из 1С для сборки могли смениться, но запись
+    // сделана — сверяем аргументы, а не собранное тело; иначе совет «новый предпросмотр» создал бы второй (ревью 1.1).
+    if (
+      findExisting &&
+      entry.state === "succeeded" &&
+      entry.database === this.database &&
+      entry.entitySet === entitySet &&
+      entry.requestHash === requestHash
+    )
+      return this.resultForExisting<T>(entry)!;
     this.assertMatches(entry, entitySet, payload, requestHash);
     const existingResult = this.resultForExisting<T>(entry);
     if (existingResult !== undefined) return existingResult;
