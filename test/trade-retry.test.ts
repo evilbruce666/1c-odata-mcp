@@ -28,6 +28,7 @@ interface W {
 
 const PS = "Catalog_Партнеры";
 const CS = "Catalog_Контрагенты";
+const BA = "Catalog_БанковскиеСчета";
 
 /** Мир 1С с состоянием: созданное видно GET по ссылке и отбором по ИНН (как в настоящей базе). */
 function world(
@@ -35,8 +36,14 @@ function world(
 ) {
   const dir = mkdtempSync(join(tmpdir(), "1c-odata-retry-"));
   const writes: W[] = [];
-  const store: Record<string, Map<string, Record<string, unknown>>> = { [PS]: new Map(), [CS]: new Map() };
-  const fails: Record<string, Fail[]> = { [PS]: [], [CS]: [] };
+  const store: Record<string, Map<string, Record<string, unknown>>> = {
+    [PS]: new Map(),
+    [CS]: new Map(),
+    [BA]: new Map(),
+  };
+  const fails: Record<string, Fail[]> = { [PS]: [], [CS]: [], [BA]: [] };
+  /** Сбой PATCH владельца (makeMain): запрос не дошёл. */
+  const patchFails: Array<"lostNoWrite"> = [];
   let fake = make();
   function make() {
     const f = fake1C(
@@ -82,6 +89,13 @@ function world(
     );
     const method = (init?.method ?? "GET").toUpperCase();
     const set = /standard\.odata\/([^?(/]+)/.exec(url)?.[1] ?? "";
+    if (method === "PATCH") {
+      writes.push({ method, set, body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+      if (patchFails.shift() === "lostNoWrite") {
+        writes.pop();
+        throw new TypeError("fetch failed");
+      }
+    }
     if (method === "POST" && store[set]) {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       writes.push({ method, set, body });
@@ -164,6 +178,7 @@ function world(
     release,
     dir,
     hide,
+    patchFails,
     get fake() {
       return fake;
     },
@@ -554,5 +569,60 @@ describe("1.1: повтор подтверждения создания посл
     expect(c.text).toContain("Повторите подтверждение с теми же аргументами");
     expect(w.writes.filter((x) => x.set === PS)).toHaveLength(1);
     expect(w.store[PS]!.size).toBe(0);
+  });
+});
+
+// ─── 1.1: шаг после создания (makeMain) при повторе ───
+
+describe("1.1: повтор создания с makeMain — владелец получает основной счёт", () => {
+  const owner = "bbbbbbbb-0000-0000-0000-00000000000b";
+  const args = { ownerRef: owner, accountNumber: "40702810000000000001", bik: "044525225", makeMain: true };
+  const BT = "write.counterparty.create_bank_account";
+  const mainPatches = (w: ReturnType<typeof world>) =>
+    w.writes.filter(
+      (x) => x.method === "PATCH" && x.set.startsWith(CS) && "ОсновнойБанковскийСчет_Key" in (x.body ?? {}),
+    );
+
+  // Ревью 1.1: ответ из журнала (и сверка по ссылке) шёл мимо инструмента — PATCH владельца не выполнялся, молча.
+  it("ответ на создание потерян: повтор находит счёт по ссылке и делает его основным", async () => {
+    const w = world({ schema: "bp30" });
+    w.fails[BA] = ["lost"];
+    const p = await w.call(BT, args);
+    expect(p.isError, p.text.slice(0, 300)).toBe(false);
+    const op = p.sc.operationId as string;
+    const c1 = await w.call(BT, { ...args, confirm: true, operationId: op });
+    expect(c1.isError).toBe(true);
+    expect(mainPatches(w)).toHaveLength(0);
+    const c2 = await w.call(BT, { ...args, confirm: true, operationId: op });
+    expect(c2.isError, c2.text.slice(0, 300)).toBe(false);
+    expect(c2.sc).toMatchObject({ reconciled: true, setAsMain: true, ref: p.sc.ref });
+    expect(mainPatches(w).map((x) => x.body!["ОсновнойБанковскийСчет_Key"])).toEqual([p.sc.ref]);
+    expect(w.store[BA]!.size).toBe(1);
+  });
+
+  it("счёт создан, PATCH владельца не дошёл: повтор — из журнала, без второго счёта, и PATCH владельца", async () => {
+    const w = world({ schema: "bp30" });
+    w.patchFails.push("lostNoWrite");
+    const p = await w.call(BT, args);
+    const op = p.sc.operationId as string;
+    const c1 = await w.call(BT, { ...args, confirm: true, operationId: op });
+    expect(c1.isError).toBe(true);
+    const c2 = await w.call(BT, { ...args, confirm: true, operationId: op });
+    expect(c2.isError, c2.text.slice(0, 300)).toBe(false);
+    expect(c2.sc).toMatchObject({ replayed: true, setAsMain: true });
+    expect(mainPatches(w)).toHaveLength(1);
+    expect(w.writes.filter((x) => x.method === "POST" && x.set === BA)).toHaveLength(1);
+    expect(w.store[BA]!.size).toBe(1);
+  });
+
+  it("без makeMain повтор по-прежнему отвечает из журнала, без PATCH", async () => {
+    const w = world({ schema: "bp30" });
+    const a = { ...args, makeMain: false };
+    const p = await w.call(BT, a);
+    const op = p.sc.operationId as string;
+    await w.call(BT, { ...a, confirm: true, operationId: op });
+    const again = await w.call(BT, { ...a, confirm: true, operationId: op });
+    expect(again.sc).toMatchObject({ replayed: true });
+    expect(mainPatches(w)).toHaveLength(0);
   });
 });

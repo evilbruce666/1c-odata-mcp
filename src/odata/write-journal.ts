@@ -16,7 +16,17 @@ const PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
  * здесь нет, — от упавшего или перезапущенного процесса: повтор создания его снимает (один процесс записи на каталог
  * журнала — docs/WRITE.md). Владельца lock по PID не определить: в контейнере после рестарта он снова 1.
  */
-const LIVE = new Set<string>();
+const LIVE = new Map<string, symbol>();
+
+/** Отметить «запрос идёт»; снять можно только своей отметкой (ревью 1.1: чужой вызов снимал отметку соседа). */
+export function markLive(key: string): symbol {
+  const token = Symbol(key);
+  LIVE.set(key, token);
+  return token;
+}
+export function unmarkLive(key: string, token: symbol): void {
+  if (LIVE.get(key) === token) LIVE.delete(key);
+}
 
 /**
  * Создание с назначенным Ref_Key и неизвестным исходом (1.1): повтор подтверждения безопасен — второй объект с той
@@ -168,6 +178,18 @@ export class WriteOperationJournal {
         return this.retryCreate(entry, entitySet, payload, requestHash, send, findExisting);
       this.assertMatches(entry, entitySet, payload, requestHash);
       if (this.isLive(operationId)) throw inProgressError(operationId);
+      // «Подготовлено» и чужой lock без живого запроса: процесс упал между захватом lock и записью «executing», POST
+      // не уходил. Раньше операция висела сутки до чистки; создание с назначенной ссылкой повторяем — дубль исключает
+      // уникальная ссылка (ревью 1.1). Правки — как раньше: там повторная отправка небезопасна.
+      if (findExisting && entry.state === "prepared" && entry.refKey)
+        return this.retryCreate(
+          entry as JournalEntry & { refKey: string },
+          entitySet,
+          payload,
+          requestHash,
+          send,
+          findExisting,
+        );
       const racedResult = this.resultForExisting<T>(entry);
       if (racedResult !== undefined) return racedResult;
       throw this.unknownResult(operationId);
@@ -175,7 +197,7 @@ export class WriteOperationJournal {
     // «Запрос идёт» — сразу при захвате lock, до записи «executing»: второе подтверждение в этом окне получает
     // in_progress, а не «исход неизвестен» (живая проверка 1.1, два одновременных подтверждения по HTTP).
     const live = this.liveKey(operationId);
-    LIVE.add(live);
+    const token = markLive(live);
 
     let requestStarted = false;
     try {
@@ -189,7 +211,7 @@ export class WriteOperationJournal {
           // Другое подтверждение успело закончиться неизвестным исходом, пока ждали lock: дальше — путь повтора.
           await lock.close().catch(() => undefined);
           await rm(lockPath, { force: true }).catch(() => undefined);
-          LIVE.delete(live);
+          unmarkLive(live, token);
           // await: иначе finally ниже снял бы отметку «запрос идёт», уже поставленную retryCreate (ревью 1.1).
           return await this.retryCreate(entry, entitySet, payload, requestHash, send, findExisting);
         }
@@ -209,7 +231,25 @@ export class WriteOperationJournal {
       try {
         result = await send();
       } catch (cause) {
-        const rejected = isDefinitiveRejection(cause);
+        const rejectedFirst = isDefinitiveRejection(cause);
+        // Окончательный отказ при создании с назначенной ссылкой, а объект уже есть (его дописал повтор другого
+        // процесса): это успех, а не отказ — иначе «отклонено» поверх успеха и новый предпросмотр дал бы дубль (ревью
+        // 1.1). Неизвестный исход не трогаем: его доводит повтор подтверждения.
+        const existing =
+          rejectedFirst && findExisting && entry.refKey
+            ? await findExisting().catch(() => undefined)
+            : undefined;
+        if (existing) {
+          await this.replace({
+            ...entry,
+            state: "succeeded",
+            updatedAt: new Date().toISOString(),
+            result: resultSummary(existing),
+          });
+          await rm(lockPath, { force: true }).catch(() => undefined);
+          return { ...existing, _operation_reconciled: true };
+        }
+        const rejected = rejectedFirst;
         const failed: JournalEntry = {
           ...entry,
           state: rejected ? "rejected" : "outcome_unknown",
@@ -246,7 +286,7 @@ export class WriteOperationJournal {
       if (!requestStarted) await rm(lockPath, { force: true }).catch(() => undefined);
       throw error;
     } finally {
-      LIVE.delete(live);
+      unmarkLive(live, token);
       await lock.close().catch(() => undefined);
     }
   }
@@ -275,7 +315,7 @@ export class WriteOperationJournal {
     const live = this.liveKey(operationId);
     // Проверка и отметка — без await между ними: два подтверждения в одном процессе не пройдут сюда оба.
     if (LIVE.has(live)) throw inProgressError(operationId);
-    LIVE.add(live);
+    const token = markLive(live);
     try {
       const lockPath = this.lockPath(operationId);
       const lock = await this.takeOverLock(lockPath, operationId);
@@ -326,7 +366,7 @@ export class WriteOperationJournal {
         await lock.close().catch(() => undefined);
       }
     } finally {
-      LIVE.delete(live);
+      unmarkLive(live, token);
     }
   }
 

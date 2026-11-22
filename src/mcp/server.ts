@@ -676,6 +676,11 @@ export function createServer(ctx: ServerContext): McpServer {
   );
 
   // Инструменты, создающие документ (а не справочник): им — responsibleRef.
+  /** Инструменты создания, у которых после POST есть шаг у другого объекта (makeMain у владельца). */
+  const POST_CREATE_STEP = new Set([
+    "write.counterparty.create_bank_account",
+    "write.counterparty.create_contact_person",
+  ]);
   const DOCUMENT_CREATE =
     /^write\.(sales|purchase|warehouse|money)\.create_|^write\.document\.copy_document$/;
   const responsibleField = z
@@ -781,7 +786,11 @@ export function createServer(ctx: ServerContext): McpServer {
       const requestHash = fingerprintWriteInput(name, args as Record<string, unknown>);
       // Повтор уже подтверждённой операции: ответ из журнала — до того, как инструмент заново
       // прочитает 1С (иначе правка строк применилась бы к уже изменённому документу).
-      if (args.confirm === true && operationId) {
+      // Создание с шагом после POST (makeMain: сделать счёт или контакт основным у владельца): повтор идёт через
+      // инструмент — создание ответит из журнала или найдёт объект по ссылке, а шаг у владельца выполнится снова
+      // (он идемпотентен). Раньше ответ из журнала шаг пропускал молча (ревью 1.1).
+      const sideEffect = POST_CREATE_STEP.has(name) && args.makeMain === true;
+      if (args.confirm === true && operationId && !sideEffect) {
         let replay: CallToolResult | undefined;
         const checked = await guard(name, async () => {
           const conn = ctx.db(typeof args.database === "string" ? args.database : undefined);
