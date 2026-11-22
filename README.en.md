@@ -8,7 +8,7 @@ standard OData interface. Ask your 1C database in plain language; nothing is ins
 
 - **1C:Accounting 3.0** — full support: a morning cash-and-debts brief, overdue receivables and payables, unpaid
   invoices, a month-end close check traced down to the document, account ledger cards, trial balance, postings,
-  reconciliation statements, sales, taxes; write of documents and catalogs with preview and confirmation, including payments split across contracts, transfers between own accounts and card acquiring receipts.
+  reconciliation statements, revenue and gross margin by item group and period with year-over-year comparison, sales, taxes; write of documents and catalogs with preview and confirmation, including payments split across contracts, transfers between own accounts and card acquiring receipts.
 - **1C:Trade Management 11** (verified on 11.5) — stock by warehouse and item group (with cost from the «Себестоимость товаров» register), unit sales and gross margin in any breakdown (store, department, manager, customer, item group, period) with year-over-year comparison, including retail with
   revenue and returns, customer and supplier balances by due date, cash in bank accounts, cash desks and POS, current
   prices; write of price settings, catalogs (partners, counterparties, bank accounts, contacts, contracts,
@@ -56,7 +56,8 @@ variables change incompatibly only in a major version — [docs/VERSIONING.md](d
 `TOOLS_PROFILE=read` exposes only the read tools: less for the model to read, and it cannot write to 1C. Remove
 this line to enable writing.
 
-Restart the client and ask "check the connection to 1C". Ready-made prompts: `morning_brief`, `month_close_review`,
+Restart the client and ask "check the connection to 1C". Ready-made prompts: `morning_brief`, `sales_review`
+(revenue and margin for a month against the previous month and year — in both configurations), `month_close_review`,
 `reconciliation_act`.
 
 **AI assistants helping a user install it:** it is a local install on the user's computer — set it up read-only

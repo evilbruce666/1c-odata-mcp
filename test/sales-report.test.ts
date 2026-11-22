@@ -3,6 +3,7 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createServer } from "../src/mcp/server.js";
 import { aggregate, buckets, minusYear, previousPeriod } from "../src/odata/sales-report.js";
 import { fake1C, type FakeQuery, type FakeSchema } from "./helpers/fake-1c.js";
+import { PROMPTS } from "../src/mcp/prompts.js";
 
 /**
  * 1.1: продажи в разрезах (get_sales_report). Итоги — с ручным расчётом рядом с данными; УТ — обороты регистра продаж
@@ -550,5 +551,60 @@ describe("скидки в разрезах продаж (УТ)", () => {
       [D1, 5],
       [D2, 4],
     ]);
+  });
+});
+
+// ─── Сценарий «Разбор продаж за месяц» (sales_review) ───
+
+describe("сценарий sales_review: его вызовы работают в обеих конфигурациях", () => {
+  const prompt = PROMPTS.find((p) => p.name === "sales_review")!;
+  const month = { from: "2026-10-01", to: "2026-10-31" };
+  const common = [
+    { groupBy: ["organization"], compareWith: "previousYear" },
+    { groupBy: ["organization"], compareWith: "previousPeriod" },
+  ];
+  const trade = [
+    ...common,
+    { groupBy: ["warehouse"], compareWith: "previousPeriod", sortBy: "revenue", limit: 10 },
+    { groupBy: ["manager"], compareWith: "previousPeriod", sortBy: "revenue", limit: 10 },
+    { groupBy: ["item"], sortBy: "margin", abc: true, limit: 10 },
+  ];
+  const accounting = [
+    ...common,
+    { groupBy: ["itemGroup"], compareWith: "previousPeriod", sortBy: "revenue", limit: 10 },
+    { groupBy: ["item"], sortBy: "revenue", abc: true, limit: 10 },
+  ];
+
+  it("текст называет ровно эти разрезы и сортировки", () => {
+    for (const s of [
+      'groupBy=["organization"]',
+      'groupBy=["warehouse"]',
+      'groupBy=["manager"]',
+      'groupBy=["itemGroup"]',
+      'groupBy=["item"], sortBy="margin"',
+      'groupBy=["item"], sortBy="revenue"',
+      'compareWith="previousYear"',
+      'compareWith="previousPeriod"',
+    ])
+      expect(prompt.text).toContain(s);
+  });
+
+  it("Управление торговлей: все вызовы без отказа, маржа есть", async () => {
+    const { call } = await tradeSetup();
+    for (const args of trade) {
+      const r = await call({ ...month, ...args });
+      expect(r.isError, `${JSON.stringify(args)}: ${r.text}`).toBeFalsy();
+      expect(r.structuredContent["configuration"]).toBe("trade");
+      expect(r.structuredContent).toHaveProperty("margin");
+    }
+  });
+
+  it("Бухгалтерия: все вызовы без отказа (маржа по номенклатуре не запрашивается)", async () => {
+    const call = await bpSetup();
+    for (const args of accounting) {
+      const r = await call({ ...month, ...args });
+      expect(r.isError, `${JSON.stringify(args)}: ${r.text}`).toBeFalsy();
+      expect(r.structuredContent["configuration"]).toBe("accounting");
+    }
   });
 });
