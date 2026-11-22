@@ -174,6 +174,10 @@ export class WriteOperationJournal {
       if (racedResult !== undefined) return racedResult;
       throw this.unknownResult(operationId);
     }
+    // «Запрос идёт» — сразу при захвате lock, до записи «executing»: второе подтверждение в этом окне получает
+    // in_progress, а не «исход неизвестен» (живая проверка 1.1, два одновременных подтверждения по HTTP).
+    const live = this.liveKey(operationId);
+    LIVE.add(live);
     await lock.writeFile(BOOT_ID, "utf8").catch(() => undefined);
 
     let requestStarted = false;
@@ -188,6 +192,7 @@ export class WriteOperationJournal {
           // Другое подтверждение успело закончиться неизвестным исходом, пока ждали lock: дальше — путь повтора.
           await lock.close().catch(() => undefined);
           await rm(lockPath, { force: true }).catch(() => undefined);
+          LIVE.delete(live);
           return this.retryCreate(entry, entitySet, payload, requestHash, send, findExisting);
         }
         throw this.unknownResult(operationId);
@@ -203,8 +208,6 @@ export class WriteOperationJournal {
       requestStarted = true;
 
       let result: T;
-      const live = this.liveKey(operationId);
-      LIVE.add(live);
       try {
         result = await send();
       } catch (cause) {
@@ -225,8 +228,6 @@ export class WriteOperationJournal {
         await rm(lockPath, { force: true }).catch(() => undefined);
         if (rejected) throw cause;
         throw this.unknownResult(operationId, cause, !!findExisting && isRetryableCreate(failed));
-      } finally {
-        LIVE.delete(live);
       }
 
       const completed: JournalEntry = {
@@ -247,6 +248,7 @@ export class WriteOperationJournal {
       if (!requestStarted) await rm(lockPath, { force: true }).catch(() => undefined);
       throw error;
     } finally {
+      LIVE.delete(live);
       await lock.close().catch(() => undefined);
     }
   }

@@ -3,6 +3,9 @@
  * MCP_TRANSPORT=http с записью только установки цен, сценарий интеграции-бота:
  *   предпросмотр → рестарт процесса → подтверждение с обрывом соединения клиентом → повтор подтверждения →
  *   write.operation.status → ровно один непроведённый документ в 1С.
+ * 1.1, безопасный повтор создания — через локального посредника перед 1С, который на один POST документа цен
+ * «теряет» ответ (запрос доходит до 1С, соединение рвётся) или «роняет» запрос (до 1С не доходит): исход неизвестен →
+ * рестарт → повтор доводит до одного документа со ссылкой предпросмотра; два одновременных подтверждения — один.
  * Пометку удаления созданного документа делает человек (или test:live): этому экземпляру она намеренно не дана.
  *
  *   npm run test:live:http -- --db <база> --item <Ref_Key позиции> --yes [--price-kind <Ref_Key>] [--price 123.45]
@@ -11,6 +14,7 @@
  * Код возврата 1 — если хоть одна проверка не прошла.
  */
 import { spawn, type ChildProcess } from "node:child_process";
+import { createServer as createHttpServer, type IncomingMessage } from "node:http";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -58,6 +62,45 @@ async function main(): Promise<number> {
     return 2;
   }
 
+  // Посредник перед 1С: всё пересылает как есть, а один POST создания документа цен — по режиму.
+  const tag = Object.keys(process.env)
+    .map((k) => /^ODATA_DB_(.+)_BASE_URL$/.exec(k)?.[1])
+    .find((t) => t?.toLowerCase() === db);
+  const baseVar = tag ? `ODATA_DB_${tag}_BASE_URL` : "ODATA_BASE_URL";
+  const upstream = new URL(String(process.env[baseVar]));
+  let mode: "lost" | "drop" | undefined;
+  const body = (req: IncomingMessage) =>
+    new Promise<Buffer>((resolve) => {
+      const parts: Buffer[] = [];
+      req.on("data", (d: Buffer) => parts.push(d));
+      req.on("end", () => resolve(Buffer.concat(parts)));
+    });
+  const proxy = createHttpServer((req, res) => {
+    void (async () => {
+      const data = await body(req);
+      const path = decodeURIComponent(req.url ?? "");
+      const target = req.method === "POST" && /\/Document_УстановкаЦенНоменклатуры\?/.test(path);
+      const m = target ? mode : undefined;
+      if (m) mode = undefined;
+      if (m === "drop") return req.socket.destroy();
+      const headers = Object.fromEntries(
+        Object.entries(req.headers).filter(([k]) => !["host", "connection", "content-length"].includes(k)),
+      ) as Record<string, string>;
+      const r = await fetch(new URL(req.url ?? "/", upstream.origin), {
+        method: req.method ?? "GET",
+        headers,
+        ...(data.length ? { body: new Uint8Array(data) } : {}),
+      });
+      const out = Buffer.from(await r.arrayBuffer());
+      if (m === "lost") return req.socket.destroy(); // 1С записала, ответ потерян
+      res.writeHead(r.status, { "content-type": r.headers.get("content-type") ?? "application/json" });
+      res.end(out);
+    })().catch(() => req.socket.destroy());
+  });
+  await new Promise<void>((r) => proxy.listen(0, "127.0.0.1", () => r()));
+  const proxyPort = (proxy.address() as { port: number }).port;
+  const proxied = `http://127.0.0.1:${proxyPort}${upstream.pathname}${upstream.search}`;
+
   const token = randomBytes(24).toString("hex");
   const port = 18000 + Math.floor(Math.random() * 1000);
   const journal = mkdtempSync(join(tmpdir(), "1c-odata-live-http-"));
@@ -72,10 +115,14 @@ async function main(): Promise<number> {
     TOOLS_PROFILE: "",
     TOOLS_ALLOW: "write.pricing.create_price_setting,write.operation.status,read.system.health_check",
     ODATA_WRITE_JOURNAL_DIR: journal,
+    [baseVar]: proxied,
   };
   let proc: ChildProcess | undefined;
-  const start = async () => {
-    proc = spawn(process.execPath, [entry], { env, stdio: ["ignore", "ignore", "inherit"] });
+  const start = async (extra: Record<string, string> = {}) => {
+    proc = spawn(process.execPath, [entry], {
+      env: { ...env, ...extra },
+      stdio: ["ignore", "ignore", "inherit"],
+    });
     for (let i = 0; i < 100; i++) {
       try {
         if ((await fetch(`http://127.0.0.1:${port}/healthz`)).ok) return;
@@ -163,21 +210,117 @@ async function main(): Promise<number> {
   await stop();
 
   const day = new Date().toISOString().slice(0, 10);
-  const docs = (
-    await conn.client.getCollection(
-      `Document_УстановкаЦенНоменклатуры?$format=json&$filter=Date ge datetime'${day}T00:00:00'&$select=Ref_Key,Posted,Комментарий`,
-    )
-  ).value.filter((d) => String(d["Комментарий"] ?? "").startsWith(comment));
+  const docsOf = async (tag: string) =>
+    (
+      await conn.client.getCollection(
+        `Document_УстановкаЦенНоменклатуры?$format=json&$filter=Date ge datetime'${day}T00:00:00'&$select=Ref_Key,Posted,Комментарий`,
+      )
+    ).value.filter((d) => String(d["Комментарий"] ?? "").startsWith(tag));
+  const docs = await docsOf(comment);
   check(
     "в 1С ровно один непроведённый документ",
     docs.length === 1 && docs[0]!["Posted"] === false && String(docs[0]!["Ref_Key"]) === String(ref),
     `документов: ${docs.length}`,
   );
+  const created = typeof ref === "string" ? [ref] : [];
 
+  // 1.1: неизвестный исход (ответ потерян / запрос не дошёл) → рестарт → повтор подтверждения — один документ.
+  for (const fail of ["lost", "drop"] as const) {
+    const tag = `${comment} ${fail}`;
+    const a = { ...args, comment: tag };
+    await start();
+    c = await connect();
+    const pv = await call(c, "write.pricing.create_price_setting", a);
+    const op = pv.structuredContent?.["operationId"];
+    const assigned = pv.structuredContent?.["ref"];
+    check(`${fail}: предпросмотр отдаёт ref`, typeof assigned === "string");
+    mode = fail;
+    const first = await call(c, "write.pricing.create_price_setting", {
+      ...a,
+      confirm: true,
+      operationId: op,
+    });
+    check(
+      `${fail}: первая попытка — исход неизвестен`,
+      first.isError === true && /неизвестен/.test(text(first)),
+    );
+    await c.close();
+    await stop();
+    await start();
+    c = await connect();
+    // Статус до повтора — только у «не дошло» (показать retrySafe): при «потерян» он сам сверил бы операцию, а
+    // проверяем именно повтор подтверждения без ручной сверки.
+    let stInfo = "не спрашивали";
+    if (fail === "drop") {
+      const st = await call(c, "write.operation.status", { operationId: op });
+      stInfo = `${String(st.structuredContent?.["status"])}${st.structuredContent?.["retrySafe"] ? ", retrySafe" : ""}`;
+    }
+    const retry = await call(c, "write.pricing.create_price_setting", {
+      ...a,
+      confirm: true,
+      operationId: op,
+    });
+    const how = retry.structuredContent?.["reconciled"]
+      ? "найден по ссылке"
+      : retry.structuredContent?.["retried"]
+        ? "POST повторён"
+        : "";
+    const found = await docsOf(tag);
+    check(
+      `${fail}: рестарт и повтор — один документ со ссылкой предпросмотра`,
+      !retry.isError &&
+        how === (fail === "lost" ? "найден по ссылке" : "POST повторён") &&
+        found.length === 1 &&
+        String(found[0]!["Ref_Key"]) === String(assigned),
+      `status до повтора: ${stInfo}; повтор: ${retry.isError ? text(retry).slice(0, 120) : how}; документов: ${found.length}`,
+    );
+    const again = await call(c, "write.pricing.create_price_setting", {
+      ...a,
+      confirm: true,
+      operationId: op,
+    });
+    check(
+      `${fail}: ещё один повтор — из журнала, документ тот же`,
+      again.structuredContent?.["replayed"] === true && (await docsOf(tag)).length === 1,
+    );
+    if (typeof assigned === "string") created.push(assigned);
+    await c.close();
+    await stop();
+  }
+
+  // 1.1: два одновременных подтверждения одного operationId — один документ.
+  {
+    const tag = `${comment} par`;
+    const a = { ...args, comment: tag };
+    await start();
+    c = await connect();
+    const pv = await call(c, "write.pricing.create_price_setting", a);
+    const op = pv.structuredContent?.["operationId"];
+    const c2 = await connect();
+    const [r1, r2] = await Promise.all([
+      call(c, "write.pricing.create_price_setting", { ...a, confirm: true, operationId: op }),
+      call(c2, "write.pricing.create_price_setting", { ...a, confirm: true, operationId: op }),
+    ]);
+    const kinds = [r1, r2].map((r) => (r.isError ? text(r).slice(0, 13) : "ok")).join(", ");
+    const found = await docsOf(tag);
+    check(
+      "два одновременных подтверждения — один документ",
+      [r1, r2].some((r) => !r.isError) && found.length === 1,
+      `ответы: ${kinds}; документов: ${found.length}`,
+    );
+    for (const d of found) created.push(String(d["Ref_Key"]));
+    await c.close();
+    await c2.close();
+    await stop();
+  }
+
+  proxy.close();
   line();
   for (const [name, ok, detail] of rows) line(`${ok ? "✓" : "✗"} ${name.padEnd(52)} ${detail}`);
-  if (typeof ref === "string")
-    line(`\nСозданный документ (пометьте на удаление): Document_УстановкаЦенНоменклатуры ${ref}`);
+  if (created.length)
+    line(
+      `\nСозданные документы (пометьте на удаление): Document_УстановкаЦенНоменклатуры ${created.join(", ")}`,
+    );
   return rows.every(([, ok]) => ok) ? 0 : 1;
 }
 

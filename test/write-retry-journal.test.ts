@@ -95,4 +95,26 @@ describe("журнал: повтор создания после неизвес�
     ).rejects.toThrow(/неизвестен/);
     expect((await j.lookup(OP))?.state).toBe("outcome_unknown");
   });
+
+  // Живая проверка 1.1: второе одновременное подтверждение попадало в окно между захватом lock и записью «executing»
+  // и получало «исход неизвестен, повтор заблокирован». Тест подделки ждал, пока первый POST уже начнётся.
+  it("два подтверждения одновременно, с самого начала — второе in_progress, POST один", async () => {
+    const j = journal();
+    await j.prepare(OP, SET, { a: 1 }, "h", REF);
+    let posts = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const send = async () => {
+      posts += 1;
+      await gate;
+      return { Ref_Key: REF };
+    };
+    const find = async () => undefined;
+    const first = j.execute(OP, SET, { a: 1 }, "h", send, undefined, find);
+    const second = j.execute(OP, SET, { a: 1 }, "h", send, undefined, find);
+    await expect(second).rejects.toMatchObject({ kind: "in_progress" });
+    release();
+    await expect(first).resolves.toMatchObject({ Ref_Key: REF });
+    expect(posts).toBe(1);
+  });
 });
