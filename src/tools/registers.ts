@@ -27,7 +27,9 @@ import { resolveOrganization } from "../odata/orgs.js";
 import {
   aggregateStock,
   hasSubcontoTypes,
+  loadItemGroups,
   nomenclatureSet,
+  readAllItems,
   readItemAttributes,
   selectByItem,
   selectionNotes,
@@ -734,9 +736,11 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         organization: organizationField,
         asOf: dateField("Дата остатков — на конец этой даты (без параметра — текущие)").optional(),
         groupBy: z
-          .enum(["item", "warehouse"])
+          .enum(["item", "warehouse", "itemGroup"])
           .default("item")
-          .describe("item — по номенклатуре (по умолчанию); warehouse — номенклатура в разрезе складов"),
+          .describe(
+            "item — по номенклатуре (по умолчанию); warehouse — номенклатура в разрезе складов; itemGroup — ещё итоги по группам товаров (byItemGroup)",
+          ),
         group: z
           .string()
           .trim()
@@ -882,6 +886,31 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
           notes.push("Часть остатков без склада в субконто: они в byWarehouse со значением warehouse: null.");
         }
 
+        // Итоги по группам товаров (1.1): папка номенклатуры каждой позиции; справочник читается один раз (кэш).
+        let byItemGroup: Array<Record<string, unknown>> | undefined;
+        if (groupBy === "itemGroup" && pageStart === 0 && nomSet) {
+          const all = await readAllItems(conn, nomSet);
+          const names = new Map((await loadItemGroups(conn, nomSet)).map((g) => [g.ref, g.name]));
+          const t = new Map<string, { positions: Set<string>; quantity: number; cents: number }>();
+          for (const l of lines) {
+            const g = (l.itemRef && all.get(l.itemRef)?.groupRef) || "";
+            const x = t.get(g) ?? { positions: new Set<string>(), quantity: 0, cents: 0 };
+            if (l.itemRef) x.positions.add(l.itemRef);
+            x.quantity += l.quantity;
+            x.cents += l.cents;
+            t.set(g, x);
+          }
+          byItemGroup = [...t]
+            .map(([ref, x]) => ({
+              group: ref ? (names.get(ref) ?? ref) : null,
+              ...(ref ? { groupRef: ref } : {}),
+              positions: x.positions.size,
+              quantity: Math.round(x.quantity * 1000) / 1000,
+              amount: fromCents(x.cents),
+            }))
+            .sort((a, b) => b.amount - a.amount || String(a.groupRef).localeCompare(String(b.groupRef)));
+        }
+
         return ok({
           database: conn.cfg.name,
           organization: org.name,
@@ -933,6 +962,7 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
               }
             : {}),
           ...(notes.length ? { note: notes.join(" ") } : {}),
+          ...(byItemGroup ? { byItemGroup } : {}),
           items,
           scan: { rowsScanned: cost ? cost.rows : rows.length, elapsedMs: Date.now() - t0 },
         });

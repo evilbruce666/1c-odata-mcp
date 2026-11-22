@@ -52,6 +52,8 @@ export interface ReportRow {
   revenueExVatCents?: number | undefined;
   costCents?: number | undefined;
   costExVatCents?: number | undefined;
+  /** Скидки (УТ): ручная и автоматическая; undefined — не ведутся в регистре. */
+  discountCents?: number | undefined;
 }
 
 export interface Bucket {
@@ -101,7 +103,7 @@ export function buckets(from: string, to: string, g: Granularity | undefined): B
     out.push({ label, from: ymd(start), to: ymd(last > end ? end : last) });
     if (out.length > MAX_BUCKETS)
       throw new InputError(
-        `Слишком много частей периода (больше ${MAX_BUCKETS}): возьмите период крупнее (period: month или quarter) или сократите интервал.`,
+        `Слишком много частей периода (больше ${MAX_BUCKETS}): возьмите шаг крупнее (неделя, месяц или квартал) или сократите интервал.`,
       );
     cur = next;
   }
@@ -140,6 +142,10 @@ export function previousPeriod(from: string, to: string): { from: string; to: st
   return { from: ymd(pf), to: ymd(pt) };
 }
 
+export async function isPurchasesReport(conn: Connection): Promise<boolean> {
+  return (await tradeWithoutAccounting(conn)) && (await conn.available()).has("AccumulationRegister_Закупки");
+}
+
 export async function isTradeReport(conn: Connection): Promise<boolean> {
   return (await tradeWithoutAccounting(conn)) && (await conn.available()).has(SALES_REGISTER);
 }
@@ -148,15 +154,44 @@ export async function isTradeReport(conn: Connection): Promise<boolean> {
 
 const KEY_ITEM = "АналитикаУчетаНоменклатуры";
 const KEY_PARTNER = "АналитикаУчетаПоПартнерам";
-const RESOURCES = [
-  "КоличествоTurnover",
-  "СуммаВыручкиTurnover",
-  "СуммаВыручкиБезНДСTurnover",
-  "СтоимостьTurnover",
-  "СтоимостьБезНДСTurnover",
-  "ДопРасходыTurnover",
-  "ДопРасходыБезНДСTurnover",
-];
+
+/** Регистр оборотов УТ для разрезов: продажи или закупки (1.1). */
+export interface TradeRegisterSpec {
+  set: string;
+  label: string;
+  /** Партнёр и организация: через ключ аналитики по партнёрам (продажи) или прямыми измерениями (закупки). */
+  partner: "key" | "direct";
+  quantity: string;
+  amount: string;
+  amountExVat: string;
+  cost?: readonly string[];
+  costExVat?: readonly string[];
+  discount?: readonly string[];
+}
+
+export const SALES_SPEC: TradeRegisterSpec = {
+  set: SALES_REGISTER,
+  label: "Регистр накопления «Выручка и себестоимость продаж»",
+  partner: "key",
+  quantity: "КоличествоTurnover",
+  amount: "СуммаВыручкиTurnover",
+  amountExVat: "СуммаВыручкиБезНДСTurnover",
+  cost: ["СтоимостьTurnover", "ДопРасходыTurnover"],
+  costExVat: ["СтоимостьБезНДСTurnover", "ДопРасходыБезНДСTurnover"],
+  // Скидки (ручная и автоматическая) — в той же валюте, что выручка: на копии УТ за октябрь ручная 1,17 млн.
+  discount: ["СуммаРучнойСкидкиTurnover", "СуммаАвтоматическойСкидкиTurnover"],
+};
+
+export const PURCHASES_REGISTER = "AccumulationRegister_Закупки";
+export const PURCHASES_SPEC: TradeRegisterSpec = {
+  set: PURCHASES_REGISTER,
+  label: "Регистр накопления «Закупки»",
+  partner: "direct",
+  quantity: "КоличествоTurnover",
+  amount: "СуммаTurnover",
+  amountExVat: "СуммаБезНДСTurnover",
+  discount: ["СуммаСкидкиTurnover"],
+};
 
 export interface TradeFilter {
   warehouses?: readonly string[] | undefined;
@@ -171,12 +206,9 @@ export async function readTradeReport(
   dims: readonly Dim[],
   parts: readonly Bucket[],
   filter: TradeFilter,
+  spec: TradeRegisterSpec = SALES_SPEC,
 ): Promise<{ rows: ReportRow[]; scanned: number }> {
-  const register = await requireEntity(
-    conn,
-    [SALES_REGISTER],
-    "Регистр накопления «Выручка и себестоимость продаж»",
-  );
+  const register = await requireEntity(conn, [spec.set], spec.label);
   const need = new Set(dims);
   if (filter.warehouses?.length) need.add("warehouse");
   if (filter.departments?.length) need.add("department");
@@ -191,10 +223,18 @@ export async function readTradeReport(
     select.push(`${KEY_ITEM}_Key`, `${KEY_ITEM}/Номенклатура_Key`);
     expand.add(KEY_ITEM);
   }
-  if (need.has("partner") || need.has("organization")) {
+  if (spec.partner === "key" && (need.has("partner") || need.has("organization"))) {
     registerDims.add(KEY_PARTNER);
     select.push(`${KEY_PARTNER}_Key`, `${KEY_PARTNER}/Партнер_Key`, `${KEY_PARTNER}/Организация_Key`);
     expand.add(KEY_PARTNER);
+  }
+  if (spec.partner === "direct" && need.has("partner")) {
+    registerDims.add("Партнер");
+    select.push("Партнер_Key");
+  }
+  if (spec.partner === "direct" && need.has("organization")) {
+    registerDims.add("Организация");
+    select.push("Организация_Key");
   }
   if (need.has("warehouse")) {
     registerDims.add("Склад");
@@ -212,6 +252,14 @@ export async function readTradeReport(
     registerDims.add("ХозяйственнаяОперация");
     select.push("ХозяйственнаяОперация");
   }
+  const resources = [
+    spec.quantity,
+    spec.amount,
+    spec.amountExVat,
+    ...(spec.cost ?? []),
+    ...(spec.costExVat ?? []),
+    ...(spec.discount ?? []),
+  ];
   const lower = (xs?: readonly string[]) =>
     xs?.length ? new Set(xs.map((x) => x.replace(/[{}]/g, "").toLowerCase())) : undefined;
   const fw = lower(filter.warehouses);
@@ -219,33 +267,37 @@ export async function readTradeReport(
   const fm = lower(filter.managers);
   const fp = lower(filter.partners);
   const ok = (v: string | undefined, f: Set<string> | undefined) => !f || (!!v && f.has(v.toLowerCase()));
+  const sum = (r: ODataEntity, fs: readonly string[] | undefined) =>
+    fs ? Math.round(fs.reduce((t, f) => t + num(r[f]), 0) * 100) : undefined;
   const rows: ReportRow[] = [];
   let scanned = 0;
   for (const b of parts) {
     const params = [
       `StartPeriod=datetime'${b.from}T00:00:00'`,
       `EndPeriod=datetime'${b.to}T23:59:59'`,
-      // Пустой Dimensions свернул бы всё в одну строку — тоже верно, но явный список понятнее в журнале запросов.
+      // Свёртка на стороне 1С — только по нужным измерениям.
       `Dimensions='${[...registerDims].join(",")}'`,
     ];
     const { rows: raw } = await fetchAllForAggregation(
       conn,
       `${register}/Turnovers(${params.join(",")})`,
-      { select: [...select, ...RESOURCES], ...(expand.size ? { expand: [...expand] } : {}) },
+      { select: [...select, ...resources], ...(expand.size ? { expand: [...expand] } : {}) },
       `${b.from}…${b.to}`,
     );
     scanned += raw.length;
     for (const r of raw) {
       const item = (r[KEY_ITEM] ?? {}) as ODataEntity;
-      const partner = (r[KEY_PARTNER] ?? {}) as ODataEntity;
+      const key = (r[KEY_PARTNER] ?? {}) as ODataEntity;
+      const partnerRef = spec.partner === "key" ? refOf(key["Партнер_Key"]) : refOf(r["Партнер_Key"]);
+      const orgRef = spec.partner === "key" ? refOf(key["Организация_Key"]) : refOf(r["Организация_Key"]);
       const warehouse = r["Склад_Type"] === "StandardODATA.Catalog_Склады" ? refOf(r["Склад"]) : undefined;
       const v: Partial<Record<Dim, string>> = {
         ...(need.has("item") || need.has("itemGroup") ? { item: refOf(item["Номенклатура_Key"]) } : {}),
         ...(need.has("warehouse") ? { warehouse } : {}),
         ...(need.has("department") ? { department: refOf(r["Подразделение_Key"]) } : {}),
         ...(need.has("manager") ? { manager: refOf(r["Менеджер_Key"]) } : {}),
-        ...(need.has("partner") ? { partner: refOf(partner["Партнер_Key"]) } : {}),
-        ...(need.has("organization") ? { organization: refOf(partner["Организация_Key"]) } : {}),
+        ...(need.has("partner") ? { partner: partnerRef } : {}),
+        ...(need.has("organization") ? { organization: orgRef } : {}),
         ...(need.has("operation")
           ? { operation: String(r["ХозяйственнаяОперация"] ?? "") || undefined }
           : {}),
@@ -255,13 +307,12 @@ export async function readTradeReport(
       if (filter.orgKey && v.organization?.toLowerCase() !== filter.orgKey.toLowerCase()) continue;
       rows.push({
         dims: v,
-        quantity: num(r["КоличествоTurnover"]),
-        revenueCents: Math.round(num(r["СуммаВыручкиTurnover"]) * 100),
-        revenueExVatCents: Math.round(num(r["СуммаВыручкиБезНДСTurnover"]) * 100),
-        costCents: Math.round((num(r["СтоимостьTurnover"]) + num(r["ДопРасходыTurnover"])) * 100),
-        costExVatCents: Math.round(
-          (num(r["СтоимостьБезНДСTurnover"]) + num(r["ДопРасходыБезНДСTurnover"])) * 100,
-        ),
+        quantity: num(r[spec.quantity]),
+        revenueCents: Math.round(num(r[spec.amount]) * 100),
+        revenueExVatCents: Math.round(num(r[spec.amountExVat]) * 100),
+        costCents: sum(r, spec.cost),
+        costExVatCents: sum(r, spec.costExVat),
+        discountCents: sum(r, spec.discount),
       });
     }
   }
@@ -392,6 +443,7 @@ export interface Aggregated {
   revenueExVatCents?: number | undefined;
   costCents?: number | undefined;
   costExVatCents?: number | undefined;
+  discountCents?: number | undefined;
 }
 
 /** Свёртка по выбранным разрезам; itemOf — отображение товара в разрез «группа» (для itemGroup). */
@@ -421,6 +473,7 @@ export function aggregate(
         revenueExVatCents: r.revenueExVatCents,
         costCents: r.costCents,
         costExVatCents: r.costExVatCents,
+        discountCents: r.discountCents,
       });
     else {
       cur.quantity += r.quantity;
@@ -428,6 +481,7 @@ export function aggregate(
       cur.revenueExVatCents = add(cur.revenueExVatCents, r.revenueExVatCents);
       cur.costCents = add(cur.costCents, r.costCents);
       cur.costExVatCents = add(cur.costExVatCents, r.costExVatCents);
+      cur.discountCents = add(cur.discountCents, r.discountCents);
     }
   }
   return [...out.values()].filter(

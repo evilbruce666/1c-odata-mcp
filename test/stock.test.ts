@@ -611,4 +611,22 @@ describe("1.1: get_inventory в УТ — количество и стоимос�
     expect(rows).toHaveLength(3);
     expect(fake.violations).toEqual([]);
   });
+
+  it("groupBy itemGroup: итоги по группам товаров (byItemGroup) сходятся с общим итогом", async () => {
+    const { call, fake } = await costSetup();
+    const r = await call({ groupBy: "itemGroup" });
+    expect(r.isError, r.text).toBeFalsy();
+    const by = r.structuredContent["byItemGroup"] as Array<{
+      groupRef?: string;
+      positions: number;
+      amount: number;
+    }>;
+    // I(1), I(2) — в группе G(3): 300.1 + 200.2 + 50; I(3) — в G(5): 75.
+    expect(Object.fromEntries(by.map((g) => [g.groupRef, [g.positions, g.amount]]))).toEqual({
+      [G(3)]: [2, 550.3],
+      [G(5)]: [1, 75],
+    });
+    expect(by.reduce((t, g) => t + g.amount, 0)).toBeCloseTo(r.structuredContent["totalAmount"] as number, 2);
+    expect(fake.violations).toEqual([]);
+  });
 });

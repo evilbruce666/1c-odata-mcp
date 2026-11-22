@@ -4,7 +4,7 @@
 
 Собирается из кода (`npm run manifest`) — тот же список, что видит MCP-клиент. Не правьте вручную: тест сверяет файл с кодом. Обзор инструментов по конфигурациям — [TOOLS.md](TOOLS.md).
 
-Всего 90. У инструментов записи `confirm` и `operationId` — см. [WRITE.md](WRITE.md).
+Всего 91. У инструментов записи `confirm` и `operationId` — см. [WRITE.md](WRITE.md).
 
 ## read.accounting
 
@@ -176,7 +176,7 @@
 | `database` | string |  | Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя. |
 | `organization` | string |  | Организация (юрлицо) для фильтра: часть названия, ИНН или Ref_Key из list_organizations. Без указания — все организации базы. |
 | `asOf` | string |  | Дата остатков — на конец этой даты (без параметра — текущие) (YYYY-MM-DD) |
-| `groupBy` | `item`, `warehouse` |  | item — по номенклатуре (по умолчанию); warehouse — номенклатура в разрезе складов. по умолчанию `"item"` |
+| `groupBy` | `item`, `warehouse`, `itemGroup` |  | item — по номенклатуре (по умолчанию); warehouse — номенклатура в разрезе складов; itemGroup — ещё итоги по группам товаров (byItemGroup). по умолчанию `"item"` |
 | `group` | string |  | Группа номенклатуры: Ref_Key, название целиком или его часть, путь через «/» («Канцелярия/Бумага»); несколько совпадений — отказ со списком путей. Подгруппы входят. Итоги — только по этой группе |
 | `query` | string |  | Поиск товара: части слов из названия или артикул (основа слова: «бумаг а4»). Можно вместе с group |
 | `limit` | integer |  | Сколько позиций вернуть. по умолчанию `200`; не больше 1000 |
@@ -184,7 +184,7 @@
 
 ### `read.analytics.get_partner_settlements` — Расчёты с партнёрами (УТ 11, КА 2, ERP 2)
 
-Кто кому должен по управленческим расчётам с партнёрами: регистры «Расчёты с клиентами / поставщиками по срокам» (УТ 11, КА 2, ERP 2; проверено на УТ 11.5). Это не счёт 62/60 бухучёта (в Бухгалтерии — get_debtors / get_creditors; в КА и ERP суммы могут расходиться). side=clients — долг клиентов нам, side=suppliers — наш долг поставщикам. debt — долг, prepayment — предоплата (аванс), net = debt − prepayment, всё в регламентированной валюте. overdue — долг с плановой датой погашения раньше даты расчёта (on: asOf или сегодня), aging — долг по срокам просрочки (сторно с минусом может сделать отдельную корзину отрицательной, сумма корзин всегда равна debt), maxOverdueDays — самая старая просрочка партнёра. Отбор: organization, partner (Ref_Key партнёра), overdueOnly — только партнёры с просрочкой, managers — расчёты этих менеджеров (Ref_Key пользователей 1С, read.catalog.list_users; менеджер — у объекта расчётов); byManager=true — итоги по менеджерам в byManager. partners — по убыванию net; count — всего партнёров, длинный список читайте с offset=nextOffset.
+Кто кому должен по управленческим расчётам с партнёрами: регистры «Расчёты с клиентами / поставщиками по срокам» (УТ 11, КА 2, ERP 2; проверено на УТ 11.5). Это не счёт 62/60 бухучёта (в Бухгалтерии — get_debtors / get_creditors; в КА и ERP суммы могут расходиться). side=clients — долг клиентов нам, side=suppliers — наш долг поставщикам. debt — долг, prepayment — предоплата (аванс), net = debt − prepayment, всё в регламентированной валюте. overdue — долг с плановой датой погашения раньше даты расчёта (on: asOf или сегодня), aging — долг по срокам просрочки (сторно с минусом может сделать отдельную корзину отрицательной, сумма корзин всегда равна debt), maxOverdueDays — самая старая просрочка партнёра. Отбор: organization, partner (Ref_Key партнёра), overdueOnly — только партнёры с просрочкой, managers — расчёты этих менеджеров (Ref_Key пользователей 1С, read.catalog.list_users; менеджер — у объекта расчётов); byManager=true — итоги по менеджерам в byManager. schedule (day, week, month) — платёжный календарь: долг по датам планового погашения вперёд до horizon, просрочка, долг за горизонтом и без даты — отдельно. partners — по убыванию net; count — всего партнёров, длинный список читайте с offset=nextOffset.
 
 | Параметр | Тип | Обязательный | Описание |
 |---|---|---|---|
@@ -195,6 +195,8 @@
 | `partner` | string |  | Ref_Key партнёра |
 | `overdueOnly` | boolean |  | Только партнёры с просроченным долгом. по умолчанию `false` |
 | `managers` | список (string) |  | Только расчёты этих менеджеров — Ref_Key пользователей 1С (read.catalog.list_users); менеджер — у объекта расчётов (заказ, договор, документ) |
+| `schedule` | `day`, `week`, `month` |  | Платёжный календарь (schedule): долг по датам планового погашения вперёд от on — по дням, неделям или месяцам; отдельно просрочка, долг за горизонтом и без даты |
+| `horizon` | string |  | Конец календаря (по умолчанию: day — 30 дней, week — 13 недель, month — 6 месяцев от on) (YYYY-MM-DD) |
 | `byManager` | boolean |  | Итоги по менеджерам (byManager): долг, предоплата, net и просрочка каждого; без менеджера — отдельно. по умолчанию `false` |
 | `limit` | integer |  | Сколько партнёров вернуть. по умолчанию `100`; не больше 1000 |
 | `offset` | integer |  | С какой строки начать (0 — с начала); значение из nextOffset прошлого ответа. по умолчанию `0`; не меньше 0 |
@@ -249,6 +251,28 @@
 | `contractRef` | string |  | Ref_Key договора (точечный фильтр) |
 | `groupBy` | `counterparty`, `month`, `contract`, `total` |  | Разбивка: counterparty (контрагент), month (месяц), contract (договор), total (без разбивки). по умолчанию `"counterparty"` |
 | `limit` | integer |  | Сколько групп вернуть. по умолчанию `50`; не больше 1000 |
+| `offset` | integer |  | С какой строки начать (0 — с начала); значение из nextOffset прошлого ответа. по умолчанию `0`; не меньше 0 |
+
+### `read.analytics.get_purchases_report` — Закупки в разрезах
+
+Закупки за период в разрезах на выбор (Управление торговлей, регистр «Закупки»; в Бухгалтерии закупки по документам — get_purchases_breakdown). groupBy — до трёх разрезов: item (товар), itemGroup (группа товара), warehouse (склад), department, manager, partner (поставщик), organization, operation, period. period — day, week, month (по умолчанию), quarter. У строки: quantity, amount и amountExVat (сумма закупки с НДС и без), discount (скидка поставщика). compareWith — previousPeriod или previousYear: у строки prev и growth (рост суммы в %), итог сравнения — в compare. sortBy — amount (по умолчанию), amountExVat, quantity, discount; abc=true — класс A/B/C по накопленной доле. Отборы: organization, warehouses, departments, managers, partners (Ref_Key поставщиков). count — всего строк; длинный список — с offset=nextOffset.
+
+| Параметр | Тип | Обязательный | Описание |
+|---|---|---|---|
+| `database` | string |  | Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя. |
+| `from` | string | да | Начало периода (включительно) (YYYY-MM-DD) |
+| `to` | string | да | Конец периода (включительно) (YYYY-MM-DD) |
+| `groupBy` | список (`item`, `itemGroup`, `warehouse`, `department`, `manager`, `partner`, `organization`, `operation`, `period`) | да | Разрезы по порядку, до трёх: напр. ["department", "period"] |
+| `period` | `day`, `week`, `month`, `quarter` |  | Шаг разреза period (по умолчанию month) |
+| `compareWith` | `previousPeriod`, `previousYear` |  | Сравнить с таким же периодом перед этим или с тем же периодом год назад |
+| `sortBy` | `amount`, `amountExVat`, `quantity`, `discount` |  | Сортировка по убыванию (и метрика для abc). по умолчанию `"amount"` |
+| `abc` | boolean |  | Класс A/B/C по накопленной доле sortBy: A — до 80 %, B — до 95 %. по умолчанию `false` |
+| `organization` | string |  | Организация: часть названия, ИНН или Ref_Key |
+| `warehouses` | список (string) |  | УТ: только эти склады |
+| `departments` | список (string) |  | Только эти подразделения |
+| `managers` | список (string) |  | УТ: только эти менеджеры (read.catalog.list_users) |
+| `partners` | список (string) |  | Только эти поставщики (партнёры) |
+| `limit` | integer |  | Сколько строк вернуть. по умолчанию `100`; не больше 1000 |
 | `offset` | integer |  | С какой строки начать (0 — с начала); значение из nextOffset прошлого ответа. по умолчанию `0`; не меньше 0 |
 
 ### `read.analytics.get_sales` — Продажи за период
@@ -314,7 +338,7 @@
 | `groupBy` | список (`item`, `itemGroup`, `warehouse`, `department`, `manager`, `partner`, `organization`, `operation`, `period`) | да | Разрезы по порядку, до трёх: напр. ["department", "period"] |
 | `period` | `day`, `week`, `month`, `quarter` |  | Шаг разреза period (по умолчанию month) |
 | `compareWith` | `previousPeriod`, `previousYear` |  | Сравнить с таким же периодом перед этим или с тем же периодом год назад |
-| `sortBy` | `revenue`, `revenueExVat`, `margin`, `marginExVat`, `quantity` |  | Сортировка по убыванию (и метрика для abc). по умолчанию `"revenue"` |
+| `sortBy` | `revenue`, `revenueExVat`, `margin`, `marginExVat`, `quantity`, `discount` |  | Сортировка по убыванию (и метрика для abc). по умолчанию `"revenue"` |
 | `abc` | boolean |  | Класс A/B/C по накопленной доле sortBy: A — до 80 %, B — до 95 %. по умолчанию `false` |
 | `organization` | string |  | Организация: часть названия, ИНН или Ref_Key |
 | `warehouses` | список (string) |  | УТ: только эти склады |

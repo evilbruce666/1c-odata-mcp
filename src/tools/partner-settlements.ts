@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { USERS } from "../odata/users.js";
+import { buckets } from "../odata/sales-report.js";
 import { z } from "zod";
 import type { ServerContext } from "../context.js";
 import { CATALOGS, resolveEntity } from "../config/mapping.js";
@@ -79,7 +80,7 @@ export function registerPartnerSettlementTools(server: McpServer, ctx: ServerCon
         "поставщикам. debt — долг, prepayment — предоплата (аванс), net = debt − prepayment, всё в регламентированной " +
         "валюте. overdue — долг с плановой датой погашения раньше даты расчёта (on: asOf или сегодня), aging — долг по " +
         "срокам просрочки (сторно с минусом может сделать отдельную корзину отрицательной, сумма корзин всегда равна debt), maxOverdueDays — самая старая просрочка партнёра. Отбор: organization, partner (Ref_Key " +
-        "партнёра), overdueOnly — только партнёры с просрочкой, managers — расчёты этих менеджеров (Ref_Key пользователей 1С, read.catalog.list_users; менеджер — у объекта расчётов); byManager=true — итоги по менеджерам в byManager. partners — по убыванию net; count — всего партнёров, " +
+        "партнёра), overdueOnly — только партнёры с просрочкой, managers — расчёты этих менеджеров (Ref_Key пользователей 1С, read.catalog.list_users; менеджер — у объекта расчётов); byManager=true — итоги по менеджерам в byManager. schedule (day, week, month) — платёжный календарь: долг по датам планового погашения вперёд до horizon, просрочка, долг за горизонтом и без даты — отдельно. partners — по убыванию net; count — всего партнёров, " +
         "длинный список читайте с offset=nextOffset.",
       inputSchema: z.object({
         database: databaseField,
@@ -108,6 +109,15 @@ export function registerPartnerSettlementTools(server: McpServer, ctx: ServerCon
           .describe(
             "Только расчёты этих менеджеров — Ref_Key пользователей 1С (read.catalog.list_users); менеджер — у объекта расчётов (заказ, договор, документ)",
           ),
+        schedule: z
+          .enum(["day", "week", "month"])
+          .optional()
+          .describe(
+            "Платёжный календарь (schedule): долг по датам планового погашения вперёд от on — по дням, неделям или месяцам; отдельно просрочка, долг за горизонтом и без даты",
+          ),
+        horizon: dateField(
+          "Конец календаря (по умолчанию: day — 30 дней, week — 13 недель, month — 6 месяцев от on)",
+        ).optional(),
         byManager: z
           .boolean()
           .default(false)
@@ -118,7 +128,19 @@ export function registerPartnerSettlementTools(server: McpServer, ctx: ServerCon
       }),
       outputSchema: partnerSettlementsResultSchema,
     },
-    ({ database, side, asOf, organization, partner, overdueOnly, managers, byManager, limit }) =>
+    ({
+      database,
+      side,
+      asOf,
+      organization,
+      partner,
+      overdueOnly,
+      managers,
+      byManager,
+      schedule,
+      horizon,
+      limit,
+    }) =>
       guard("read.analytics.get_partner_settlements", async () => {
         const t0 = Date.now();
         const conn = ctx.db(database);
@@ -222,6 +244,39 @@ export function registerPartnerSettlementTools(server: McpServer, ctx: ServerCon
           );
         }
 
+        // Платёжный календарь: тот же долг «по срокам», что и в итогах, — по датам погашения вперёд.
+        let calendar: Record<string, unknown> | undefined;
+        if (schedule) {
+          const end = horizon ?? addDays(on, schedule === "day" ? 29 : schedule === "week" ? 90 : 182);
+          if (end < on) throw new InputError(`horizon ${end} раньше даты расчёта ${on}.`);
+          const parts = buckets(on, end, schedule);
+          const sums = parts.map(() => 0);
+          let overdueC = 0;
+          let beyond = 0;
+          let noDate = 0;
+          for (const r of selected) {
+            if (!r.dueDate) noDate += r.debtCents;
+            else if (r.dueDate < on) overdueC += r.debtCents;
+            else if (r.dueDate > end) beyond += r.debtCents;
+            else {
+              const k = parts.findIndex((p) => r.dueDate! >= p.from && r.dueDate! <= p.to);
+              if (k >= 0) sums[k]! += r.debtCents;
+            }
+          }
+          calendar = {
+            from: on,
+            to: end,
+            step: schedule,
+            overdue: rub(overdueC),
+            periods: parts.map((p, k) => ({ period: p.label, from: p.from, to: p.to, debt: rub(sums[k]!) })),
+            beyondHorizon: rub(beyond),
+            noDueDate: rub(noDate),
+          };
+          notes.push(
+            "schedule — долг по плановым датам погашения из тех же расчётов «по срокам»: сумма overdue, periods, beyondHorizon и noDueDate равна debt.",
+          );
+        }
+
         return ok({
           database: conn.cfg.name,
           side,
@@ -233,6 +288,7 @@ export function registerPartnerSettlementTools(server: McpServer, ctx: ServerCon
           net: rub(total.debt - total.prepayment),
           overdue: rub(total.overdue),
           aging: Object.fromEntries(AGE_BUCKETS.map((b) => [b, rub(total.ages[b])])),
+          ...(calendar ? { schedule: calendar } : {}),
           ...(managers?.length
             ? {
                 managerFilter: [...new Set(managers.map((m) => m.replace(/[{}]/g, "").toLowerCase()))].map(
@@ -271,4 +327,11 @@ export function registerPartnerSettlementTools(server: McpServer, ctx: ServerCon
         });
       }),
   );
+}
+
+/** YYYY-MM-DD плюс n дней. */
+function addDays(d: string, n: number): string {
+  const x = new Date(`${d}T00:00:00Z`);
+  x.setUTCDate(x.getUTCDate() + n);
+  return x.toISOString().slice(0, 10);
 }

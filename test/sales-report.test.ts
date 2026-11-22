@@ -338,3 +338,123 @@ describe("get_sales_report в Бухгалтерии — счёт 90", () => {
     expect(r.text).toContain("get_sales_breakdown");
   });
 });
+
+describe("get_purchases_report — закупки в разрезах (УТ)", () => {
+  const S1 = g("5", 1);
+  const S2 = g("5", 2);
+  const buy = (partner: string, item: string, q: number, sum: number, disc = 0) => ({
+    Партнер_Key: partner,
+    Организация_Key: g("c", 1),
+    АналитикаУчетаНоменклатуры: { Номенклатура_Key: item },
+    Склад: W1,
+    Склад_Type: "StandardODATA.Catalog_Склады",
+    КоличествоTurnover: q,
+    СуммаTurnover: sum,
+    СуммаБезНДСTurnover: Math.round((sum / 1.2) * 100) / 100,
+    СуммаСкидкиTurnover: disc,
+  });
+  const OCT_BUY = [buy(S1, I1, 5, 600, 10), buy(S1, I2, 1, 100), buy(S2, I1, 2, 300, 5)];
+  async function setup() {
+    const seen: FakeQuery[] = [];
+    const fake = fake1C(
+      { READ_ONLY: "true" },
+      {
+        schema: "ut11",
+        data: (q) => {
+          seen.push(q);
+          if (q.base === "AccumulationRegister_Закупки" && q.fn === "Turnovers")
+            return String(q.args["StartPeriod"]).includes("2026-10") ? OCT_BUY : [];
+          return undefined;
+        },
+      },
+    );
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await createServer(fake.ctx).connect(a);
+    const client = new Client({ name: "t", version: "1" });
+    await client.connect(b);
+    const call = async (args: object) => {
+      const r = (await client.callTool({
+        name: "read.analytics.get_purchases_report",
+        arguments: { from: "2026-10-01", to: "2026-10-31", ...args },
+      })) as {
+        isError?: boolean;
+        structuredContent: Record<string, unknown> & { items: Array<Record<string, unknown>> };
+        content: { text: string }[];
+      };
+      return { ...r, text: r.content.map((c) => c.text).join("") };
+    };
+    return { call, fake, seen };
+  }
+
+  it("по поставщикам: сумма, количество и скидка; поставщик — прямое измерение регистра", async () => {
+    const { call, fake, seen } = await setup();
+    const r = await call({ groupBy: ["partner"] });
+    expect(r.isError, r.text).toBeFalsy();
+    expect([
+      r.structuredContent["amount"],
+      r.structuredContent["quantity"],
+      r.structuredContent["discount"],
+    ]).toEqual([1000, 8, 15]);
+    expect(r.structuredContent.items.map((i) => [i["partnerRef"], i["amount"], i["discount"]])).toEqual([
+      [S1, 700, 10],
+      [S2, 300, 5],
+    ]);
+    expect(r.structuredContent).not.toHaveProperty("margin");
+    expect(seen.find((q) => q.fn === "Turnovers")!.args["Dimensions"]).toBe("Партнер");
+    expect(fake.violations).toEqual([]);
+  });
+
+  it("sortBy amount и abc; в Бухгалтерии — отказ с подсказкой get_purchases_breakdown", async () => {
+    const { call } = await setup();
+    const r = await call({ groupBy: ["item"], sortBy: "amount", abc: true });
+    expect(r.structuredContent.items.map((i) => [i["itemRef"], i["amount"], i["abcClass"]])).toEqual([
+      [I1, 900, "A"],
+      [I2, 100, "C"],
+    ]);
+    const bp = fake1C({ READ_ONLY: "true" }, { schema: "bp30" });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await createServer(bp.ctx).connect(a);
+    const c = new Client({ name: "t", version: "1" });
+    await c.connect(b);
+    const x = (await c.callTool({
+      name: "read.analytics.get_purchases_report",
+      arguments: { from: "2026-10-01", to: "2026-10-31", groupBy: ["partner"] },
+    })) as { isError?: boolean; content: { text: string }[] };
+    expect(x.isError).toBe(true);
+    expect(x.content[0]!.text).toContain("get_purchases_breakdown");
+  });
+});
+
+describe("скидки в разрезах продаж (УТ)", () => {
+  it("discount — ручная и автоматическая скидка из регистра продаж; sortBy discount", async () => {
+    const withDisc = OCT.map((r, i) => ({
+      ...r,
+      СуммаРучнойСкидкиTurnover: i + 1,
+      СуммаАвтоматическойСкидкиTurnover: 1,
+    }));
+    const fake = fake1C(
+      { READ_ONLY: "true" },
+      {
+        schema: "ut11",
+        data: (q) =>
+          q.base === "AccumulationRegister_ВыручкаИСебестоимостьПродаж" && q.fn === "Turnovers"
+            ? withDisc
+            : undefined,
+      },
+    );
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await createServer(fake.ctx).connect(a);
+    const c = new Client({ name: "t", version: "1" });
+    await c.connect(b);
+    const r = (await c.callTool({
+      name: "read.analytics.get_sales_report",
+      arguments: { from: "2026-10-01", to: "2026-10-31", groupBy: ["department"], sortBy: "discount" },
+    })) as { structuredContent: Record<string, unknown> & { items: Array<Record<string, unknown>> } };
+    // Скидки: строки 1+1, 2+1, 3+1 → D1 (строки 1, 2) = 5, D2 (строка 3) = 4; итог 9.
+    expect(r.structuredContent["discount"]).toBe(9);
+    expect(r.structuredContent.items.map((i) => [i["departmentRef"], i["discount"]])).toEqual([
+      [D1, 5],
+      [D2, 4],
+    ]);
+  });
+});

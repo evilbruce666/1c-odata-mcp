@@ -410,3 +410,47 @@ describe("1.1: get_partner_settlements по менеджерам (managers, byMa
     expect(fake.violations).toEqual([]);
   });
 });
+
+describe("1.1: платёжный календарь (schedule)", () => {
+  it("долг по датам погашения вперёд; просрочка, за горизонтом и без даты отдельно; сумма = debt", async () => {
+    const { call, fake } = await setup();
+    const r = await call("read.analytics.get_partner_settlements", {
+      side: "clients",
+      asOf: "2026-11-10",
+      schedule: "month",
+    });
+    expect(r.isError, r.text).toBeFalsy();
+    const s = r.structuredContent["schedule"] as {
+      from: string;
+      to: string;
+      overdue: number;
+      periods: Array<{ period: string; debt: number }>;
+      beyondHorizon: number;
+      noDueDate: number;
+    };
+    expect([s.from, s.to]).toEqual(["2026-11-10", "2027-05-11"]);
+    expect(s.overdue).toBe(400);
+    expect(s.periods.find((p) => p.period === "2026-12")!.debt).toBe(50);
+    expect(s.periods.reduce((t, p) => t + p.debt, 0) + s.overdue + s.beyondHorizon + s.noDueDate).toBe(
+      r.structuredContent["debt"],
+    );
+    // Короткий горизонт: декабрьский долг — за горизонтом.
+    const short = await call("read.analytics.get_partner_settlements", {
+      side: "clients",
+      asOf: "2026-11-10",
+      schedule: "week",
+      horizon: "2026-11-30",
+    });
+    const ss = short.structuredContent["schedule"] as { beyondHorizon: number; periods: unknown[] };
+    expect(ss.beyondHorizon).toBe(50);
+    expect(ss.periods.length).toBe(4);
+    const bad = await call("read.analytics.get_partner_settlements", {
+      side: "clients",
+      asOf: "2026-11-10",
+      schedule: "day",
+      horizon: "2026-11-01",
+    });
+    expect(bad.isError).toBe(true);
+    expect(fake.violations).toEqual([]);
+  });
+});

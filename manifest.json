@@ -4,7 +4,7 @@
   "display_name": "1С через OData: Бухгалтерия и Торговля",
   "version": "1.0.0",
   "description": "MCP-сервер для 1С:Предприятие через OData: Бухгалтерия 3.0 и Управление торговлей 11 — чтение и запись документов с предпросмотром (склад, деньги, продажи и закупки, цены, справочники) на естественном языке; запись и в режиме сервера (HTTP).",
-  "long_description": "Подключает любой MCP-клиент (Claude, Cursor, VS Code и др.) к базе 1С:Предприятие через стандартный интерфейс OData. Ничего не устанавливается внутри 1С. Конфигурации: Бухгалтерия 3.0 — полностью, Управление торговлей 11 — чтение и запись цен, справочников, складских и денежных документов, продаж и закупок (проверено на 11.5), КА 2 и ERP 2 — по тем же регистрам, без проверки на живой базе. По умолчанию только чтение — 90 инструментов и 3 готовых сценария: аналитика Бухгалтерии (дебиторка и кредиторка по срокам, деньги на счетах, неоплаченные счета, проверка закрытия месяца, карточка счёта, акт сверки, остатки, продажи, движение денег, налоги, ОСВ по счёту, проводки документа, хронология для аудита), Управления торговлей (остатки на складах, продажи в штуках с розницей и выручкой, расчёты с клиентами и поставщиками, деньги в кассах и на счетах, списки складов и номенклатуры, цены), справочники и документы. Запись включается отдельно (readOnly=false), в Управлении торговлей — установка цен, справочники, перемещения, излишки, недостачи и пересчёты, касса, банк и заявки на расходование, заказы, счета, реализации, приобретения, возвраты и счета-фактуры, и всегда работает в режиме предпросмотра — сначала показывает, что будет создано/изменено, и пишет только после подтверждения.",
+  "long_description": "Подключает любой MCP-клиент (Claude, Cursor, VS Code и др.) к базе 1С:Предприятие через стандартный интерфейс OData. Ничего не устанавливается внутри 1С. Конфигурации: Бухгалтерия 3.0 — полностью, Управление торговлей 11 — чтение и запись цен, справочников, складских и денежных документов, продаж и закупок (проверено на 11.5), КА 2 и ERP 2 — по тем же регистрам, без проверки на живой базе. По умолчанию только чтение — 91 инструмент и 3 готовых сценария: аналитика Бухгалтерии (дебиторка и кредиторка по срокам, деньги на счетах, неоплаченные счета, проверка закрытия месяца, карточка счёта, акт сверки, остатки, продажи, движение денег, налоги, ОСВ по счёту, проводки документа, хронология для аудита), Управления торговлей (остатки на складах, продажи в штуках с розницей и выручкой, расчёты с клиентами и поставщиками, деньги в кассах и на счетах, списки складов и номенклатуры, цены), справочники и документы. Запись включается отдельно (readOnly=false), в Управлении торговлей — установка цен, справочники, перемещения, излишки, недостачи и пересчёты, касса, банк и заявки на расходование, заказы, счета, реализации, приобретения, возвраты и счета-фактуры, и всегда работает в режиме предпросмотра — сначала показывает, что будет создано/изменено, и пишет только после подтверждения.",
   "author": {
     "name": "evilbruce666",
     "url": "https://github.com/evilbruce666"
@@ -1968,11 +1968,12 @@
           },
           "groupBy": {
             "default": "item",
-            "description": "item — по номенклатуре (по умолчанию); warehouse — номенклатура в разрезе складов",
+            "description": "item — по номенклатуре (по умолчанию); warehouse — номенклатура в разрезе складов; itemGroup — ещё итоги по группам товаров (byItemGroup)",
             "type": "string",
             "enum": [
               "item",
-              "warehouse"
+              "warehouse",
+              "itemGroup"
             ]
           },
           "group": {
@@ -2007,6 +2008,39 @@
       "outputSchema": {
         "type": "object",
         "properties": {
+          "byItemGroup": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "group": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "groupRef": {
+                  "type": "string"
+                },
+                "positions": {
+                  "type": "number"
+                },
+                "quantity": {
+                  "type": "number"
+                },
+                "amount": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "group",
+                "positions",
+                "quantity",
+                "amount"
+              ],
+              "additionalProperties": {}
+            }
+          },
           "database": {
             "type": "string"
           },
@@ -3245,7 +3279,7 @@
     {
       "name": "read.analytics.get_partner_settlements",
       "title": "Расчёты с партнёрами (УТ 11, КА 2, ERP 2)",
-      "description": "Кто кому должен по управленческим расчётам с партнёрами: регистры «Расчёты с клиентами / поставщиками по срокам» (УТ 11, КА 2, ERP 2; проверено на УТ 11.5). Это не счёт 62/60 бухучёта (в Бухгалтерии — get_debtors / get_creditors; в КА и ERP суммы могут расходиться). side=clients — долг клиентов нам, side=suppliers — наш долг поставщикам. debt — долг, prepayment — предоплата (аванс), net = debt − prepayment, всё в регламентированной валюте. overdue — долг с плановой датой погашения раньше даты расчёта (on: asOf или сегодня), aging — долг по срокам просрочки (сторно с минусом может сделать отдельную корзину отрицательной, сумма корзин всегда равна debt), maxOverdueDays — самая старая просрочка партнёра. Отбор: organization, partner (Ref_Key партнёра), overdueOnly — только партнёры с просрочкой, managers — расчёты этих менеджеров (Ref_Key пользователей 1С, read.catalog.list_users; менеджер — у объекта расчётов); byManager=true — итоги по менеджерам в byManager. partners — по убыванию net; count — всего партнёров, длинный список читайте с offset=nextOffset.",
+      "description": "Кто кому должен по управленческим расчётам с партнёрами: регистры «Расчёты с клиентами / поставщиками по срокам» (УТ 11, КА 2, ERP 2; проверено на УТ 11.5). Это не счёт 62/60 бухучёта (в Бухгалтерии — get_debtors / get_creditors; в КА и ERP суммы могут расходиться). side=clients — долг клиентов нам, side=suppliers — наш долг поставщикам. debt — долг, prepayment — предоплата (аванс), net = debt − prepayment, всё в регламентированной валюте. overdue — долг с плановой датой погашения раньше даты расчёта (on: asOf или сегодня), aging — долг по срокам просрочки (сторно с минусом может сделать отдельную корзину отрицательной, сумма корзин всегда равна debt), maxOverdueDays — самая старая просрочка партнёра. Отбор: organization, partner (Ref_Key партнёра), overdueOnly — только партнёры с просрочкой, managers — расчёты этих менеджеров (Ref_Key пользователей 1С, read.catalog.list_users; менеджер — у объекта расчётов); byManager=true — итоги по менеджерам в byManager. schedule (day, week, month) — платёжный календарь: долг по датам планового погашения вперёд до horizon, просрочка, долг за горизонтом и без даты — отдельно. partners — по убыванию net; count — всего партнёров, длинный список читайте с offset=nextOffset.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3291,6 +3325,20 @@
               "pattern": "^\\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}?$"
             }
           },
+          "schedule": {
+            "description": "Платёжный календарь (schedule): долг по датам планового погашения вперёд от on — по дням, неделям или месяцам; отдельно просрочка, долг за горизонтом и без даты",
+            "type": "string",
+            "enum": [
+              "day",
+              "week",
+              "month"
+            ]
+          },
+          "horizon": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+            "description": "Конец календаря (по умолчанию: day — 30 дней, week — 13 недель, month — 6 месяцев от on) (YYYY-MM-DD)"
+          },
           "byManager": {
             "default": false,
             "description": "Итоги по менеджерам (byManager): долг, предоплата, net и просрочка каждого; без менеджера — отдельно",
@@ -3319,6 +3367,66 @@
       "outputSchema": {
         "type": "object",
         "properties": {
+          "schedule": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              },
+              "step": {
+                "type": "string"
+              },
+              "overdue": {
+                "type": "number"
+              },
+              "periods": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "period": {
+                      "type": "string"
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "debt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "period",
+                    "from",
+                    "to",
+                    "debt"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "beyondHorizon": {
+                "type": "number"
+              },
+              "noDueDate": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "step",
+              "overdue",
+              "periods",
+              "beyondHorizon",
+              "noDueDate"
+            ],
+            "additionalProperties": false
+          },
           "managerFilter": {
             "type": "array",
             "items": {
@@ -4066,7 +4174,8 @@
               "revenueExVat",
               "margin",
               "marginExVat",
-              "quantity"
+              "quantity",
+              "discount"
             ]
           },
           "abc": {
@@ -4193,6 +4302,9 @@
           "marginExVat": {
             "type": "number"
           },
+          "discount": {
+            "type": "number"
+          },
           "compare": {
             "type": "object",
             "properties": {
@@ -4221,6 +4333,9 @@
                 "type": "number"
               },
               "marginExVat": {
+                "type": "number"
+              },
+              "discount": {
                 "type": "number"
               }
             },
@@ -4264,6 +4379,9 @@
                 "marginExVat": {
                   "type": "number"
                 },
+                "discount": {
+                  "type": "number"
+                },
                 "prev": {
                   "anyOf": [
                     {
@@ -4288,6 +4406,9 @@
                           "type": "number"
                         },
                         "marginExVat": {
+                          "type": "number"
+                        },
+                        "discount": {
                           "type": "number"
                         }
                       },
@@ -4354,6 +4475,334 @@
           "groupBy",
           "quantity",
           "revenue",
+          "count",
+          "items",
+          "scan"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "read.analytics.get_purchases_report",
+      "title": "Закупки в разрезах",
+      "description": "Закупки за период в разрезах на выбор (Управление торговлей, регистр «Закупки»; в Бухгалтерии закупки по документам — get_purchases_breakdown). groupBy — до трёх разрезов: item (товар), itemGroup (группа товара), warehouse (склад), department, manager, partner (поставщик), organization, operation, period. period — day, week, month (по умолчанию), quarter. У строки: quantity, amount и amountExVat (сумма закупки с НДС и без), discount (скидка поставщика). compareWith — previousPeriod или previousYear: у строки prev и growth (рост суммы в %), итог сравнения — в compare. sortBy — amount (по умолчанию), amountExVat, quantity, discount; abc=true — класс A/B/C по накопленной доле. Отборы: organization, warehouses, departments, managers, partners (Ref_Key поставщиков). count — всего строк; длинный список — с offset=nextOffset.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
+            "type": "string"
+          },
+          "from": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+            "description": "Начало периода (включительно) (YYYY-MM-DD)"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
+            "description": "Конец периода (включительно) (YYYY-MM-DD)"
+          },
+          "groupBy": {
+            "minItems": 1,
+            "maxItems": 3,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "item",
+                "itemGroup",
+                "warehouse",
+                "department",
+                "manager",
+                "partner",
+                "organization",
+                "operation",
+                "period"
+              ]
+            },
+            "description": "Разрезы по порядку, до трёх: напр. [\"department\", \"period\"]"
+          },
+          "period": {
+            "description": "Шаг разреза period (по умолчанию month)",
+            "type": "string",
+            "enum": [
+              "day",
+              "week",
+              "month",
+              "quarter"
+            ]
+          },
+          "compareWith": {
+            "description": "Сравнить с таким же периодом перед этим или с тем же периодом год назад",
+            "type": "string",
+            "enum": [
+              "previousPeriod",
+              "previousYear"
+            ]
+          },
+          "sortBy": {
+            "default": "amount",
+            "description": "Сортировка по убыванию (и метрика для abc)",
+            "type": "string",
+            "enum": [
+              "amount",
+              "amountExVat",
+              "quantity",
+              "discount"
+            ]
+          },
+          "abc": {
+            "default": false,
+            "description": "Класс A/B/C по накопленной доле sortBy: A — до 80 %, B — до 95 %",
+            "type": "boolean"
+          },
+          "organization": {
+            "description": "Организация: часть названия, ИНН или Ref_Key",
+            "type": "string",
+            "minLength": 1
+          },
+          "warehouses": {
+            "description": "УТ: только эти склады",
+            "minItems": 1,
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}?$"
+            }
+          },
+          "departments": {
+            "description": "Только эти подразделения",
+            "minItems": 1,
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}?$"
+            }
+          },
+          "managers": {
+            "description": "УТ: только эти менеджеры (read.catalog.list_users)",
+            "minItems": 1,
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}?$"
+            }
+          },
+          "partners": {
+            "description": "Только эти поставщики (партнёры)",
+            "minItems": 1,
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\}?$"
+            }
+          },
+          "limit": {
+            "default": 100,
+            "description": "Сколько строк вернуть",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 1000
+          },
+          "offset": {
+            "default": 0,
+            "description": "С какой строки начать (0 — с начала); значение из nextOffset прошлого ответа",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "groupBy"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string"
+          },
+          "configuration": {
+            "type": "string",
+            "const": "trade"
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "groupBy": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "period": {
+            "type": "string"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "number"
+          },
+          "amount": {
+            "type": "number"
+          },
+          "amountExVat": {
+            "type": "number"
+          },
+          "discount": {
+            "type": "number"
+          },
+          "compare": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              },
+              "quantity": {
+                "type": "number"
+              },
+              "amount": {
+                "type": "number"
+              },
+              "amountExVat": {
+                "type": "number"
+              },
+              "discount": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "quantity",
+              "amount"
+            ],
+            "additionalProperties": {}
+          },
+          "count": {
+            "type": "number"
+          },
+          "note": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "quantity": {
+                  "type": "number"
+                },
+                "amount": {
+                  "type": "number"
+                },
+                "amountExVat": {
+                  "type": "number"
+                },
+                "discount": {
+                  "type": "number"
+                },
+                "prev": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "quantity": {
+                          "type": "number"
+                        },
+                        "amount": {
+                          "type": "number"
+                        },
+                        "amountExVat": {
+                          "type": "number"
+                        },
+                        "discount": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "quantity",
+                        "amount"
+                      ],
+                      "additionalProperties": {}
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "growth": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "abcClass": {
+                  "type": "string",
+                  "enum": [
+                    "A",
+                    "B",
+                    "C"
+                  ]
+                }
+              },
+              "required": [
+                "quantity",
+                "amount"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "scan": {
+            "type": "object",
+            "properties": {
+              "documentsScanned": {
+                "type": "number"
+              },
+              "rowsScanned": {
+                "type": "number"
+              },
+              "windows": {
+                "type": "number"
+              },
+              "elapsedMs": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "elapsedMs"
+            ],
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "database",
+          "configuration",
+          "from",
+          "to",
+          "groupBy",
+          "quantity",
+          "amount",
           "count",
           "items",
           "scan"

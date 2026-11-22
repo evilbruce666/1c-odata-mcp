@@ -59,6 +59,13 @@ const OVERRIDES: Record<string, Record<string, unknown>> = {
   "read.catalog.list_users": { refs: [id] },
   // Отборы warehouses/managers/partners — только для УТ (в Бухгалтерии отказ): здесь схема Бухгалтерии.
   "read.analytics.get_sales_report": { groupBy: ["department"], departments: [id] },
+  "read.analytics.get_purchases_report": {
+    groupBy: ["partner"],
+    warehouses: [id],
+    departments: [id],
+    managers: [id],
+    partners: [id],
+  },
   "read.catalog.list_items": { groups: undefined },
   // Механизм — явно: синтетические записи есть в обоих регистрах цен.
   "read.analytics.get_prices": {
@@ -73,7 +80,12 @@ const OVERRIDES: Record<string, Record<string, unknown>> = {
     lines: [{ itemRef: id, price: 100 }],
     mechanism: "legacy",
   },
-  "read.analytics.get_partner_settlements": { partner: id, managers: [id] },
+  "read.analytics.get_partner_settlements": {
+    partner: id,
+    managers: [id],
+    schedule: "month",
+    horizon: "2027-01-31",
+  },
   "read.document.get_document": { entitySet: "Document_РеализацияТоваровУслуг", ref: id },
   "read.document.search_documents": { entitySet: "Document_РеализацияТоваровУслуг" },
   "read.accounting.get_document_postings": {
@@ -235,6 +247,7 @@ const TOOL_SCHEMA: Record<string, FakeSchema> = {
   "read.analytics.get_prices": "ut11",
   "write.pricing.create_price_setting": "ut11",
   "read.analytics.get_partner_settlements": "ut11",
+  "read.analytics.get_purchases_report": "ut11",
 };
 
 /** Вызов инструмента так же, как SDK: аргументы проходят схему (значения по умолчанию, проверка типов). */

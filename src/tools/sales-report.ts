@@ -22,11 +22,14 @@ import {
   type Dim,
   type Granularity,
   type ReportRow,
+  PURCHASES_SPEC,
+  SALES_SPEC,
+  isPurchasesReport,
 } from "../odata/sales-report.js";
 import { describeWarehouses } from "../odata/stock.js";
 import { lastCostCalculation } from "../odata/trade-cost.js";
 import { USERS } from "../odata/users.js";
-import { salesReportResultSchema } from "../schemas/output.js";
+import { purchasesReportResultSchema, salesReportResultSchema } from "../schemas/output.js";
 import { databaseField, dateField, guard, ok } from "./_shared.js";
 
 const GUID = /^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$/;
@@ -39,14 +42,27 @@ const refs = (label: string) =>
 const DEPARTMENT_SETS = ["Catalog_СтруктураПредприятия", "Catalog_ПодразделенияОрганизаций"] as const;
 const ITEM_GROUP_SETS_BP = ["Catalog_НоменклатурныеГруппы"] as const;
 
-type Metric = "revenue" | "revenueExVat" | "margin" | "marginExVat" | "quantity";
+type Kind = "sales" | "purchases";
+type Metric = "revenue" | "revenueExVat" | "margin" | "marginExVat" | "quantity" | "discount";
 
 /** Рубли из копеек; undefined — метрика в этом разрезе не считается. */
 const rub = (c: number | undefined) => (c === undefined ? undefined : c / 100);
 
-function metrics(
-  a: Pick<Aggregated, "quantity" | "revenueCents" | "revenueExVatCents" | "costCents" | "costExVatCents">,
-) {
+type Sums = Pick<
+  Aggregated,
+  "quantity" | "revenueCents" | "revenueExVatCents" | "costCents" | "costExVatCents" | "discountCents"
+>;
+
+/** Метрики строки. В закупках выручки и маржи нет: amount — сумма закупки, amountExVat — без НДС. */
+function metrics(a: Sums, kind: Kind = "sales") {
+  const discount = a.discountCents !== undefined ? { discount: rub(a.discountCents) } : {};
+  if (kind === "purchases")
+    return {
+      quantity: Math.round(a.quantity * 1000) / 1000,
+      amount: a.revenueCents / 100,
+      ...(a.revenueExVatCents !== undefined ? { amountExVat: a.revenueExVatCents / 100 } : {}),
+      ...discount,
+    };
   const margin = a.costCents === undefined ? undefined : a.revenueCents - a.costCents;
   const marginExVat =
     a.costExVatCents === undefined || a.revenueExVatCents === undefined
@@ -60,17 +76,23 @@ function metrics(
     ...(a.costExVatCents !== undefined ? { costExVat: rub(a.costExVatCents) } : {}),
     ...(margin !== undefined ? { margin: margin / 100 } : {}),
     ...(marginExVat !== undefined ? { marginExVat: marginExVat / 100 } : {}),
+    ...discount,
   };
 }
 
 function metricOf(a: Aggregated, m: Metric): number {
-  const x = metrics(a);
-  return (m === "quantity" ? x.quantity : (x[m] ?? 0)) as number;
+  if (m === "quantity") return a.quantity;
+  if (m === "revenue") return a.revenueCents / 100;
+  if (m === "revenueExVat") return (a.revenueExVatCents ?? 0) / 100;
+  if (m === "discount") return (a.discountCents ?? 0) / 100;
+  const x = metrics(a) as { margin?: number; marginExVat?: number };
+  return x[m] ?? 0;
 }
 
 function total(rows: readonly Aggregated[]): Aggregated {
   const add = (a: number | undefined, b: number | undefined) =>
     a === undefined || b === undefined ? undefined : a + b;
+  const first = rows[0];
   return rows.reduce<Aggregated>(
     (t, r) => ({
       key: "",
@@ -80,15 +102,18 @@ function total(rows: readonly Aggregated[]): Aggregated {
       revenueExVatCents: add(t.revenueExVatCents, r.revenueExVatCents),
       costCents: add(t.costCents, r.costCents),
       costExVatCents: add(t.costExVatCents, r.costExVatCents),
+      discountCents: add(t.discountCents, r.discountCents),
     }),
     {
       key: "",
       dims: {},
       quantity: 0,
       revenueCents: 0,
-      revenueExVatCents: 0,
-      costCents: 0,
-      costExVatCents: 0,
+      // Пустой отбор: метрики, которых у этого регистра нет, не выводятся и как ноль.
+      revenueExVatCents: first ? 0 : 0,
+      costCents: first && first.costCents === undefined ? undefined : 0,
+      costExVatCents: first && first.costExVatCents === undefined ? undefined : 0,
+      discountCents: first && first.discountCents === undefined ? undefined : 0,
     },
   );
 }
@@ -143,23 +168,45 @@ async function dimNames(
 }
 
 export function registerSalesReportTools(server: McpServer, ctx: ServerContext): void {
+  registerReport(server, ctx, "sales");
+  registerReport(server, ctx, "purchases");
+}
+
+const PURCHASES_DESCRIPTION =
+  "Закупки за период в разрезах на выбор (Управление торговлей, регистр «Закупки»; в Бухгалтерии закупки по " +
+  "документам — get_purchases_breakdown). groupBy — до трёх разрезов: item (товар), itemGroup (группа товара), warehouse " +
+  "(склад), department, manager, partner (поставщик), organization, operation, period. period — day, week, month (по " +
+  "умолчанию), quarter. У строки: quantity, amount и amountExVat (сумма закупки с НДС и без), discount (скидка поставщика). " +
+  "compareWith — previousPeriod или previousYear: у строки prev и growth (рост суммы в %), итог сравнения — в compare. " +
+  "sortBy — amount (по умолчанию), amountExVat, quantity, discount; abc=true — класс A/B/C по накопленной доле. Отборы: " +
+  "organization, warehouses, departments, managers, partners (Ref_Key поставщиков). count — всего строк; длинный список — " +
+  "с offset=nextOffset.";
+
+function registerReport(server: McpServer, ctx: ServerContext, kind: Kind): void {
+  const name = kind === "sales" ? "read.analytics.get_sales_report" : "read.analytics.get_purchases_report";
+  const sortEnum =
+    kind === "sales"
+      ? (["revenue", "revenueExVat", "margin", "marginExVat", "quantity", "discount"] as const)
+      : (["amount", "amountExVat", "quantity", "discount"] as const);
   server.registerTool(
-    "read.analytics.get_sales_report",
+    name,
     {
-      title: "Продажи в разрезах",
+      title: kind === "sales" ? "Продажи в разрезах" : "Закупки в разрезах",
       description:
-        "Продажи за период в разрезах на выбор — один инструмент для Управления торговлей и Бухгалтерии. groupBy — до " +
-        "трёх разрезов: в УТ item (товар), itemGroup (группа товара), warehouse (склад или магазин), department " +
-        "(подразделение), manager (менеджер), partner (клиент), organization, operation (хозяйственная операция), period; " +
-        "в Бухгалтерии item, itemGroup (номенклатурная группа), department, organization, period — по счёту 90 (покупателя у " +
-        "счёта нет: разрез по контрагенту и договору — get_sales_breakdown). period — day, week, month (по умолчанию), quarter. " +
-        "У строки: quantity, revenue и revenueExVat (выручка с НДС и без), cost, costExVat, margin, marginExVat " +
-        "(себестоимость и валовая прибыль; до расчёта себестоимости за месяц — предварительные, дату называет note). " +
-        "Метрика, которую нельзя разделить по разрезу (в Бухгалтерии себестоимость и НДС без номенклатуры), не выводится — " +
-        "сказано в note. compareWith — previousPeriod (такой же период перед этим) или previousYear: у строки prev и " +
-        "growth (рост выручки в %), итог сравнения — в compare. sortBy — по чему сортировать (по умолчанию revenue); abc=true — " +
-        "класс A/B/C по накопленной доле этой метрики (80 % / 95 %). Отборы: organization, а в УТ ещё warehouses, " +
-        "departments, managers, partners (Ref_Key). count — всего строк; длинный список — с offset=nextOffset.",
+        kind === "purchases"
+          ? PURCHASES_DESCRIPTION
+          : "Продажи за период в разрезах на выбор — один инструмент для Управления торговлей и Бухгалтерии. groupBy — до " +
+            "трёх разрезов: в УТ item (товар), itemGroup (группа товара), warehouse (склад или магазин), department " +
+            "(подразделение), manager (менеджер), partner (клиент), organization, operation (хозяйственная операция), period; " +
+            "в Бухгалтерии item, itemGroup (номенклатурная группа), department, organization, period — по счёту 90 (покупателя у " +
+            "счёта нет: разрез по контрагенту и договору — get_sales_breakdown). period — day, week, month (по умолчанию), quarter. " +
+            "У строки: quantity, revenue и revenueExVat (выручка с НДС и без), cost, costExVat, margin, marginExVat " +
+            "(себестоимость и валовая прибыль; до расчёта себестоимости за месяц — предварительные, дату называет note). " +
+            "Метрика, которую нельзя разделить по разрезу (в Бухгалтерии себестоимость и НДС без номенклатуры), не выводится — " +
+            "сказано в note. compareWith — previousPeriod (такой же период перед этим) или previousYear: у строки prev и " +
+            "growth (рост выручки в %), итог сравнения — в compare. sortBy — по чему сортировать (по умолчанию revenue); abc=true — " +
+            "класс A/B/C по накопленной доле этой метрики (80 % / 95 %). Отборы: organization, а в УТ ещё warehouses, " +
+            "departments, managers, partners (Ref_Key). count — всего строк; длинный список — с offset=nextOffset.",
       inputSchema: z.object({
         database: databaseField,
         from: dateField("Начало периода (включительно)"),
@@ -190,8 +237,8 @@ export function registerSalesReportTools(server: McpServer, ctx: ServerContext):
           .optional()
           .describe("Сравнить с таким же периодом перед этим или с тем же периодом год назад"),
         sortBy: z
-          .enum(["revenue", "revenueExVat", "margin", "marginExVat", "quantity"])
-          .default("revenue")
+          .enum(sortEnum as unknown as [string, ...string[]])
+          .default(sortEnum[0])
           .describe("Сортировка по убыванию (и метрика для abc)"),
         abc: z
           .boolean()
@@ -206,17 +253,23 @@ export function registerSalesReportTools(server: McpServer, ctx: ServerContext):
         warehouses: refs("склада").describe("УТ: только эти склады"),
         departments: refs("подразделения").describe("Только эти подразделения"),
         managers: refs("пользователя").describe("УТ: только эти менеджеры (read.catalog.list_users)"),
-        partners: refs("партнёра").describe("УТ: только эти клиенты (партнёры)"),
+        partners: refs("партнёра").describe(
+          kind === "sales" ? "УТ: только эти клиенты (партнёры)" : "Только эти поставщики (партнёры)",
+        ),
         limit: z.number().int().positive().max(1000).default(100).describe("Сколько строк вернуть"),
       }),
-      outputSchema: salesReportResultSchema,
+      outputSchema: kind === "sales" ? salesReportResultSchema : purchasesReportResultSchema,
     },
     (a) =>
-      guard("read.analytics.get_sales_report", async () => {
+      guard(name, async () => {
         const t0 = Date.now();
         const conn = ctx.db(a.database);
         const dims = [...new Set(a.groupBy)] as Dim[];
-        const trade = await isTradeReport(conn);
+        const trade = kind === "sales" ? await isTradeReport(conn) : await isPurchasesReport(conn);
+        if (kind === "purchases" && !trade)
+          throw new InputError(
+            "Закупки в разрезах — по регистру «Закупки» Управления торговлей; в этой базе его нет. В Бухгалтерии закупки по документам — read.analytics.get_purchases_breakdown.",
+          );
         const allowed = trade ? TRADE_DIMS : ACCOUNTING_DIMS;
         const bad = dims.filter((d) => !allowed.includes(d));
         if (bad.length)
@@ -238,13 +291,19 @@ export function registerSalesReportTools(server: McpServer, ctx: ServerContext):
           if (trade)
             return {
               parts,
-              ...(await readTradeReport(conn, dims, parts, {
-                warehouses: a.warehouses,
-                departments: a.departments,
-                managers: a.managers,
-                partners: a.partners,
-                orgKey: org?.ref,
-              })),
+              ...(await readTradeReport(
+                conn,
+                dims,
+                parts,
+                {
+                  warehouses: a.warehouses,
+                  departments: a.departments,
+                  managers: a.managers,
+                  partners: a.partners,
+                  orgKey: org?.ref,
+                },
+                kind === "sales" ? SALES_SPEC : PURCHASES_SPEC,
+              )),
               missing: [] as string[],
             };
           return {
@@ -290,12 +349,14 @@ export function registerSalesReportTools(server: McpServer, ctx: ServerContext):
           const gone = prevRows.filter((r) => !now.has(r.key));
           if (gone.length)
             notes.push(
-              `${gone.length} строк разреза были только в прошлом периоде (выручка ${total(gone).revenueCents / 100}): в items их нет, в compare они учтены.`,
+              `${gone.length} строк разреза были только в прошлом периоде (${kind === "sales" ? "выручка" : "сумма"} ${total(gone).revenueCents / 100}): в items их нет, в compare они учтены.`,
             );
-          compare = { from: range.from, to: range.to, ...metrics(total(prevRows)) };
+          compare = { from: range.from, to: range.to, ...metrics(total(prevRows), kind) };
         }
 
-        const sortBy = a.sortBy as Metric;
+        const sortBy = (
+          a.sortBy === "amount" ? "revenue" : a.sortBy === "amountExVat" ? "revenueExVat" : a.sortBy
+        ) as Metric;
         const sorted = rows.sort(
           (x, y) => metricOf(y, sortBy) - metricOf(x, sortBy) || x.key.localeCompare(y.key),
         );
@@ -330,10 +391,10 @@ export function registerSalesReportTools(server: McpServer, ctx: ServerContext):
           const p = prevByKey?.get(r.key);
           return {
             ...out,
-            ...metrics(r),
+            ...metrics(r, kind),
             ...(prevByKey
               ? {
-                  prev: p ? metrics(p) : null,
+                  prev: p ? metrics(p, kind) : null,
                   growth: p ? growth(r.revenueCents, p.revenueCents) : null,
                 }
               : {}),
@@ -345,15 +406,20 @@ export function registerSalesReportTools(server: McpServer, ctx: ServerContext):
           notes.push(
             `В Бухгалтерии ${cur.missing.map((m) => (m === "vat" ? "НДС (90.03)" : "себестоимость (90.02)")).join(" и ")} ведётся без нужного субконто — в этом разрезе не делится и не выводится; итог по ней — при разрезе без номенклатуры.`,
           );
-        const calc = await lastCostCalculation(conn, a.to).catch(() => undefined);
+        const calc =
+          kind === "sales" ? await lastCostCalculation(conn, a.to).catch(() => undefined) : undefined;
         notes.push(
-          trade
-            ? `Регистр продаж Управления торговлей; суммы — в валюте управленческого учёта.${calc ? ` Себестоимость — по расчёту на ${calc}, продажи после него — предварительно.` : " Расчёт себестоимости не найден: себестоимость предварительная."}`
-            : "Бухгалтерия: выручка — Кт 90.01, НДС — Дт 90.03, себестоимость — Дт 90.02 (себестоимость появляется после закрытия месяца).",
+          kind === "purchases"
+            ? "Регистр «Закупки» Управления торговлей; суммы — в валюте управленческого учёта."
+            : trade
+              ? `Регистр продаж Управления торговлей; суммы — в валюте управленческого учёта.${calc ? ` Себестоимость — по расчёту на ${calc}, продажи после него — предварительно.` : " Расчёт себестоимости не найден: себестоимость предварительная."}`
+              : "Бухгалтерия: выручка — Кт 90.01, НДС — Дт 90.03, себестоимость — Дт 90.02 (себестоимость появляется после закрытия месяца).",
         );
         if (a.compareWith)
           notes.push(
-            "growth — рост выручки к прошлому периоду в процентах; null — в прошлом периоде продаж не было.",
+            kind === "sales"
+              ? "growth — рост выручки к прошлому периоду в процентах; null — в прошлом периоде продаж не было."
+              : "growth — рост суммы закупок к прошлому периоду в процентах; null — в прошлом периоде закупок не было.",
           );
 
         return ok({
@@ -364,7 +430,7 @@ export function registerSalesReportTools(server: McpServer, ctx: ServerContext):
           groupBy: dims,
           ...(granularity ? { period: granularity } : {}),
           ...(org ? { organization: org.name } : {}),
-          ...metrics(total(rows)),
+          ...metrics(total(rows), kind),
           ...(compare ? { compare } : {}),
           count: sorted.length,
           note: notes.join(" "),

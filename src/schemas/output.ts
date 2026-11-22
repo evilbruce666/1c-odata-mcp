@@ -554,6 +554,7 @@ const salesReportMetrics = {
   costExVat: z.number().optional(),
   margin: z.number().optional(),
   marginExVat: z.number().optional(),
+  discount: z.number().optional(),
 };
 
 export const salesReportResultSchema = z
@@ -577,6 +578,43 @@ export const salesReportResultSchema = z
         .object({
           ...salesReportMetrics,
           prev: z.object(salesReportMetrics).passthrough().nullable().optional(),
+          growth: z.number().nullable().optional(),
+          abcClass: z.enum(["A", "B", "C"]).optional(),
+        })
+        .passthrough(),
+    ),
+    scan: scanSchema,
+  })
+  .passthrough();
+
+const purchasesReportMetrics = {
+  quantity: z.number(),
+  amount: z.number(),
+  amountExVat: z.number().optional(),
+  discount: z.number().optional(),
+};
+
+export const purchasesReportResultSchema = z
+  .object({
+    database: z.string(),
+    configuration: z.literal("trade"),
+    from: z.string(),
+    to: z.string(),
+    groupBy: z.array(z.string()),
+    period: z.string().optional(),
+    organization: z.string().optional(),
+    ...purchasesReportMetrics,
+    compare: z
+      .object({ from: z.string(), to: z.string(), ...purchasesReportMetrics })
+      .passthrough()
+      .optional(),
+    count: z.number(),
+    note: z.string().optional(),
+    items: z.array(
+      z
+        .object({
+          ...purchasesReportMetrics,
+          prev: z.object(purchasesReportMetrics).passthrough().nullable().optional(),
           growth: z.number().nullable().optional(),
           abcClass: z.enum(["A", "B", "C"]).optional(),
         })
@@ -645,6 +683,19 @@ export const listItemsResultSchema = z
 
 export const partnerSettlementsResultSchema = z
   .object({
+    schedule: z
+      .object({
+        from: z.string(),
+        to: z.string(),
+        step: z.string(),
+        overdue: z.number(),
+        periods: z.array(
+          z.object({ period: z.string(), from: z.string(), to: z.string(), debt: z.number() }),
+        ),
+        beyondHorizon: z.number(),
+        noDueDate: z.number(),
+      })
+      .optional(),
     managerFilter: z
       .array(z.object({ ref: z.string(), name: z.string().nullable() }).passthrough())
       .optional(),
@@ -927,6 +978,19 @@ export const getStockResultSchema = z
 
 export const getInventoryResultSchema = z
   .object({
+    byItemGroup: z
+      .array(
+        z
+          .object({
+            group: z.string().nullable(),
+            groupRef: z.string().optional(),
+            positions: z.number(),
+            quantity: z.number(),
+            amount: z.number(),
+          })
+          .passthrough(),
+      )
+      .optional(),
     database: z.string(),
     organization: z.string().optional(),
     asOf: z.string().optional(),
