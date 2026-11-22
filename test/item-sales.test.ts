@@ -512,14 +512,47 @@ describe("aggregateSales", () => {
   it("строка с нулём продаж и возвратов не показывается, дробные количества без хвостов float", () => {
     const lines = aggregateSales(
       [
-        { itemRef: I(1), operation: "x", quantity: 0.1, revenueCents: 10, revenueExVatCents: 8 },
-        { itemRef: I(1), operation: "x", quantity: 0.2, revenueCents: 20, revenueExVatCents: 17 },
-        { itemRef: I(2), operation: "x", quantity: 0, revenueCents: 0, revenueExVatCents: 0 },
+        {
+          itemRef: I(1),
+          operation: "x",
+          quantity: 0.1,
+          revenueCents: 10,
+          revenueExVatCents: 8,
+          costCents: 0,
+          costExVatCents: 0,
+        },
+        {
+          itemRef: I(1),
+          operation: "x",
+          quantity: 0.2,
+          revenueCents: 20,
+          revenueExVatCents: 17,
+          costCents: 0,
+          costExVatCents: 0,
+        },
+        {
+          itemRef: I(2),
+          operation: "x",
+          quantity: 0,
+          revenueCents: 0,
+          revenueExVatCents: 0,
+          costCents: 0,
+          costExVatCents: 0,
+        },
       ],
       false,
     );
     expect(lines).toEqual([
-      { itemRef: I(1), quantity: 0.3, sold: 0.3, returns: 0, revenue: 0.3, revenueExVat: 0.25 },
+      {
+        itemRef: I(1),
+        quantity: 0.3,
+        sold: 0.3,
+        returns: 0,
+        revenue: 0.3,
+        revenueExVat: 0.25,
+        cost: 0,
+        costExVat: 0,
+      },
     ]);
   });
 });
@@ -593,6 +626,40 @@ describe("1.1: продажи по подразделениям (departments, by
     await plain.call();
     expect(plain.seen.find((x) => x.fn === "Turnovers")!.params.get("$select")).not.toContain(
       "Подразделение_Key",
+    );
+  });
+});
+
+describe("1.1: маржа — себестоимость и валовая прибыль из регистра продаж", () => {
+  // Себестоимость строки: 60 за штуку с НДС, 50 без НДС, плюс 1 доп. расходов (без НДС — тоже 1).
+  const withCost = SALES.map((r) => ({
+    ...r,
+    СтоимостьTurnover: r.КоличествоTurnover * 60,
+    СтоимостьБезНДСTurnover: r.КоличествоTurnover * 50,
+    ДопРасходыTurnover: r.КоличествоTurnover,
+    ДопРасходыБезНДСTurnover: r.КоличествоTurnover,
+  }));
+  it("итог, позиция и итоги по операциям: margin = выручка − себестоимость, с НДС и без", async () => {
+    const { call, seen } = await setup("ut11", { sales: withCost as typeof SALES });
+    const r = await call();
+    expect(r.isError, r.text).toBeFalsy();
+    const s = r.structuredContent as Sales &
+      Record<string, number> & {
+        items: Array<SalesItem & Record<string, number>>;
+        byOperation: Array<Record<string, number>>;
+      };
+    // Нетто 16 штук: себестоимость 16 × 61 = 976, без НДС 16 × 51 = 816.
+    expect([s["cost"], s["costExVat"]]).toEqual([976, 816]);
+    expect(s["margin"]).toBeCloseTo(s["revenue"]! - 976, 2);
+    expect(s["marginExVat"]).toBeCloseTo(s["revenueExVat"]! - 816, 2);
+    const i1 = s.items.find((i) => i.ref === I(1))!;
+    expect([i1["cost"], i1["costExVat"]]).toEqual([8 * 61, 8 * 51]);
+    expect(i1["margin"]).toBeCloseTo(i1["revenue"]! - 8 * 61, 2);
+    expect(s.byOperation.reduce((t, o) => t + o["margin"]!, 0)).toBeCloseTo(s["margin"]!, 2);
+    expect(String(s["note"])).toContain("cost и margin");
+    // Ресурсы себестоимости — тем же запросом, без лишнего измерения.
+    expect(seen.find((q) => q.fn === "Turnovers")!.params.get("$select")).toContain(
+      "СтоимостьБезНДСTurnover",
     );
   });
 });

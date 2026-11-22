@@ -56,6 +56,12 @@ const SELECT = [
   "КоличествоTurnover",
   "СуммаВыручкиTurnover",
   "СуммаВыручкиБезНДСTurnover",
+  // Себестоимость (1.1): ресурсы регистра — строк не прибавляют. В той же валюте, что и выручка (управленческой):
+  // с НДС — «Стоимость», без НДС — «СтоимостьБезНДС»; плюс дополнительные расходы.
+  "СтоимостьTurnover",
+  "СтоимостьБезНДСTurnover",
+  "ДопРасходыTurnover",
+  "ДопРасходыБезНДСTurnover",
 ];
 
 /** Строки оборотов; при складах — пачками, отбор на стороне 1С. Пачки не пересекаются, строки не задваиваются. */
@@ -153,6 +159,9 @@ export interface SalesRow {
    */
   revenueCents: number;
   revenueExVatCents: number;
+  /** Себестоимость с НДС и без НДС в копейках (стоимость и доп. расходы), нетто: возвраты уменьшают. */
+  costCents: number;
+  costExVatCents: number;
 }
 
 /** Склад строки — только если это склад из справочника складов; «Неопределено» и прочие типы — без склада. */
@@ -180,6 +189,10 @@ export function toSalesRows(rows: readonly ODataEntity[], warehouseSets: readonl
       quantity: num(r["КоличествоTurnover"]),
       revenueCents: Math.round(num(r["СуммаВыручкиTurnover"]) * 100),
       revenueExVatCents: Math.round(num(r["СуммаВыручкиБезНДСTurnover"]) * 100),
+      costCents: Math.round((num(r["СтоимостьTurnover"]) + num(r["ДопРасходыTurnover"])) * 100),
+      costExVatCents: Math.round(
+        (num(r["СтоимостьБезНДСTurnover"]) + num(r["ДопРасходыБезНДСTurnover"])) * 100,
+      ),
     };
   });
 }
@@ -195,6 +208,8 @@ export interface SalesLine {
   /** Выручка с НДС и без НДС, нетто (возвраты и сторно уменьшают). */
   revenue: number;
   revenueExVat: number;
+  cost: number;
+  costExVat: number;
 }
 
 /** Свёртка по номенклатуре, характеристике и, при byWarehouse, складу. Нулевое нетто без движений не показывается. */
@@ -212,12 +227,16 @@ export function aggregateSales(rows: readonly SalesRow[], byWarehouse: boolean):
       returns: 0,
       revenue: 0,
       revenueExVat: 0,
+      cost: 0,
+      costExVat: 0,
     };
     if (r.quantity >= 0) line.sold += r.quantity;
     else line.returns -= r.quantity;
     // Копейки — целые: float-сумма тысяч строк дала бы дрейф.
     line.revenue += r.revenueCents;
     line.revenueExVat += r.revenueExVatCents;
+    line.cost += r.costCents;
+    line.costExVat += r.costExVatCents;
     lines.set(key, line);
   }
   return [...lines.values()]
@@ -228,6 +247,8 @@ export function aggregateSales(rows: readonly SalesRow[], byWarehouse: boolean):
       quantity: qty(l.sold - l.returns),
       revenue: l.revenue / 100,
       revenueExVat: l.revenueExVat / 100,
+      cost: l.cost / 100,
+      costExVat: l.costExVat / 100,
     }))
     .filter((l) => l.sold !== 0 || l.returns !== 0 || l.revenue !== 0);
 }
@@ -379,3 +400,18 @@ const INN_BATCH = 10;
 /** Строка продаж своей организации: покупатель — контрагент из ownBuyers или сама организация. */
 export const isOwnBuyer = (row: SalesRow, own: OwnBuyers, orgSet: string | undefined): boolean =>
   !!row.buyerRef && (own.refs.has(row.buyerRef.toLowerCase()) || (!!orgSet && row.buyerSet === orgSet));
+
+/** Маржа по копейкам: себестоимость и валовая прибыль с НДС и без (выручка минус себестоимость), рубли. */
+export function marginOf(c: {
+  revenueCents: number;
+  revenueExVatCents: number;
+  costCents: number;
+  costExVatCents: number;
+}): { cost: number; costExVat: number; margin: number; marginExVat: number } {
+  return {
+    cost: c.costCents / 100,
+    costExVat: c.costExVatCents / 100,
+    margin: (c.revenueCents - c.costCents) / 100,
+    marginExVat: (c.revenueExVatCents - c.costExVatCents) / 100,
+  };
+}

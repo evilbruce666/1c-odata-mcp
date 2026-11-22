@@ -672,6 +672,10 @@ export const getItemSalesResultSchema = z
     from: z.string(),
     to: z.string(),
     groupBy: z.string().optional(),
+    cost: z.number().optional(),
+    costExVat: z.number().optional(),
+    margin: z.number().optional(),
+    marginExVat: z.number().optional(),
     departmentFilter: z
       .array(z.object({ ref: z.string(), name: z.string().nullable() }).passthrough())
       .optional(),

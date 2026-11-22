@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { USERS } from "../odata/users.js";
+import { lastCostCalculation } from "../odata/trade-cost.js";
 /** Подразделение строки продаж: в УТ — структура предприятия. */
 const DEPARTMENT_SETS = ["Catalog_СтруктураПредприятия", "Catalog_ПодразделенияОрганизаций"] as const;
 import { z } from "zod";
@@ -26,6 +27,7 @@ import {
   toSalesRows,
   type SalesLine,
   type SalesRow,
+  marginOf,
 } from "../odata/item-sales.js";
 import {
   CHARACTERISTICS,
@@ -64,7 +66,7 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
         "один вызов (итоги каждой в byGroup, у позиции matchedGroupRef), query — часть названия или " +
         "артикул. managers — только продажи этих менеджеров (Ref_Key пользователей 1С, read.catalog.list_users); byManager=true — итоги по менеджерам в byManager; departments и byDepartment — то же по подразделениям. groupBy=warehouse — по складам. excludeOwnOrganizations=true — без продаж своим организациям: в УТ это " +
         "обычная продажа клиенту, и покупатель узнаётся по ИНН, совпавшему с ИНН организации базы; исключённые штуки и " +
-        "выручка и все контрагенты, признанные своими по ИНН, — в excludedOwnOrganizations (организация без ИНН так не узнаётся, их число там же). revenue и revenueExVat — выручка с НДС и без НДС, нетто (возвраты и сторно " +
+        "выручка и все контрагенты, признанные своими по ИНН, — в excludedOwnOrganizations (организация без ИНН так не узнаётся, их число там же). cost и margin — себестоимость и валовая прибыль (выручка минус себестоимость), marginExVat — без НДС; у позиции и во всех итогах; до расчёта себестоимости за месяц — предварительная, дату расчёта называет note. revenue и revenueExVat — выручка с НДС и без НДС, нетто (возвраты и сторно " +
         "вычитаются), в валюте управленческого учёта базы (обычно рубли): розница с комиссионным товаром сверена с отчётами " +
         "о розничных продажах до рубля. count — всего позиций; длинный список " +
         "читайте с offset=nextOffset, пока он есть: следующие страницы в течение минуты берут строки первой, регистр " +
@@ -288,6 +290,12 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
             returns: l.returns,
             revenue: l.revenue,
             revenueExVat: l.revenueExVat,
+            ...marginOf({
+              revenueCents: Math.round(l.revenue * 100),
+              revenueExVatCents: Math.round(l.revenueExVat * 100),
+              costCents: Math.round(l.cost * 100),
+              costExVatCents: Math.round(l.costExVat * 100),
+            }),
           };
         });
 
@@ -308,6 +316,12 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
                   // В копейках: строки уже округлены до копейки, сумма float накопила бы хвост.
                   revenue: add((l) => Math.round(l.revenue * 100)) / 100,
                   revenueExVat: add((l) => Math.round(l.revenueExVat * 100)) / 100,
+                  ...marginOf({
+                    revenueCents: add((l) => Math.round(l.revenue * 100)),
+                    revenueExVatCents: add((l) => Math.round(l.revenueExVat * 100)),
+                    costCents: add((l) => Math.round(l.cost * 100)),
+                    costExVatCents: add((l) => Math.round(l.costExVat * 100)),
+                  }),
                 };
               })
             : undefined;
@@ -318,6 +332,15 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
           { group, groups: groupList, query },
           "продаж за период",
         );
+        // Себестоимость точна по расчёт себестоимости: продажи после него оценены предварительно (как остатки в УТ).
+        const calc = first ? await lastCostCalculation(conn, to) : undefined;
+        if (first)
+          notes.push(
+            "cost и margin — себестоимость и валовая прибыль по регистру продаж (стоимость и доп. расходы, в той же валюте, что выручка; marginExVat — без НДС). " +
+              (calc
+                ? `Последний расчёт себестоимости — ${calc}; продажи после него оценены предварительно.`
+                : "Расчёт себестоимости не найден: себестоимость предварительная."),
+          );
         if (!charSet && page.some((l) => l.characteristicRef)) {
           notes.push(
             "Справочник характеристик не опубликован в OData: у строк с характеристикой только characteristicRef.",
@@ -351,7 +374,15 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
 
         const byOperation = new Map<
           string,
-          { quantity: number; sold: number; returns: number; revenueCents: number; revenueExVatCents: number }
+          {
+            quantity: number;
+            sold: number;
+            returns: number;
+            revenueCents: number;
+            revenueExVatCents: number;
+            costCents: number;
+            costExVatCents: number;
+          }
         >();
         for (const r of kept) {
           const t = byOperation.get(r.operation) ?? {
@@ -360,10 +391,14 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
             returns: 0,
             revenueCents: 0,
             revenueExVatCents: 0,
+            costCents: 0,
+            costExVatCents: 0,
           };
           t.quantity += r.quantity;
           t.revenueCents += r.revenueCents;
           t.revenueExVatCents += r.revenueExVatCents;
+          t.costCents += r.costCents;
+          t.costExVatCents += r.costExVatCents;
           if (r.quantity >= 0) t.sold += r.quantity;
           else t.returns -= r.quantity;
           byOperation.set(r.operation, t);
@@ -387,7 +422,13 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
         // Итоги по менеджерам (пользователи 1С): на первой странице, по всем строкам отбора.
         const managerTotals = new Map<
           string,
-          { quantity: number; revenueCents: number; revenueExVatCents: number }
+          {
+            quantity: number;
+            revenueCents: number;
+            revenueExVatCents: number;
+            costCents: number;
+            costExVatCents: number;
+          }
         >();
         if (byManager && first)
           for (const r of kept) {
@@ -395,15 +436,25 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
               quantity: 0,
               revenueCents: 0,
               revenueExVatCents: 0,
+              costCents: 0,
+              costExVatCents: 0,
             };
             t.quantity += r.quantity;
             t.revenueCents += r.revenueCents;
             t.revenueExVatCents += r.revenueExVatCents;
+            t.costCents += r.costCents;
+            t.costExVatCents += r.costExVatCents;
             managerTotals.set(r.managerRef ?? "", t);
           }
         const departmentTotals = new Map<
           string,
-          { quantity: number; revenueCents: number; revenueExVatCents: number }
+          {
+            quantity: number;
+            revenueCents: number;
+            revenueExVatCents: number;
+            costCents: number;
+            costExVatCents: number;
+          }
         >();
         if (byDepartment && first)
           for (const r of kept) {
@@ -411,10 +462,14 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
               quantity: 0,
               revenueCents: 0,
               revenueExVatCents: 0,
+              costCents: 0,
+              costExVatCents: 0,
             };
             t.quantity += r.quantity;
             t.revenueCents += r.revenueCents;
             t.revenueExVatCents += r.revenueExVatCents;
+            t.costCents += r.costCents;
+            t.costExVatCents += r.costExVatCents;
             departmentTotals.set(r.departmentRef ?? "", t);
           }
         const depSet = resolveEntity(DEPARTMENT_SETS, await conn.available());
@@ -465,6 +520,7 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
                     quantity: qty(t.quantity),
                     revenue: t.revenueCents / 100,
                     revenueExVat: t.revenueExVatCents / 100,
+                    ...marginOf(t),
                   }))
                   .sort(
                     (a, b) =>
@@ -481,6 +537,7 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
                     quantity: qty(t.quantity),
                     revenue: t.revenueCents / 100,
                     revenueExVat: t.revenueExVatCents / 100,
+                    ...marginOf(t),
                   }))
                   .sort(
                     (a, b) =>
@@ -533,6 +590,12 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
           returns: total(kept, (q) => Math.max(-q, 0)),
           revenue: kept.reduce((t, r) => t + r.revenueCents, 0) / 100,
           revenueExVat: kept.reduce((t, r) => t + r.revenueExVatCents, 0) / 100,
+          ...marginOf({
+            revenueCents: kept.reduce((t, r) => t + r.revenueCents, 0),
+            revenueExVatCents: kept.reduce((t, r) => t + r.revenueExVatCents, 0),
+            costCents: kept.reduce((t, r) => t + r.costCents, 0),
+            costExVatCents: kept.reduce((t, r) => t + r.costExVatCents, 0),
+          }),
           // Всего, а не на странице: сколько в этом ответе — длина списка и returned (его добавляет обёртка страниц).
           count: withItem.length,
           ...changes.fields,
@@ -546,6 +609,7 @@ export function registerItemSalesTools(server: McpServer, ctx: ServerContext): v
                     returns: qty(t.returns),
                     revenue: t.revenueCents / 100,
                     revenueExVat: t.revenueExVatCents / 100,
+                    ...marginOf(t),
                   }))
                   .sort((a, b) => b.quantity - a.quantity || a.operation.localeCompare(b.operation)),
               }

@@ -95,7 +95,10 @@ export async function readTradeCost(
 }
 
 /** Дата последнего проведённого расчёта себестоимости не позже даты остатков — для заметки о точности сумм. */
-async function lastCostCalculation(conn: Connection, asOf: string | undefined): Promise<string | undefined> {
+export async function lastCostCalculation(
+  conn: Connection,
+  asOf: string | undefined,
+): Promise<string | undefined> {
   if (!(await conn.available()).has(COST_CALC)) return undefined;
   // Без asOf — не позже сегодняшнего дня: документ расчёта датируется концом месяца и может стоять впереди.
   const day = asOf ?? new Date().toISOString().slice(0, 10);
