@@ -16,6 +16,7 @@ export type ODataErrorKind =
   | "busy" // не дождались места под запрос (ODATA_MAX_CONCURRENT_REQUESTS) — запрос не отправлялся
   | "cancelled" // клиент отменил вызов инструмента — повторять нельзя, ответ уже никому не нужен
   | "deadline" // вызов не уложился в ODATA_TOOL_DEADLINE_MS — повторять внутри вызова незачем
+  | "in_progress" // запрос записи по этой операции ещё идёт в процессе коннектора — подождать и повторить подтверждение
   | "unknown";
 
 export class ODataError extends Error {
@@ -53,6 +54,7 @@ const RETRYABLE_DEFAULT: Record<ODataErrorKind, boolean> = {
   busy: false,
   cancelled: false,
   deadline: false,
+  in_progress: false,
   unknown: false,
 };
 

@@ -14,8 +14,8 @@ API, меняется несовместимо только в новой маж
 - **Поля ответов** (`structuredContent` по `outputSchema`): существующие поля не удаляются и не меняют тип; новые
   поля могут появляться — клиент должен их пропускать.
 - **Виды ошибок** в `_meta["odata-1c/errorKind"]`: `auth`, `not_found`, `not_published`, `bad_request`, `input`,
-  `refused`, `rate_limit`, `server`, `timeout`, `network`, `parse`, `busy`, `cancelled`, `deadline`, `overflow`,
-  `unknown`, `internal`. Новый вид может появиться; смысл существующих не меняется.
+  `refused`, `rate_limit`, `server`, `timeout`, `network`, `parse`, `busy`, `cancelled`, `deadline`, `in_progress`,
+  `overflow`, `unknown`, `internal`. Новый вид может появиться; смысл существующих не меняется.
 - **Гарантии записи:** предпросмотр перед записью, `operationId` и повтор подтверждения без дубля,
   `write.operation.status` для операций с неизвестным исходом, документы создаются непроведёнными.
 - **Переменные окружения** из [.env.example](../.env.example): имя, смысл и значение по умолчанию. Значение по

@@ -1764,6 +1764,34 @@ async function updatedInnCheck(
  * Создание объекта без подстановок конфигурации: метка операции, предпросмотр или POST, ответ. Сборщики, которым
  * договор и счета расчётов Бухгалтерии не нужны (Управление торговлей), вызывают её напрямую.
  */
+/** Ответ на повтор подтверждения создания: из журнала, найдено по ссылке после неизвестного исхода, повторный POST. */
+function replayNote(created: ODataEntity): Record<string, unknown> {
+  if (created["_operation_replayed"] === true)
+    return {
+      replayed: true,
+      note: "Эта запись уже была создана с данным operationId; повторный POST не выполнялся.",
+    };
+  if (created["_operation_reconciled"] === true)
+    return {
+      replayed: true,
+      reconciled: true,
+      note: "Исход прошлой попытки был неизвестен; объект с назначенной ссылкой найден в 1С — запись дошла. Второго объекта нет.",
+      ...(created["DeletionMark"] === true
+        ? {
+            deletionMark: true,
+            warning:
+              "Объект в 1С помечен на удаление — его пометили после создания. Новую запись не делайте, пока не решите, нужен ли он.",
+          }
+        : {}),
+    };
+  if (created["_operation_retried"] === true)
+    return {
+      retried: true,
+      note: "Исход прошлой попытки был неизвестен, объекта в 1С не было: запись отправлена повторно с той же ссылкой и создана.",
+    };
+  return {};
+}
+
 export async function createCore(
   conn: Connection,
   entitySet: string,
@@ -1792,12 +1820,14 @@ export async function createCore(
   payload = await withOperationMarker(conn, entitySet, payload);
   const extra = allNotes.length ? { notes: allNotes } : {};
   if (!confirm) {
-    await conn.client.prepareCreate(entitySet, payload);
+    // Назначенная ссылка будущего объекта (1.1): интеграция сохраняет её до подтверждения и может сама найти объект.
+    const ref = await conn.client.prepareCreate(entitySet, payload);
     return ok({
       dryRun: true,
       database: conn.cfg.name,
       writableBase: conn.cfg.writable,
       willCreate: entitySet,
+      ...(ref ? { ref } : {}),
       ...(await tryPreviewView(conn, entitySet, payload)),
       payload,
       ...extra,
@@ -1817,12 +1847,7 @@ export async function createCore(
   const createdExtra = allNotes.length ? { notes: allNotes } : {};
   return ok({
     created: true,
-    ...(created["_operation_replayed"] === true
-      ? {
-          replayed: true,
-          note: "Эта запись уже была создана с данным operationId; повторный POST не выполнялся.",
-        }
-      : {}),
+    ...replayNote(created),
     database: conn.cfg.name,
     entitySet,
     ref: created["Ref_Key"],
@@ -2082,12 +2107,7 @@ async function createSubordinate(
   }
   return ok({
     created: true,
-    ...(created["_operation_replayed"] === true
-      ? {
-          replayed: true,
-          note: "Эта запись уже была создана с данным operationId; повторный POST не выполнялся.",
-        }
-      : {}),
+    ...replayNote(created),
     database: conn.cfg.name,
     entitySet: set,
     ref,
@@ -2301,6 +2321,27 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
               note: "Объект с назначенной ссылкой есть в 1С; операция зафиксирована как успешная. Повторное подтверждение вернёт эту ссылку.",
             });
           }
+          // 1.1: повтор подтверждения безопасен — второй объект с этой ссылкой 1С не создаст; закрывать операцию
+          // вручную не нужно. Пока этот процесс ждёт ответа на запрос — «ещё идёт».
+          if (conn.client.isOperationLive(operationId))
+            return ok({
+              ...common,
+              status: "not_found",
+              inProgress: true,
+              retrySafe: false,
+              note: "Объекта с назначенной ссылкой в 1С пока нет, а запрос записи ещё выполняется. Подождите и спросите снова.",
+            });
+          if (!markNotApplied)
+            return ok({
+              ...common,
+              status: "not_found",
+              retrySafe: true,
+              ref: entry.refKey,
+              note:
+                "Объекта с назначенной ссылкой в 1С нет, запроса записи в этом процессе нет. Повторите подтверждение с тем же " +
+                "operationId и теми же аргументами: повтор сначала проверит ссылку, второго объекта 1С не создаст. " +
+                "Закрыть операцию вручную (markNotApplied=true) можно, но не нужно.",
+            });
           return absent("Объекта с назначенной ссылкой в 1С нет.");
         }
         // executing | outcome_unknown, старые операции без Ref_Key — сверяем с 1С по метке

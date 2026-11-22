@@ -4935,6 +4935,18 @@
           "replayed": {
             "type": "boolean"
           },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
+          },
           "entitySet": {
             "type": "string"
           },
@@ -8091,6 +8103,12 @@
           },
           "lastError": {
             "type": "string"
+          },
+          "retrySafe": {
+            "type": "boolean"
+          },
+          "inProgress": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -8214,6 +8232,18 @@
           "replayed": {
             "type": "boolean"
           },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
+          },
           "entitySet": {
             "type": "string"
           },
@@ -8333,6 +8363,18 @@
           },
           "replayed": {
             "type": "boolean"
+          },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
           },
           "entitySet": {
             "type": "string"
@@ -8538,6 +8580,18 @@
           "replayed": {
             "type": "boolean"
           },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
+          },
           "entitySet": {
             "type": "string"
           },
@@ -8687,6 +8741,18 @@
           "replayed": {
             "type": "boolean"
           },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
+          },
           "entitySet": {
             "type": "string"
           },
@@ -8827,6 +8893,18 @@
           },
           "replayed": {
             "type": "boolean"
+          },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
           },
           "entitySet": {
             "type": "string"
@@ -9020,6 +9098,18 @@
           },
           "replayed": {
             "type": "boolean"
+          },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
           },
           "entitySet": {
             "type": "string"
@@ -9735,6 +9825,18 @@
           "replayed": {
             "type": "boolean"
           },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
+          },
           "entitySet": {
             "type": "string"
           },
@@ -9919,6 +10021,18 @@
           },
           "replayed": {
             "type": "boolean"
+          },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
           },
           "entitySet": {
             "type": "string"
@@ -10114,6 +10228,18 @@
           },
           "replayed": {
             "type": "boolean"
+          },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
           },
           "entitySet": {
             "type": "string"
@@ -10331,6 +10457,18 @@
           },
           "replayed": {
             "type": "boolean"
+          },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
           },
           "entitySet": {
             "type": "string"
@@ -10696,6 +10834,18 @@
           "replayed": {
             "type": "boolean"
           },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
+          },
           "entitySet": {
             "type": "string"
           },
@@ -10896,6 +11046,18 @@
           },
           "replayed": {
             "type": "boolean"
+          },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
           },
           "entitySet": {
             "type": "string"
@@ -11110,6 +11272,18 @@
           "replayed": {
             "type": "boolean"
           },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
+          },
           "entitySet": {
             "type": "string"
           },
@@ -11307,6 +11481,18 @@
           "replayed": {
             "type": "boolean"
           },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
+          },
           "entitySet": {
             "type": "string"
           },
@@ -11465,6 +11651,18 @@
           },
           "replayed": {
             "type": "boolean"
+          },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
           },
           "entitySet": {
             "type": "string"
@@ -11627,6 +11825,18 @@
           "replayed": {
             "type": "boolean"
           },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
+          },
           "entitySet": {
             "type": "string"
           },
@@ -11784,6 +11994,18 @@
           "replayed": {
             "type": "boolean"
           },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
+          },
           "entitySet": {
             "type": "string"
           },
@@ -11930,6 +12152,18 @@
           },
           "replayed": {
             "type": "boolean"
+          },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
           },
           "entitySet": {
             "type": "string"
@@ -12245,6 +12479,18 @@
           },
           "replayed": {
             "type": "boolean"
+          },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
           },
           "entitySet": {
             "type": "string"
@@ -12569,6 +12815,18 @@
           "replayed": {
             "type": "boolean"
           },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
+          },
           "entitySet": {
             "type": "string"
           },
@@ -12758,6 +13016,18 @@
           },
           "replayed": {
             "type": "boolean"
+          },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
           },
           "entitySet": {
             "type": "string"
@@ -13019,6 +13289,18 @@
           "replayed": {
             "type": "boolean"
           },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
+          },
           "entitySet": {
             "type": "string"
           },
@@ -13253,6 +13535,18 @@
           },
           "replayed": {
             "type": "boolean"
+          },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
           },
           "entitySet": {
             "type": "string"
@@ -13512,6 +13806,18 @@
           "replayed": {
             "type": "boolean"
           },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
+          },
           "entitySet": {
             "type": "string"
           },
@@ -13736,6 +14042,18 @@
           },
           "replayed": {
             "type": "boolean"
+          },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
           },
           "entitySet": {
             "type": "string"
@@ -13962,6 +14280,18 @@
           "replayed": {
             "type": "boolean"
           },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
+          },
           "entitySet": {
             "type": "string"
           },
@@ -14077,6 +14407,18 @@
           },
           "replayed": {
             "type": "boolean"
+          },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
           },
           "entitySet": {
             "type": "string"
@@ -14197,6 +14539,18 @@
           },
           "replayed": {
             "type": "boolean"
+          },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
           },
           "entitySet": {
             "type": "string"
@@ -14319,6 +14673,18 @@
           "replayed": {
             "type": "boolean"
           },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
+          },
           "entitySet": {
             "type": "string"
           },
@@ -14438,6 +14804,18 @@
           "replayed": {
             "type": "boolean"
           },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
+          },
           "entitySet": {
             "type": "string"
           },
@@ -14543,6 +14921,18 @@
           },
           "replayed": {
             "type": "boolean"
+          },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "retried": {
+            "type": "boolean"
+          },
+          "deletionMark": {
+            "type": "boolean"
+          },
+          "warning": {
+            "type": "string"
           },
           "entitySet": {
             "type": "string"

@@ -11,7 +11,15 @@ import { fake1C, type FakeQuery, type FakeSchema } from "./helpers/fake-1c.js";
  * помнит созданное: объект находится по ссылке и отбором по ИНН. Сбои — на каждый POST: ответ потерян после записи,
  * запрос не дошёл, отказ 1С; перезапуск — новый сервер на том же журнале. Критерий: ни второго объекта, ни ложного успеха.
  */
-type Fail = "lost" | "lostNoWrite" | "reject" | undefined;
+type Fail =
+  | "lost" // 1С записала, ответ потерян (обрыв)
+  | "lostNoWrite" // запрос не дошёл
+  | "reject" // 1С отказала (400)
+  | "write500" // 1С записала и ответила 500
+  | "nowrite500" // 500 до записи
+  | "hang" // 1С записала и молчит до таймаута клиента (ODATA_TIMEOUT_MS)
+  | "held" // ждёт w.release(): «живой» запрос, 1С пишет после разблокировки
+  | undefined;
 interface W {
   method: string;
   set: string;
@@ -22,7 +30,9 @@ const PS = "Catalog_Партнеры";
 const CS = "Catalog_Контрагенты";
 
 /** Мир 1С с состоянием: созданное видно GET по ссылке и отбором по ИНН (как в настоящей базе). */
-function world(o: { schema?: FakeSchema; ka?: boolean; noPartners?: boolean } = {}) {
+function world(
+  o: { schema?: FakeSchema; ka?: boolean; noPartners?: boolean; env?: Record<string, string> } = {},
+) {
   const dir = mkdtempSync(join(tmpdir(), "1c-odata-retry-"));
   const writes: W[] = [];
   const store: Record<string, Map<string, Record<string, unknown>>> = { [PS]: new Map(), [CS]: new Map() };
@@ -30,7 +40,7 @@ function world(o: { schema?: FakeSchema; ka?: boolean; noPartners?: boolean } = 
   let fake = make();
   function make() {
     const f = fake1C(
-      { READ_ONLY: "false", ODATA_WRITABLE: "true", ODATA_WRITE_JOURNAL_DIR: dir },
+      { READ_ONLY: "false", ODATA_WRITABLE: "true", ODATA_WRITE_JOURNAL_DIR: dir, ...o.env },
       {
         schema: o.schema ?? "ut11",
         data: (q: FakeQuery) => {
@@ -61,6 +71,9 @@ function world(o: { schema?: FakeSchema; ka?: boolean; noPartners?: boolean } = 
     return f;
   }
   const inner = globalThis.fetch;
+  const hide = new Map<string, number>();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
   const json = (b: unknown, status = 200) =>
     new Response(JSON.stringify(b), { status, headers: { "content-type": "application/json" } });
   vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
@@ -79,16 +92,31 @@ function world(o: { schema?: FakeSchema; ka?: boolean; noPartners?: boolean } = 
           400,
         );
       if (f === "lostNoWrite") throw new TypeError("fetch failed");
+      const err500 = (value: string) =>
+        json({ "odata.error": { code: "-1", message: { lang: "ru", value } } }, 500);
+      if (f === "nowrite500") return err500("Synthetic server error");
+      if (f === "held") await gate;
       const ref = String(body["Ref_Key"]);
-      if (store[set]!.has(ref))
-        return json({ "odata.error": { code: "-1", message: { lang: "ru", value: "Duplicate key" } } }, 500);
+      // Как уникальный индекс 1С: вторая запись с той же ссылкой — отказ, объект прежний.
+      if (store[set]!.has(ref)) return err500("Нарушено условие уникальности данных");
       const row = { ...body, DeletionMark: false, ГоловнойКонтрагент_Key: ref, Code: "0001" };
       store[set]!.set(ref, row);
       if (f === "lost") throw new TypeError("fetch failed");
+      if (f === "write500") return err500("Synthetic server error");
+      if (f === "hang")
+        await new Promise<never>((_, reject) =>
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), {
+            once: true,
+          }),
+        );
       return json(row, 201);
     }
     const m = /standard\.odata\/(Catalog_[^?(]+)\(guid'([0-9a-f-]{36})'\)/i.exec(url);
     if (method === "GET" && m && store[m[1]!]) {
+      // Чтение «не видит» объект один раз: первый запрос дописался между чтением повтора и его POST.
+      const hidden = hide.get(m[2]!) ?? 0;
+      if (hidden > 0 && hide.set(m[2]!, hidden - 1))
+        return json({ "odata.error": { code: "-1", message: { lang: "ru", value: "not found" } } }, 404);
       const row = store[m[1]!]!.get(m[2]!);
       return row
         ? json(row)
@@ -133,6 +161,9 @@ function world(o: { schema?: FakeSchema; ka?: boolean; noPartners?: boolean } = 
     fails,
     age,
     restart,
+    release,
+    dir,
+    hide,
     get fake() {
       return fake;
     },
@@ -149,19 +180,21 @@ afterEach(() => {
 });
 
 describe("create_partner: сбои и повторы", () => {
-  it("ответ потерян, 1С записала: повтор удержан, после перезапуска status сверяет, повтор — replayed; партнёр один", async () => {
+  // 1.1: повтор подтверждения после неизвестного исхода не блокируется — сначала чтение по назначенной ссылке.
+  it("ответ потерян, 1С записала: повтор находит объект по ссылке без второго POST; после перезапуска — из журнала; партнёр один", async () => {
     const w = world();
     w.fails[PS] = ["lost"];
     const p = await w.call(PT, pArgs);
     const op = p.sc.operationId as string;
     const c1 = await w.call(PT, { ...pArgs, confirm: true, operationId: op });
     const c2 = await w.call(PT, { ...pArgs, confirm: true, operationId: op });
-    expect(c2.isError).toBe(true); // повтор удержан журналом: исход неизвестен
+    expect(c2.isError, c2.text.slice(0, 300)).toBe(false);
+    expect(c2.sc).toMatchObject({ replayed: true, reconciled: true, ref: p.sc.ref });
     w.restart();
     const st = await w.call(ST, { operationId: op });
     const c3 = await w.call(PT, { ...pArgs, confirm: true, operationId: op });
     expect(c1.isError).toBe(true);
-    expect(st.sc.status).toBe("found_reconciled");
+    expect(st.sc.status).toBe("succeeded");
     expect(c3.sc).toMatchObject({ replayed: true, ref: st.sc.ref });
     expect(w.writes.filter((x) => x.set === PS)).toHaveLength(1);
     expect(w.store[PS]!.size).toBe(1);
@@ -256,10 +289,13 @@ describe("create_counterparty в УТ: сбои и повторы", () => {
     const p = await w.call(CP, args);
     const op = p.sc.operationId as string;
     const c1 = await w.call(CP, { ...args, confirm: true, operationId: op });
+    // 1.1: повтор находит созданного по ссылке раньше, чем инструмент проверит дубль ИНН (иначе — ложный отказ).
     const c2 = await w.call(CP, { ...args, confirm: true, operationId: op });
     const st = await w.call(ST, { operationId: op });
-    expect(c1.isError && c2.isError).toBe(true);
-    expect(st.sc.status).toBe("found_reconciled");
+    expect(c1.isError).toBe(true);
+    expect(c2.isError, c2.text.slice(0, 300)).toBe(false);
+    expect(c2.sc).toMatchObject({ reconciled: true });
+    expect(st.sc.status).toBe("succeeded");
     const c3 = await w.call(CP, { ...args, confirm: true, operationId: op });
     const body = { ...w.writes[0]!.body! };
     delete body["Ref_Key"];
@@ -330,5 +366,191 @@ describe("create_counterparty в УТ: сбои и повторы", () => {
     const r = await w.call(CP, { name: "ZZ", inn: "7700000007", relations: ["client"] });
     expect(r.isError, r.text.slice(0, 300)).toBe(false);
     expect(r.sc.payload).not.toHaveProperty("Партнер_Key");
+  });
+});
+
+// ─── 1.1: безопасный повтор создания с назначенной ссылкой ───
+
+/** Запись журнала операции на диске (каталог журнала — подкаталог базы). */
+function journalFile(dir: string, op: string): string {
+  for (const sub of readdirSync(dir)) {
+    const f = join(dir, sub, `${op}.json`);
+    try {
+      readFileSync(f);
+      return f;
+    } catch {
+      /* */
+    }
+  }
+  throw new Error("нет записи журнала");
+}
+
+describe("1.1: повтор подтверждения создания после неизвестного исхода", () => {
+  const confirm = (w: ReturnType<typeof world>, op: string) =>
+    w.call(PT, { ...pArgs, confirm: true, operationId: op });
+
+  it("предпросмотр отдаёт назначенную ссылку — с ней и создаётся объект", async () => {
+    const w = world();
+    const p = await w.call(PT, pArgs);
+    expect(p.sc.ref).toMatch(/^[0-9a-f-]{36}$/);
+    const c = await confirm(w, p.sc.operationId as string);
+    expect(c.sc.ref).toBe(p.sc.ref);
+    expect([...w.store[PS]!.keys()]).toEqual([p.sc.ref]);
+  });
+
+  for (const fail of ["lostNoWrite", "nowrite500"] as const)
+    it(`${fail}: до 1С не дошло — повтор отправляет тот же POST с той же ссылкой и создаёт один объект`, async () => {
+      const w = world();
+      w.fails[PS] = [fail];
+      const p = await w.call(PT, pArgs);
+      const op = p.sc.operationId as string;
+      const c1 = await confirm(w, op);
+      expect(c1.isError).toBe(true);
+      expect(c1.text).toContain("Повторите подтверждение с тем же operationId");
+      const st = await w.call(ST, { operationId: op });
+      expect(st.sc).toMatchObject({ status: "not_found", retrySafe: true });
+      const c2 = await confirm(w, op);
+      expect(c2.isError, c2.text.slice(0, 300)).toBe(false);
+      expect(c2.sc).toMatchObject({ created: true, retried: true, ref: p.sc.ref });
+      const writes = w.writes.filter((x) => x.set === PS);
+      expect(writes).toHaveLength(2);
+      expect(writes[1]!.body).toEqual(writes[0]!.body);
+      expect(w.store[PS]!.size).toBe(1);
+      const c3 = await confirm(w, op);
+      expect(c3.sc).toMatchObject({ replayed: true, ref: p.sc.ref });
+      expect(w.writes.filter((x) => x.set === PS)).toHaveLength(2);
+    });
+
+  it("write500: 1С записала и ответила 500 — повтор находит объект, второго POST нет", async () => {
+    const w = world();
+    w.fails[PS] = ["write500"];
+    const p = await w.call(PT, pArgs);
+    const op = p.sc.operationId as string;
+    expect((await confirm(w, op)).isError).toBe(true);
+    const c2 = await confirm(w, op);
+    expect(c2.sc).toMatchObject({ reconciled: true, ref: p.sc.ref });
+    expect(w.writes.filter((x) => x.set === PS)).toHaveLength(1);
+    expect(w.store[PS]!.size).toBe(1);
+  });
+
+  it("таймаут при медленной 1С (записала, ответ не дождались) — повтор находит объект, второго POST нет", async () => {
+    const w = world({ env: { ODATA_TIMEOUT_MS: "100" } });
+    w.fails[PS] = ["hang"];
+    const p = await w.call(PT, pArgs);
+    const op = p.sc.operationId as string;
+    const c1 = await confirm(w, op);
+    expect(c1.isError).toBe(true);
+    expect(c1.text).toContain("неизвестен");
+    const c2 = await confirm(w, op);
+    expect(c2.sc).toMatchObject({ reconciled: true, ref: p.sc.ref });
+    expect(w.writes.filter((x) => x.set === PS)).toHaveLength(1);
+    expect(w.store[PS]!.size).toBe(1);
+  });
+
+  it("первый запрос дописался между чтением и POST повтора: отказ по уникальности, повторное чтение — успех, объект один", async () => {
+    const w = world();
+    w.fails[PS] = ["lost"];
+    const p = await w.call(PT, pArgs);
+    const op = p.sc.operationId as string;
+    await confirm(w, op);
+    // Повтор читает по ссылке дважды (до сборки записи и перед POST) — оба раза «не видит».
+    w.hide.set(String(p.sc.ref), 2);
+    const c2 = await confirm(w, op);
+    expect(c2.isError, c2.text.slice(0, 300)).toBe(false);
+    expect(c2.sc).toMatchObject({ reconciled: true, ref: p.sc.ref });
+    expect(w.writes.filter((x) => x.set === PS)).toHaveLength(2);
+    expect(w.store[PS]!.size).toBe(1);
+  });
+
+  it("повтор снова не дошёл — исход по-прежнему неизвестен, повтор безопасен; третий создаёт один объект", async () => {
+    const w = world();
+    w.fails[PS] = ["lostNoWrite", "lostNoWrite"];
+    const p = await w.call(PT, pArgs);
+    const op = p.sc.operationId as string;
+    await confirm(w, op);
+    const c2 = await confirm(w, op);
+    expect(c2.isError).toBe(true);
+    expect(c2.text).toContain("Повторите подтверждение с тем же operationId");
+    const c3 = await confirm(w, op);
+    expect(c3.sc).toMatchObject({ retried: true });
+    expect(w.store[PS]!.size).toBe(1);
+  });
+
+  it("два одновременных подтверждения: второе — in_progress, без POST; первое создаёт; объект один", async () => {
+    const w = world();
+    w.fails[PS] = ["held"];
+    const p = await w.call(PT, pArgs);
+    const op = p.sc.operationId as string;
+    const first = confirm(w, op);
+    await vi.waitFor(() => expect(w.writes.filter((x) => x.set === PS)).toHaveLength(1));
+    const second = await confirm(w, op);
+    const st = await w.call(ST, { operationId: op });
+    w.release();
+    const r1 = await first;
+    expect(second.isError).toBe(true);
+    expect(second.text).toContain("[in_progress]");
+    expect(st.sc).toMatchObject({ status: "not_found", inProgress: true, retrySafe: false });
+    expect(r1.isError, r1.text.slice(0, 300)).toBe(false);
+    expect(w.writes.filter((x) => x.set === PS)).toHaveLength(1);
+    expect(w.store[PS]!.size).toBe(1);
+  });
+
+  for (const written of [false, true])
+    it(`рестарт коннектора посреди POST (lock упавшего процесса, 1С ${written ? "записала" : "не получила"}) — повтор доводит до одного объекта`, async () => {
+      const w = world();
+      const p = await w.call(PT, pArgs);
+      const op = p.sc.operationId as string;
+      const ref = String(p.sc.ref);
+      const file = journalFile(w.dir, op);
+      const entry = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+      writeFileSync(file, JSON.stringify({ ...entry, state: "executing" }));
+      writeFileSync(file.replace(/\.json$/, ".lock"), "boot-of-crashed-process");
+      if (written) w.store[PS]!.set(ref, { Ref_Key: ref, Description: pArgs.name, DeletionMark: false });
+      // Процесс упал: в журнале «executing», lock с чужой меткой запуска, живого запроса нет.
+      const c = await confirm(w, op);
+      expect(c.isError, c.text.slice(0, 300)).toBe(false);
+      expect(c.sc).toMatchObject(written ? { reconciled: true } : { retried: true });
+      expect(c.sc.ref).toBe(ref);
+      expect(w.store[PS]!.size).toBe(1);
+      expect(w.writes.filter((x) => x.set === PS)).toHaveLength(written ? 0 : 1);
+    });
+
+  it("повтор через сутки при сроке предпросмотра 15 минут: срок повтору не мешает, объект один", async () => {
+    const w = world({ env: { ODATA_WRITE_PREVIEW_MAX_AGE: "15" } });
+    w.fails[PS] = ["lostNoWrite"];
+    const p = await w.call(PT, pArgs);
+    const op = p.sc.operationId as string;
+    await confirm(w, op);
+    // Часы ушли на сутки вперёд: данные документа (дата) — от предпросмотра, а не от «сейчас».
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 24 * 3600_000 });
+    const c = await confirm(w, op);
+    expect(c.isError, c.text.slice(0, 300)).toBe(false);
+    expect(c.sc).toMatchObject({ retried: true });
+    expect(w.store[PS]!.size).toBe(1);
+  });
+
+  it("найден помеченный на удаление — успех с deletionMark и предупреждением, без POST", async () => {
+    const w = world();
+    w.fails[PS] = ["lost"];
+    const p = await w.call(PT, pArgs);
+    const op = p.sc.operationId as string;
+    await confirm(w, op);
+    w.store[PS]!.get(String(p.sc.ref))!["DeletionMark"] = true;
+    const c = await confirm(w, op);
+    expect(c.sc).toMatchObject({ reconciled: true, deletionMark: true });
+    expect(String(c.sc.warning)).toContain("помечен на удаление");
+    expect(w.writes.filter((x) => x.set === PS)).toHaveLength(1);
+  });
+
+  it("другие аргументы при повторе — отказ без POST", async () => {
+    const w = world();
+    w.fails[PS] = ["lostNoWrite"];
+    const p = await w.call(PT, pArgs);
+    const op = p.sc.operationId as string;
+    await confirm(w, op);
+    const c = await w.call(PT, { ...pArgs, name: "ZZ-TEST другой", confirm: true, operationId: op });
+    expect(c.isError).toBe(true);
+    expect(w.writes.filter((x) => x.set === PS)).toHaveLength(1);
+    expect(w.store[PS]!.size).toBe(0);
   });
 });

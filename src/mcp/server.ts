@@ -811,7 +811,17 @@ export function createServer(ctx: ServerContext): McpServer {
                   }
                 : {}),
               replayed: true,
-              note: "Операция с этим operationId уже выполнена; повторный запрос в 1С не отправлялся.",
+              note: settled.reconciled
+                ? "Исход прошлой попытки был неизвестен; объект с назначенной ссылкой найден в 1С — запись дошла. Повторный запрос в 1С не отправлялся."
+                : "Операция с этим operationId уже выполнена; повторный запрос в 1С не отправлялся.",
+              ...(settled.reconciled ? { reconciled: true } : {}),
+              ...(settled.deletionMark
+                ? {
+                    deletionMark: true,
+                    warning:
+                      "Объект в 1С помечен на удаление — его пометили после создания. Новую запись не делайте, пока не решите, нужен ли он.",
+                  }
+                : {}),
               database: conn.cfg.name,
               entitySet: settled.entitySet,
               ref: settled.result["Ref_Key"],

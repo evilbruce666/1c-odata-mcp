@@ -11,6 +11,34 @@ const UNCERTAIN_RETENTION_MS = 365 * 24 * 60 * 60 * 1_000;
 const STALE_FILE_MS = 24 * 60 * 60 * 1_000;
 const PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
 
+/**
+ * Метка запуска процесса — в lock-файле операции. Чужая метка — lock упавшего или перезапущенного процесса: один
+ * процесс записи на каталог журнала (требование 1.1, docs/WRITE.md). PID для этого не годится: в контейнере после
+ * рестарта он снова 1.
+ */
+const BOOT_ID = randomUUID();
+/** Операции, по которым этот процесс прямо сейчас ждёт ответа 1С: каталог журнала + operationId. */
+const LIVE = new Set<string>();
+
+/**
+ * Создание с назначенным Ref_Key и неизвестным исходом (1.1): повтор подтверждения безопасен — второй объект с той
+ * же ссылкой 1С не создаст (уникальный индекс; проверено на копии УТ 11.5 последовательным повтором и пятью
+ * одновременными POST — ровно один объект). Правки, проведение, записи регистров и операции без ссылки — нет.
+ */
+export function isRetryableCreate(entry: JournalEntry): entry is JournalEntry & { refKey: string } {
+  return (entry.state === "executing" || entry.state === "outcome_unknown") && !!entry.refKey && !entry.check;
+}
+
+/** Запрос по операции ещё идёт в этом процессе: подождать и повторить подтверждение. */
+export function inProgressError(operationId: string): ODataError {
+  return new ODataError({
+    kind: "in_progress",
+    message:
+      `Запрос записи operationId ${operationId} ещё выполняется в этом процессе. Подождите ответа и повторите ` +
+      "подтверждение с тем же operationId и аргументами — второго объекта не будет.",
+  });
+}
+
 export type OperationState = "prepared" | "executing" | "succeeded" | "rejected" | "outcome_unknown";
 
 /**
@@ -74,7 +102,7 @@ export class WriteOperationJournal {
     payload: Record<string, unknown>,
     requestHash: string,
     refKey?: string,
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     this.validateOperationId(operationId);
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await this.pruneExpired();
@@ -95,11 +123,22 @@ export class WriteOperationJournal {
 
     try {
       await this.writeNew(this.recordPath(operationId), entry);
+      return entry.refKey;
     } catch (error) {
       if (!isNodeError(error, "EEXIST")) throw error;
       const existing = await this.read(operationId);
       this.assertMatches(existing, entitySet, payload, requestHash);
+      return existing.refKey;
     }
+  }
+
+  /** Запрос по операции идёт в этом процессе прямо сейчас. */
+  isLive(operationId: string): boolean {
+    return LIVE.has(this.liveKey(operationId));
+  }
+
+  private liveKey(operationId: string): string {
+    return `${this.directory}\n${operationId}`;
   }
 
   async execute<T extends ODataEntity>(
@@ -109,9 +148,13 @@ export class WriteOperationJournal {
     requestHash: string,
     send: () => Promise<T>,
     check?: OperationCheck,
+    /** Создание с назначенной ссылкой: прочитать объект по ней (undefined — его нет). Включает безопасный повтор. */
+    findExisting?: () => Promise<T | undefined>,
   ): Promise<T> {
     this.validateOperationId(operationId);
     let entry = await this.read(operationId);
+    if (findExisting && isRetryableCreate(entry))
+      return this.retryCreate(entry, entitySet, payload, requestHash, send, findExisting);
     this.assertMatches(entry, entitySet, payload, requestHash);
     const existingResult = this.resultForExisting<T>(entry);
     if (existingResult !== undefined) return existingResult;
@@ -123,19 +166,32 @@ export class WriteOperationJournal {
     } catch (error) {
       if (!isNodeError(error, "EEXIST")) throw error;
       entry = await this.read(operationId);
+      if (findExisting && isRetryableCreate(entry))
+        return this.retryCreate(entry, entitySet, payload, requestHash, send, findExisting);
       this.assertMatches(entry, entitySet, payload, requestHash);
+      if (this.isLive(operationId)) throw inProgressError(operationId);
       const racedResult = this.resultForExisting<T>(entry);
       if (racedResult !== undefined) return racedResult;
       throw this.unknownResult(operationId);
     }
+    await lock.writeFile(BOOT_ID, "utf8").catch(() => undefined);
 
     let requestStarted = false;
     try {
       entry = await this.read(operationId);
       this.assertMatches(entry, entitySet, payload, requestHash);
-      const racedResult = this.resultForExisting<T>(entry);
+      const racedResult =
+        findExisting && isRetryableCreate(entry) ? undefined : this.resultForExisting<T>(entry);
       if (racedResult !== undefined) return racedResult;
-      if (entry.state !== "prepared") throw this.unknownResult(operationId);
+      if (entry.state !== "prepared") {
+        if (findExisting && isRetryableCreate(entry)) {
+          // Другое подтверждение успело закончиться неизвестным исходом, пока ждали lock: дальше — путь повтора.
+          await lock.close().catch(() => undefined);
+          await rm(lockPath, { force: true }).catch(() => undefined);
+          return this.retryCreate(entry, entitySet, payload, requestHash, send, findExisting);
+        }
+        throw this.unknownResult(operationId);
+      }
 
       entry = {
         ...entry,
@@ -147,6 +203,8 @@ export class WriteOperationJournal {
       requestStarted = true;
 
       let result: T;
+      const live = this.liveKey(operationId);
+      LIVE.add(live);
       try {
         result = await send();
       } catch (cause) {
@@ -166,7 +224,9 @@ export class WriteOperationJournal {
         }
         await rm(lockPath, { force: true }).catch(() => undefined);
         if (rejected) throw cause;
-        throw this.unknownResult(operationId, cause);
+        throw this.unknownResult(operationId, cause, !!findExisting && isRetryableCreate(failed));
+      } finally {
+        LIVE.delete(live);
       }
 
       const completed: JournalEntry = {
@@ -188,6 +248,108 @@ export class WriteOperationJournal {
       throw error;
     } finally {
       await lock.close().catch(() => undefined);
+    }
+  }
+
+  /**
+   * Повтор создания с назначенной ссылкой после неизвестного исхода (1.1). Сначала — чтение по ссылке: объект есть →
+   * успех без POST. Нет → тот же POST с той же ссылкой: если первый запрос всё-таки дописался или дописывается, 1С
+   * откажет по уникальности, и повторное чтение найдёт объект. Исход повтора определяет чтение, а не текст ошибки:
+   * текст отказа зависит от СУБД. Отказ 1С на повторе не делает операцию «отклонённой»: первый запрос мог ещё
+   * выполняться, — операция остаётся с неизвестным исходом, повтор снова безопасен.
+   */
+  private async retryCreate<T extends ODataEntity>(
+    entry: JournalEntry & { refKey: string },
+    entitySet: string,
+    payload: Record<string, unknown>,
+    requestHash: string,
+    send: () => Promise<T>,
+    findExisting: () => Promise<T | undefined>,
+  ): Promise<T> {
+    const operationId = entry.operationId;
+    if (entry.database !== this.database) throw new InputError("operationId создан для другой базы 1С.");
+    if (entry.entitySet !== entitySet || entry.requestHash !== requestHash)
+      throw new InputError(
+        `Данные, объект или база не совпадают с dry-run для operationId ${operationId}. Повторите подтверждение с теми же аргументами, что в предпросмотре.`,
+      );
+    const live = this.liveKey(operationId);
+    // Проверка и отметка — без await между ними: два подтверждения в одном процессе не пройдут сюда оба.
+    if (LIVE.has(live)) throw inProgressError(operationId);
+    LIVE.add(live);
+    try {
+      const lockPath = this.lockPath(operationId);
+      const lock = await this.takeOverLock(lockPath, operationId);
+      try {
+        const succeed = async (found: T): Promise<T> => {
+          await this.replace({
+            ...entry,
+            state: "succeeded",
+            updatedAt: new Date().toISOString(),
+            result: resultSummary(found),
+          });
+          await rm(lockPath, { force: true }).catch(() => undefined);
+          return found;
+        };
+        const before = await findExisting();
+        if (before) return { ...(await succeed(before)), _operation_reconciled: true };
+        if (entry.payloadHash !== this.payloadHash(entitySet, payload)) {
+          await rm(lockPath, { force: true }).catch(() => undefined);
+          throw new ODataError({
+            kind: "unknown",
+            message:
+              `Результат записи operationId ${operationId} неизвестен, а данные из 1С для этого объекта изменились с ` +
+              "предпросмотра (подстановки — договор, счета, соглашение): повторить ту же запись нельзя. Объекта с " +
+              "назначенной ссылкой в 1С пока нет. Сверьте базу и закройте операцию через write.operation.status " +
+              "с markNotApplied=true, затем сделайте новый предпросмотр.",
+          });
+        }
+        await this.replace({ ...entry, state: "executing", updatedAt: new Date().toISOString() });
+        let result: T;
+        try {
+          result = await send();
+        } catch (cause) {
+          const after = await findExisting().catch(() => undefined);
+          if (after) return { ...(await succeed(after)), _operation_reconciled: true };
+          await this.replace({
+            ...entry,
+            state: "outcome_unknown",
+            updatedAt: new Date().toISOString(),
+            ...(cause instanceof ODataError
+              ? { errorKind: cause.kind, errorMessage: boundedMessage(cause.message) }
+              : {}),
+          });
+          await rm(lockPath, { force: true }).catch(() => undefined);
+          throw this.unknownResult(operationId, cause, true);
+        }
+        return { ...(await succeed(result)), _operation_retried: true };
+      } finally {
+        await lock.close().catch(() => undefined);
+      }
+    } finally {
+      LIVE.delete(live);
+    }
+  }
+
+  /**
+   * Lock операции для повтора. Занят процессом, который сейчас ждёт ответа, — сюда не доходит (LIVE выше); остальной
+   * lock — от упавшего, перезапущенного или потерявшего журнал процесса: снимаем и берём заново.
+   */
+  private async takeOverLock(lockPath: string, operationId: string) {
+    try {
+      const lock = await open(lockPath, "wx", 0o600);
+      await lock.writeFile(BOOT_ID, "utf8").catch(() => undefined);
+      return lock;
+    } catch (error) {
+      if (!isNodeError(error, "EEXIST")) throw error;
+    }
+    await rm(lockPath, { force: true });
+    try {
+      const lock = await open(lockPath, "wx", 0o600);
+      await lock.writeFile(BOOT_ID, "utf8").catch(() => undefined);
+      return lock;
+    } catch (error) {
+      if (isNodeError(error, "EEXIST")) throw inProgressError(operationId);
+      throw error;
     }
   }
 
@@ -307,7 +469,7 @@ export class WriteOperationJournal {
       );
     }
     if (entry.state === "executing" || entry.state === "outcome_unknown") {
-      throw this.unknownResult(entry.operationId);
+      throw this.unknownResult(entry.operationId, undefined, isRetryableCreate(entry));
     }
     return undefined;
   }
@@ -479,14 +641,17 @@ export class WriteOperationJournal {
       throw new InputError("operationId должен быть UUID из предпросмотра.");
   }
 
-  private unknownResult(operationId: string, cause?: unknown): ODataError {
+  private unknownResult(operationId: string, cause?: unknown, retrySafe = false): ODataError {
     // Текст 1С (например, «Ошибка сервера 1С (500): …») нужен для сверки — не теряем его (#55).
     const reason = cause instanceof ODataError ? ` (${cause.kind}: ${boundedMessage(cause.message)})` : "";
     return new ODataError({
       kind: "unknown",
-      message:
-        `Результат записи operationId ${operationId} неизвестен${reason}. Повторная отправка заблокирована. ` +
-        "Проверьте состояние операции через write.operation.status и точный объект или настройку в 1С. Новый предпросмотр допустим только после подтверждения отсутствия результата.",
+      message: retrySafe
+        ? `Результат записи operationId ${operationId} неизвестен${reason}. Повторите подтверждение с тем же ` +
+          "operationId и теми же аргументами: объект с назначенной ссылкой 1С создаст не больше одного раза, а повтор " +
+          "сначала проверит, не создан ли он уже. Новый предпросмотр с новым operationId до этого не делайте."
+        : `Результат записи operationId ${operationId} неизвестен${reason}. Повторная отправка заблокирована. ` +
+          "Проверьте состояние операции через write.operation.status и точный объект или настройку в 1С. Новый предпросмотр допустим только после подтверждения отсутствия результата.",
       cause,
     });
   }

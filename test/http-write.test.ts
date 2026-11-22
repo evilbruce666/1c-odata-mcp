@@ -189,7 +189,7 @@ describe("запись по HTTP: гарантии журнала", () => {
     await b.stop();
   });
 
-  it("два одновременных подтверждения одного operationId: в 1С ровно один POST, второе — из журнала или «неизвестен»", async () => {
+  it("два одновременных подтверждения одного operationId: в 1С ровно один POST, второе — in_progress", async () => {
     const journal = mkdtempSync(join(tmpdir(), "1c-odata-hw-"));
     const s = await serve(journal);
     const args = { name: "ZZ-TEST HTTP параллельно" };
@@ -203,9 +203,9 @@ describe("запись по HTTP: гарантии журнала", () => {
     hold.release();
     const r1 = await first;
     expect(r1.isError, r1.content[0]?.text).toBeFalsy();
-    // Второе пришло, пока первое писало: дубля нет, исход второго — «неизвестен», сверка — по статусу.
+    // Второе пришло, пока первое писало: дубля нет, второе — «запрос ещё идёт» (1.1: отдельный вид ошибки).
     expect(r2.isError).toBe(true);
-    expect(r2.content[0]!.text).toMatch(/неизвестен|write\.operation\.status/);
+    expect(r2.content[0]!.text).toContain("[in_progress]");
     expect(hold.stats.started).toBe(1);
     const st = await s.call("write.operation.status", { operationId: p.structuredContent["operationId"] });
     expect(st.structuredContent["status"]).toBe("succeeded");
@@ -258,7 +258,9 @@ describe("запись по HTTP: гарантии журнала", () => {
     await s.stop();
   });
 
-  it("1С не ответила за ODATA_TIMEOUT_MS: исход неизвестен, повтор заблокирован до write.operation.status", async () => {
+  // 1.1: повтор после таймаута не блокируется — сверка по назначенной ссылке (подделка отвечает объектом на любую
+  // ссылку, поэтому здесь — «найден»; потерянная и недошедшая запись с настоящей уникальностью — test/trade-retry).
+  it("1С не ответила за ODATA_TIMEOUT_MS: исход неизвестен; повтор сверяет по ссылке, второго POST нет", async () => {
     const journal = mkdtempSync(join(tmpdir(), "1c-odata-hw-"));
     const s = await serve(journal, { ODATA_TIMEOUT_MS: "100" });
     const args = { name: "ZZ-TEST HTTP тайм-аут" };
@@ -269,9 +271,9 @@ describe("запись по HTTP: гарантии журнала", () => {
     expect(r.isError).toBe(true);
     expect(r.content[0]!.text).toContain("неизвестен");
     hold.release();
-    const blocked = await s.call(CREATE, { ...args, confirm: true, operationId });
-    expect(blocked.isError).toBe(true);
-    expect(blocked.content[0]!.text).toMatch(/неизвестен|write\.operation\.status/);
+    const again = await s.call(CREATE, { ...args, confirm: true, operationId });
+    expect(again.isError, again.content[0]?.text).toBeFalsy();
+    expect(again.structuredContent).toMatchObject({ reconciled: true });
     expect(hold.stats.started).toBe(1);
     await s.stop();
   });

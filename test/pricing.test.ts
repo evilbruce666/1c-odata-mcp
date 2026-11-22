@@ -723,3 +723,32 @@ describe("пробелы тестов из ревью", () => {
     expect(other.structuredContent["count"]).toBe(1);
   });
 });
+
+// 1.1: момент цены по умолчанию брался от «сейчас» при подтверждении. Предпросмотр до полуночи и подтверждение (или
+// безопасный повтор после неизвестного исхода) после неё давали другой день — отказ «данные не совпадают с dry-run».
+// Старые тесты всегда передавали date явно.
+describe("момент цены по умолчанию — время предпросмотра", () => {
+  it("подтверждение через сутки без date: документ с моментом предпросмотра, без отказа", async () => {
+    const s = setup();
+    const preview = await s.call(SET, { priceKind: "Закупочная", lines });
+    expect(preview.isError, preview.text.slice(0, 300)).toBeFalsy();
+    const day = String((preview.structuredContent["payload"] as Record<string, unknown>)["Date"]).slice(
+      0,
+      10,
+    );
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 24 * 3600_000 });
+    try {
+      const created = await s.call(SET, {
+        priceKind: "Закупочная",
+        lines,
+        confirm: true,
+        operationId: preview.structuredContent["operationId"],
+      });
+      expect(created.isError, created.text.slice(0, 300)).toBeFalsy();
+      const ref = String(created.structuredContent["ref"]).toLowerCase();
+      expect(String(s.docs.get(ref)!.body["Date"]).slice(0, 10)).toBe(day);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

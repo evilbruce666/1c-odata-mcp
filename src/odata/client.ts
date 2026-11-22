@@ -3,7 +3,12 @@ import { logger } from "../logger.js";
 import { ODataError, fromHttpStatus } from "./errors.js";
 import type { ODataCollection, ODataEntity } from "../types/odata.js";
 import { currentWriteOperationId, currentWriteRequestHash } from "./write-operation-context.js";
-import { WriteOperationJournal, type OperationCheck } from "./write-journal.js";
+import {
+  WriteOperationJournal,
+  inProgressError,
+  isRetryableCreate,
+  type OperationCheck,
+} from "./write-journal.js";
 import { loadMetadata } from "./metadata.js";
 import type { MetadataMap } from "../types/odata.js";
 import { uuidV1 } from "./uuid-v1.js";
@@ -229,9 +234,21 @@ export class ODataClient {
         payload as Record<string, unknown>,
         requestHash,
         () => send(body),
+        undefined,
+        refKey ? () => this.findByRef<T>(entitySet, refKey) : undefined,
       );
     }
     return send(payload);
+  }
+
+  /** Объект по назначенной ссылке; undefined — 1С ответила «не найден». Прочие сбои чтения — ошибкой. */
+  private async findByRef<T extends ODataEntity>(entitySet: string, ref: string): Promise<T | undefined> {
+    try {
+      return await this.request<T>(`${entitySet}(guid'${ref}')?$format=json`);
+    } catch (error) {
+      if (error instanceof ODataError && error.kind === "not_found") return undefined;
+      throw error;
+    }
   }
 
   /**
@@ -242,14 +259,14 @@ export class ODataClient {
     entitySet: string,
     payload: Record<string, unknown>,
     { withRefKey = true }: { withRefKey?: boolean } = {},
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     // Предпросмотр при выключенной записи ничего не пишет на диск (READ_ONLY по умолчанию).
-    if (this.behavior.readOnly || !this.conn.writable) return;
+    if (this.behavior.readOnly || !this.conn.writable) return undefined;
     const operationId = currentWriteOperationId();
     const requestHash = currentWriteRequestHash();
     if (!operationId || !requestHash)
       throw new Error("Для предпросмотра записи отсутствуют operationId и отпечаток запроса.");
-    await this.writeJournal.prepare(
+    return this.writeJournal.prepare(
       operationId,
       entitySet,
       payload,
@@ -308,9 +325,35 @@ export class ODataClient {
   async operationSettled(
     operationId: string,
     requestHash: string,
-  ): Promise<{ entitySet: string; result: Record<string, string> } | undefined> {
+  ): Promise<
+    | { entitySet: string; result: Record<string, string>; reconciled?: boolean; deletionMark?: boolean }
+    | undefined
+  > {
     if (this.behavior.readOnly || !this.conn.writable) return undefined;
+    // Создание с назначенной ссылкой и неизвестным исходом (1.1): сначала чтение по ссылке — до того, как инструмент
+    // заново проверит 1С (иначе, например, проверка дубля ИНН нашла бы уже созданного контрагента и отказала).
+    const entry = await this.writeJournal.lookup(operationId);
+    if (entry && isRetryableCreate(entry) && entry.requestHash === requestHash) {
+      if (this.writeJournal.isLive(operationId)) throw inProgressError(operationId);
+      const found = await this.findByRef(entry.entitySet, entry.refKey);
+      if (!found) return undefined; // объекта нет — инструмент соберёт запись, журнал повторит POST с той же ссылкой
+      await this.writeJournal.reconcile(operationId, found);
+      const result: Record<string, string> = {};
+      for (const k of ["Ref_Key", "Code", "Number"])
+        if (typeof found[k] === "string") result[k] = found[k] as string;
+      return {
+        entitySet: entry.entitySet,
+        result,
+        reconciled: true,
+        ...(found["DeletionMark"] === true ? { deletionMark: true } : {}),
+      };
+    }
     return this.writeJournal.settled(operationId, requestHash);
+  }
+
+  /** Запрос записи по операции идёт в этом процессе прямо сейчас. */
+  isOperationLive(operationId: string): boolean {
+    return this.writeJournal.isLive(operationId);
   }
 
   /** Состояние журнала для health_check (только когда запись в базу включена). */

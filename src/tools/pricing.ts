@@ -27,6 +27,7 @@ import {
   type PriceKind,
 } from "../odata/pricing.js";
 import { localToday } from "../odata/settlements-aging.js";
+import { currentWriteOperationId } from "../odata/write-operation-context.js";
 import { createResultSchema, getPricesResultSchema } from "../schemas/output.js";
 import { databaseField, guard, ok, renderJson } from "./_shared.js";
 import { confirmField, createCore } from "./write.js";
@@ -142,7 +143,11 @@ export function registerPricingTools(server: McpServer, ctx: ServerContext): voi
         if (kind.status === "НеДействует")
           throw new InputError(`Вид цен «${kind.name}» не действует (статус ${kind.status}).`);
         if (!kind.currencyRef) throw new InputError(`У вида цен «${kind.name}» не задана валюта цены.`);
-        const at = moment(date ?? localNow());
+        // Момент по умолчанию — время предпросмотра, как дата документов (docDate): подтверждение и безопасный повтор
+        // после неизвестного исхода (1.1) отправляют ту же запись, даже если между ними прошла полночь.
+        const op = currentWriteOperationId();
+        const previewedAt = op ? (await conn.client.operationEntry(op))?.createdAt : undefined;
+        const at = moment(date ?? localNow(previewedAt ? new Date(previewedAt) : undefined));
 
         // Строки: повтор позиции и характеристики, цены с лишними знаками — отказ на входе.
         const seen = new Set<string>();

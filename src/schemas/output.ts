@@ -80,7 +80,14 @@ export const createResultSchema = z
     created: z.boolean().optional(),
     operationId: z.string().uuid().optional(),
     replayed: z.boolean().optional(),
+    /** Исход прошлой попытки был неизвестен, объект найден по назначенной ссылке (1.1). */
+    reconciled: z.boolean().optional(),
+    /** Исход прошлой попытки был неизвестен, объекта не было — POST повторён с той же ссылкой (1.1). */
+    retried: z.boolean().optional(),
+    deletionMark: z.boolean().optional(),
+    warning: z.string().optional(),
     entitySet: z.string().optional(),
+    /** Ссылка объекта; в предпросмотре — назначенная будущему объекту (1.1). */
     ref: z.string().optional(),
     code: z.string().optional(),
     description: z.string().optional(),
@@ -1368,5 +1375,9 @@ export const operationStatusSchema = z
     number: z.string().optional(),
     note: z.string().optional(),
     lastError: z.string().optional(),
+    /** not_found у создания с назначенной ссылкой (1.1): повтор подтверждения с тем же operationId безопасен. */
+    retrySafe: z.boolean().optional(),
+    /** Запрос по операции ещё идёт в процессе коннектора: подождать и спросить снова. */
+    inProgress: z.boolean().optional(),
   })
   .passthrough();

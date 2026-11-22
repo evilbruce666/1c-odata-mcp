@@ -399,6 +399,7 @@ describe("write.operation.status по назначенному Ref_Key", () => {
         },
         reconcileOperation,
         markOperationNotApplied,
+        isOperationLive: () => false,
       },
     };
     const res = await toolsOf(connection)["write.operation.status"]!.handler(
@@ -406,7 +407,7 @@ describe("write.operation.status по назначенному Ref_Key", () => {
       {},
     );
     return {
-      sc: res.structuredContent as { status: string; ref?: string },
+      sc: res.structuredContent as { status: string; ref?: string; retrySafe?: boolean },
       reconcileOperation,
       markOperationNotApplied,
     };
@@ -420,6 +421,8 @@ describe("write.operation.status по назначенному Ref_Key", () => {
   it("объекта нет 2+ минуты → not_found без закрытия, пока человек не подтвердит", async () => {
     const r = await status(false, 60 * 60_000);
     expect(r.sc.status).toBe("not_found");
+    // 1.1: закрывать не нужно — повтор подтверждения с той же ссылкой безопасен.
+    expect(r.sc.retrySafe).toBe(true);
     expect(r.markOperationNotApplied).not.toHaveBeenCalled();
   });
   it("объекта нет 2+ минуты и markNotApplied → not_applied", async () => {
