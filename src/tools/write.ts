@@ -52,6 +52,7 @@ import { getDocumentPostings } from "./registers.js";
 import { PRICE_DOC, priceMechanisms, verifyPriceMovements } from "../odata/pricing.js";
 import { tryPreviewView } from "./preview-view.js";
 import { checkDuplicateInn } from "../odata/duplicates.js";
+import { checkResponsible } from "../odata/users.js";
 import {
   createPartner,
   createTradeCounterparty,
@@ -3379,7 +3380,12 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         payerText: z.string().optional().describe("Текст плательщика (по умолчанию — имя организации)"),
         payerInn: z.string().optional().describe("ИНН плательщика (по умолчанию — ИНН организации)"),
         orgBankAccount: orgBankAccountField,
-        responsibleRef: z.string().optional().describe("Ref_Key ответственного (Ответственный_Key)"),
+        responsibleRef: z
+          .string()
+          .optional()
+          .describe(
+            "Ref_Key ответственного — пользователя 1С (read.catalog.list_users); помеченный, недействительный и служебный — отказ",
+          ),
         cashflowItemRef: z
           .string()
           .optional()
@@ -3425,6 +3431,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const conn = ctx.db(database);
         if (await tradeMoneySet(conn, "request")) return fail(PAYOUT_ORDER_IN_TRADE);
         const set = await requireEntity(conn, WRITE_DOCUMENTS.paymentOrder, "Документ «Платёжное поручение»");
+        const responsible = await checkResponsible(conn, responsibleRef);
         const org = await resolveOrgOrDefault(conn, organization);
         const [resolvedOrgAccount, resolvedCurrency] = await Promise.all([
           // Через общий резолвер: принимает название/номер счёта, а не только Ref_Key.
@@ -3451,7 +3458,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           КПППолучателя: recipientKpp,
           ТекстПлательщика: payerText ?? org.name,
           ИННПлательщика: payerInn ?? org.inn,
-          Ответственный_Key: responsibleRef,
+          Ответственный_Key: responsible,
           СтатьяДвиженияДенежныхСредств_Key: cashflowItemRef,
           ВалютаДокумента_Key: resolvedCurrency,
           Комментарий: comment,

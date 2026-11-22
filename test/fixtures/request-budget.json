@@ -24,6 +24,7 @@
   "read.analytics.get_warehouse_stock": 2,
   "read.audit.get_document_history": 4,
   "read.catalog.list_items": 2,
+  "read.catalog.list_users": 1,
   "read.catalog.list_warehouses": 1,
   "read.counterparty.find_counterparty": 2,
   "read.counterparty.get_counterparty": 1,

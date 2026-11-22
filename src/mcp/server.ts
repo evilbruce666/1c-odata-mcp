@@ -18,6 +18,7 @@ import { registerStockTools } from "../tools/stock.js";
 import { registerItemSalesTools } from "../tools/item-sales.js";
 import { registerPartnerSettlementTools } from "../tools/partner-settlements.js";
 import { registerItemTools } from "../tools/items.js";
+import { registerUserTools } from "../tools/users.js";
 import { registerPricingTools } from "../tools/pricing.js";
 import { registerWarehouseTools } from "../tools/warehouses.js";
 import { tradeWithoutAccounting, withoutAccounting } from "../odata/configuration.js";
@@ -855,6 +856,7 @@ export function createServer(ctx: ServerContext): McpServer {
   registerPartnerSettlementTools(server, ctx);
   registerWarehouseTools(server, ctx);
   registerItemTools(server, ctx);
+  registerUserTools(server, ctx);
   registerPricingTools(server, ctx);
   registerDebtTools(server, ctx);
   registerMonthCloseTools(server, ctx);

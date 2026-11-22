@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/server";
+import { checkResponsible } from "../odata/users.js";
 import { z } from "zod";
 import type { ServerContext } from "../context.js";
 import { InputError } from "../errors.js";
@@ -118,7 +119,9 @@ export function registerPricingTools(server: McpServer, ctx: ServerContext): voi
           .trim()
           .regex(GUID, "Ref_Key пользователя (GUID)")
           .optional()
-          .describe("Ответственный (Ref_Key пользователя)"),
+          .describe(
+            "Ответственный (Ref_Key пользователя 1С — найдите через read.catalog.list_users; помеченный, недействительный и служебный — отказ)",
+          ),
         confirm: confirmField,
       }),
       outputSchema: createResultSchema,
@@ -126,6 +129,8 @@ export function registerPricingTools(server: McpServer, ctx: ServerContext): voi
     ({ database, priceKind, lines, date, mechanism, comment, responsibleRef, confirm }) =>
       guard("write.pricing.create_price_setting", async () => {
         const conn = ctx.db(database);
+        // Ответственный — первым: неверная ссылка не должна ждать разбора вида цен и строк.
+        const responsible = await checkResponsible(conn, responsibleRef);
         const mech = await detectMechanism(conn, mechanism);
         const s = MECHANISMS[mech];
         const kinds = await readPriceKinds(conn, mech);
@@ -232,7 +237,7 @@ export function registerPricingTools(server: McpServer, ctx: ServerContext): voi
           ...(s.trade ? { Статус: "Согласован", Согласован: true } : {}),
           ...(s.headerKind ? { [s.headerKind]: kind.ref } : {}),
           ...(comment ? { Комментарий: comment } : {}),
-          ...(responsibleRef ? { Ответственный_Key: clean(responsibleRef) } : {}),
+          ...(responsible ? { Ответственный_Key: responsible } : {}),
           ...(s.trade ? { ВидыЦен: [{ LineNumber: 1, ВидЦены_Key: kind.ref }] } : {}),
           [s.rows]: lines.map((l, i) => ({
             LineNumber: i + 1,

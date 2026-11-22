@@ -544,6 +544,29 @@ export const getPricesResultSchema = z
   })
   .passthrough();
 
+export const listUsersResultSchema = z
+  .object({
+    database: z.string(),
+    query: z.string().optional(),
+    count: z.number(),
+    note: z.string().optional(),
+    items: z.array(
+      z
+        .object({
+          ref: z.string(),
+          name: z.string(),
+          inactive: z.boolean(),
+          service: z.boolean(),
+          deletionMark: z.boolean(),
+          department: z.string().optional(),
+          departmentRef: z.string().optional(),
+        })
+        .passthrough(),
+    ),
+    scan: scanSchema,
+  })
+  .passthrough();
+
 export const listItemsResultSchema = z
   .object({
     database: z.string(),
