@@ -128,6 +128,47 @@ describe("документация совпадает с кодом", () => {
     expect(english, "строки CHANGELOG без русского текста").toEqual([]);
   });
 
+  it("CHANGELOG после 1.0.0 — компактный формат (CONTRIBUTING, «История изменений»)", () => {
+    // Разделы 1.0.0 и старше выпущены и на них ссылаются GitHub Releases — их не переписываем.
+    const recent = changelog.slice(changelog.indexOf("## [Не выпущено]"), changelog.indexOf("\n## [1.0.0]"));
+    const ORDER = [
+      "Что изменится при обновлении",
+      "Добавлено",
+      "Исправлено",
+      "Удалено",
+      "Безопасность",
+      "Прочее",
+    ];
+    const problems: string[] = [];
+    for (const section of recent.split(/\n(?=## \[)/)) {
+      const version = /^## \[([^\]]+)\]/.exec(section)?.[1] ?? "?";
+      const bullets = section.split("\n").filter((l) => l.startsWith("- "));
+      if (bullets.length === 0) continue;
+      const at = (m: string) => problems.push(`[${version}] ${m}`);
+      if (section.length > 5000) at(`раздел ${section.length} знаков, предел 5000`);
+      const body = section.split("\n").slice(1).join("\n").trimStart();
+      if (!body.startsWith("**Главное.**")) at("нет абзаца «**Главное.**» в начале раздела");
+      const headings = [...section.matchAll(/^### (.+)$/gm)].map((m) => m[1]!.trim());
+      for (const h of headings) if (!ORDER.includes(h)) at(`заголовок «${h}» не из списка`);
+      const known = headings.filter((h) => ORDER.includes(h));
+      if (known.join() !== [...known].sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b)).join())
+        at(`порядок заголовков: ${known.join(" → ")}`);
+      for (const part of section.split(/^### /m).slice(1)) {
+        const list = part.slice(part.indexOf("\n") + 1).trim();
+        if (/^- .*\n\s*\n- /m.test(list)) at(`пустая строка внутри списка «${part.split("\n")[0]}»`);
+      }
+      const leads = new Map<string, number>();
+      for (const b of bullets) {
+        if (b.length > 350) at(`пункт ${b.length} знаков, предел 350: ${b.slice(0, 60)}…`);
+        if (/ревью/i.test(b)) at(`ревью — внутренняя кухня: ${b.slice(0, 60)}…`);
+        const lead = /^- \*\*(.+?)\*\*/.exec(b)?.[1]?.toLowerCase();
+        if (lead) leads.set(lead, (leads.get(lead) ?? 0) + 1);
+      }
+      for (const [lead, n] of leads) if (n > 1) at(`один факт в ${n} пунктах: «${lead}»`);
+    }
+    expect(problems).toEqual([]);
+  });
+
   it("число инструментов в README, package.json и manifest.json", () => {
     expect(readme).toContain(
       `${names.length} ${toolsWord(names.length)} (${reads} чтение/аналитика + ${writes} записей)`,
