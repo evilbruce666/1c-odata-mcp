@@ -4,7 +4,7 @@
 
 Собирается из кода (`npm run manifest`) — тот же список, что видит MCP-клиент. Не правьте вручную: тест сверяет файл с кодом. Обзор инструментов по конфигурациям — [TOOLS.md](TOOLS.md).
 
-Всего 89. У инструментов записи `confirm` и `operationId` — см. [WRITE.md](WRITE.md).
+Всего 90. У инструментов записи `confirm` и `operationId` — см. [WRITE.md](WRITE.md).
 
 ## read.accounting
 
@@ -300,6 +300,28 @@
 | `excludeOwnOrganizations` | boolean |  | Не считать продажи своим организациям: покупатель-контрагент с ИНН одной из организаций базы. Исключённое — в excludedOwnOrganizations. по умолчанию `false` |
 | `limit` | integer |  | Сколько позиций вернуть. по умолчанию `200`; не больше 1000 |
 | `snapshot` | string |  | snapshot прошлой страницы: если данные изменились, в ответе будет dataChanged |
+| `offset` | integer |  | С какой строки начать (0 — с начала); значение из nextOffset прошлого ответа. по умолчанию `0`; не меньше 0 |
+
+### `read.analytics.get_sales_report` — Продажи в разрезах
+
+Продажи за период в разрезах на выбор — один инструмент для Управления торговлей и Бухгалтерии. groupBy — до трёх разрезов: в УТ item (товар), itemGroup (группа товара), warehouse (склад или магазин), department (подразделение), manager (менеджер), partner (клиент), organization, operation (хозяйственная операция), period; в Бухгалтерии item, itemGroup (номенклатурная группа), department, organization, period — по счёту 90 (покупателя у счёта нет: разрез по контрагенту и договору — get_sales_breakdown). period — day, week, month (по умолчанию), quarter. У строки: quantity, revenue и revenueExVat (выручка с НДС и без), cost, costExVat, margin, marginExVat (себестоимость и валовая прибыль; до расчёта себестоимости за месяц — предварительные, дату называет note). Метрика, которую нельзя разделить по разрезу (в Бухгалтерии себестоимость и НДС без номенклатуры), не выводится — сказано в note. compareWith — previousPeriod (такой же период перед этим) или previousYear: у строки prev и growth (рост выручки в %), итог сравнения — в compare. sortBy — по чему сортировать (по умолчанию revenue); abc=true — класс A/B/C по накопленной доле этой метрики (80 % / 95 %). Отборы: organization, а в УТ ещё warehouses, departments, managers, partners (Ref_Key). count — всего строк; длинный список — с offset=nextOffset.
+
+| Параметр | Тип | Обязательный | Описание |
+|---|---|---|---|
+| `database` | string |  | Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя. |
+| `from` | string | да | Начало периода (включительно) (YYYY-MM-DD) |
+| `to` | string | да | Конец периода (включительно) (YYYY-MM-DD) |
+| `groupBy` | список (`item`, `itemGroup`, `warehouse`, `department`, `manager`, `partner`, `organization`, `operation`, `period`) | да | Разрезы по порядку, до трёх: напр. ["department", "period"] |
+| `period` | `day`, `week`, `month`, `quarter` |  | Шаг разреза period (по умолчанию month) |
+| `compareWith` | `previousPeriod`, `previousYear` |  | Сравнить с таким же периодом перед этим или с тем же периодом год назад |
+| `sortBy` | `revenue`, `revenueExVat`, `margin`, `marginExVat`, `quantity` |  | Сортировка по убыванию (и метрика для abc). по умолчанию `"revenue"` |
+| `abc` | boolean |  | Класс A/B/C по накопленной доле sortBy: A — до 80 %, B — до 95 %. по умолчанию `false` |
+| `organization` | string |  | Организация: часть названия, ИНН или Ref_Key |
+| `warehouses` | список (string) |  | УТ: только эти склады |
+| `departments` | список (string) |  | Только эти подразделения |
+| `managers` | список (string) |  | УТ: только эти менеджеры (read.catalog.list_users) |
+| `partners` | список (string) |  | УТ: только эти клиенты (партнёры) |
+| `limit` | integer |  | Сколько строк вернуть. по умолчанию `100`; не больше 1000 |
 | `offset` | integer |  | С какой строки начать (0 — с начала); значение из nextOffset прошлого ответа. по умолчанию `0`; не меньше 0 |
 
 ### `read.analytics.get_taxes_paid` — Уплаченные налоги и взносы за период

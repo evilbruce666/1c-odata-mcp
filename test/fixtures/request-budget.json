@@ -19,6 +19,7 @@
   "read.analytics.get_sales": 1,
   "read.analytics.get_sales_breakdown": 2,
   "read.analytics.get_sales_register": 4,
+  "read.analytics.get_sales_report": 2,
   "read.analytics.get_taxes_paid": 3,
   "read.analytics.get_unpaid_invoices": 6,
   "read.analytics.get_warehouse_stock": 2,

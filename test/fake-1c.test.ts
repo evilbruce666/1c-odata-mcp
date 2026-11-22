@@ -57,6 +57,8 @@ const OVERRIDES: Record<string, Record<string, unknown>> = {
   },
   // Массивы ссылок с минимумом одного элемента — подобрать по имени нельзя.
   "read.catalog.list_users": { refs: [id] },
+  // Отборы warehouses/managers/partners — только для УТ (в Бухгалтерии отказ): здесь схема Бухгалтерии.
+  "read.analytics.get_sales_report": { groupBy: ["department"], departments: [id] },
   "read.catalog.list_items": { groups: undefined },
   // Механизм — явно: синтетические записи есть в обоих регистрах цен.
   "read.analytics.get_prices": {
@@ -678,6 +680,7 @@ const OPTIONAL_OMIT: Record<string, string[]> = {
   // Строки по нескольким договорам и суммы строк — свои тесты на схеме БП 3.0 (bp-other-operations,
   // existing-bank-settlement): синтетический массив здесь не проходит схему аргументов.
   "write.document.align_bank_payment_amounts": ["lineAmounts"],
+  "read.analytics.get_sales_report": ["warehouses", "managers", "partners"],
   // Поля денежных документов Управления торговлей: в Бухгалтерии — отказ, здесь проверяется схема Бухгалтерии.
   ...Object.fromEntries(
     [

@@ -546,6 +546,46 @@ export const getPricesResultSchema = z
   })
   .passthrough();
 
+const salesReportMetrics = {
+  quantity: z.number(),
+  revenue: z.number(),
+  revenueExVat: z.number().optional(),
+  cost: z.number().optional(),
+  costExVat: z.number().optional(),
+  margin: z.number().optional(),
+  marginExVat: z.number().optional(),
+};
+
+export const salesReportResultSchema = z
+  .object({
+    database: z.string(),
+    configuration: z.enum(["trade", "accounting"]),
+    from: z.string(),
+    to: z.string(),
+    groupBy: z.array(z.string()),
+    period: z.string().optional(),
+    organization: z.string().optional(),
+    ...salesReportMetrics,
+    compare: z
+      .object({ from: z.string(), to: z.string(), ...salesReportMetrics })
+      .passthrough()
+      .optional(),
+    count: z.number(),
+    note: z.string().optional(),
+    items: z.array(
+      z
+        .object({
+          ...salesReportMetrics,
+          prev: z.object(salesReportMetrics).passthrough().nullable().optional(),
+          growth: z.number().nullable().optional(),
+          abcClass: z.enum(["A", "B", "C"]).optional(),
+        })
+        .passthrough(),
+    ),
+    scan: scanSchema,
+  })
+  .passthrough();
+
 export const listUsersResultSchema = z
   .object({
     database: z.string(),
