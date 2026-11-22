@@ -317,6 +317,34 @@ async function main(): Promise<number> {
       );
     }
 
+    // --- 1.1: счёт с makeMain, ответ на создание потерян → повтор находит счёт по ссылке и делает его основным
+    {
+      const a = { ownerRef: cpRef, accountNumber: "40702810000000000002", bik: "044525225", makeMain: true };
+      const p = await run("write.counterparty.create_bank_account", { ...a, confirm: false });
+      const operationId = p.sc["operationId"];
+      lose("POST", "after");
+      const c1 = await run("write.counterparty.create_bank_account", { ...a, confirm: true, operationId });
+      restore();
+      const c2 = await run("write.counterparty.create_bank_account", { ...a, confirm: true, operationId });
+      const ref = String(c2.sc["ref"] ?? p.sc["ref"] ?? "");
+      if (ref) made.push(["Catalog_БанковскиеСчета", ref]);
+      const owner = await client.getEntity(
+        `Catalog_Контрагенты(guid'${cpRef}')?$format=json&$select=ОсновнойБанковскийСчет_Key`,
+      );
+      const accounts = await client.getCollection(
+        `Catalog_БанковскиеСчета?$format=json&$select=Ref_Key&$filter=${encodeURIComponent(`Owner eq cast(guid'${cpRef}', 'Catalog_Контрагенты') and НомерСчета eq '${a.accountNumber}'`)}`,
+      );
+      check(
+        "makeMain: потерянный ответ → повтор делает счёт основным",
+        c1.err &&
+          c2.sc["reconciled"] === true &&
+          ref === String(p.sc["ref"]) &&
+          String(owner["ОсновнойБанковскийСчет_Key"]) === ref &&
+          accounts.value.length === 1,
+        `повтор: ${c2.err ? c2.text.slice(0, 120) : "найден по ссылке"}; основной = созданный: ${String(owner["ОсновнойБанковскийСчет_Key"]) === ref}; счетов: ${accounts.value.length}`,
+      );
+    }
+
     // --- договор по умолчанию и проведение (без договора БП 3.0 не проводит реализацию)
     if (has("no-post")) line("  проведение пропущено (--no-post)");
     else {
