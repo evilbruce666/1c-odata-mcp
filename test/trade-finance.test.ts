@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createServer } from "../src/mcp/server.js";
 import { ageBucket } from "../src/odata/partner-settlements.js";
+import { defaultHorizon } from "../src/tools/partner-settlements.js";
 import { localToday } from "../src/odata/settlements-aging.js";
 import { fake1C, type FakeQuery } from "./helpers/fake-1c.js";
 
@@ -428,7 +429,16 @@ describe("1.1: платёжный календарь (schedule)", () => {
       beyondHorizon: number;
       noDueDate: number;
     };
-    expect([s.from, s.to]).toEqual(["2026-11-10", "2027-05-11"]);
+    // Шесть месяцев, считая текущий: до конца апреля, без обрывка мая.
+    expect([s.from, s.to]).toEqual(["2026-11-10", "2027-04-30"]);
+    expect(s.periods.map((p) => p.period)).toEqual([
+      "2026-11",
+      "2026-12",
+      "2027-01",
+      "2027-02",
+      "2027-03",
+      "2027-04",
+    ]);
     expect(s.overdue).toBe(400);
     expect(s.periods.find((p) => p.period === "2026-12")!.debt).toBe(50);
     expect(s.periods.reduce((t, p) => t + p.debt, 0) + s.overdue + s.beyondHorizon + s.noDueDate).toBe(
@@ -452,5 +462,39 @@ describe("1.1: платёжный календарь (schedule)", () => {
     });
     expect(bad.isError).toBe(true);
     expect(fake.violations).toEqual([]);
+  });
+
+  // Ревью 1.1: умолчания +90 и +182 дня давали 14 недель и седьмой обрывок месяца вопреки описанию «13 недель» и
+  // «6 месяцев»; подсказка при мелком шаге предлагала квартал, которого у schedule нет; horizon без schedule молча
+  // пропускался. Старый тест проверял только сумму частей и даты, но не их число и не тексты отказов.
+  it("умолчания — ровно 13 недель и 6 месяцев; подсказка без квартала; horizon без schedule — отказ", async () => {
+    expect(defaultHorizon("2026-11-22", "week")).toBe("2027-02-14"); // воскресенье: текущая неделя + 12
+    expect(defaultHorizon("2026-11-23", "week")).toBe("2027-02-21"); // понедельник: 13 полных недель
+    expect(defaultHorizon("2026-11-10", "month")).toBe("2027-04-30");
+    expect(defaultHorizon("2026-11-10", "day")).toBe("2026-12-09");
+    const { call } = await setup();
+    const w = await call("read.analytics.get_partner_settlements", {
+      side: "clients",
+      asOf: "2026-11-22",
+      schedule: "week",
+    });
+    expect(w.isError, w.text).toBeFalsy();
+    expect((w.structuredContent["schedule"] as { periods: unknown[] }).periods.length).toBe(13);
+    const many = await call("read.analytics.get_partner_settlements", {
+      side: "clients",
+      asOf: "2026-11-10",
+      schedule: "day",
+      horizon: "2027-03-01",
+    });
+    expect(many.isError).toBe(true);
+    expect(many.text).toContain("week или month");
+    expect(many.text).not.toContain("квартал");
+    const lone = await call("read.analytics.get_partner_settlements", {
+      side: "clients",
+      asOf: "2026-11-10",
+      horizon: "2026-12-31",
+    });
+    expect(lone.isError).toBe(true);
+    expect(lone.text).toContain("задайте и schedule");
   });
 });

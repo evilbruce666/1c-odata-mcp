@@ -16,6 +16,8 @@ import {
   isTradeReport,
   minusYear,
   previousPeriod,
+  partialBucket,
+  bucketDays,
   readAccountingReport,
   readTradeReport,
   type Aggregated,
@@ -336,15 +338,31 @@ function registerReport(server: McpServer, ctx: ServerContext, kind: Kind): void
           }
         }
         const rows = aggregate(cur.rows as ReportRow[], dims, groupOf);
+        // Итог для ответа: в Бухгалтерии скидок нет вовсе — и при пустом результате не «0» (ревью 1.1).
+        const totalOf = (rs: readonly Aggregated[]) => {
+          const t = total(rs);
+          return trade ? t : { ...t, discountCents: undefined };
+        };
         // Метрики, которой в этом разрезе нет (Бухгалтерия: себестоимость и НДС без субконто разреза), сортировать нечем:
         // раньше все строки шли нулями — порядок по ключу и класс C у всех. Отказ, как на неподдерживаемый разрез.
         const wanted = (
           a.sortBy === "amount" ? "revenue" : a.sortBy === "amountExVat" ? "revenueExVat" : a.sortBy
         ) as Metric | undefined;
-        if (wanted && rows.length && !hasMetric(total(rows), wanted))
+        if (wanted && rows.length && !hasMetric(total(rows), wanted)) {
+          // Причина — только субконто, нужные этой метрике: скидки в Бухгалтерии нет вовсе (ревью 1.1, второй раунд).
+          const needs: Record<Metric, string[]> = {
+            revenue: [],
+            quantity: [],
+            discount: [],
+            revenueExVat: ["vat"],
+            margin: ["cost"],
+            marginExVat: ["vat", "cost"],
+          };
+          const why = cur.missing.filter((m) => needs[wanted].includes(m));
           throw new InputError(
-            `sortBy: ${a.sortBy} — этой метрики в выбранном разрезе нет (${cur.missing.length ? `${cur.missing.map((m) => (m === "vat" ? "НДС (90.03)" : "себестоимость (90.02)")).join(" и ")} — без субконто этого разреза` : "не считается по этому регистру"}). Сортируйте по ${kind === "sales" ? "revenue" : "amount"} или quantity либо возьмите другой разрез.`,
+            `sortBy: ${a.sortBy} — этой метрики в выбранном разрезе нет (${why.length ? `${why.map((m) => (m === "vat" ? "НДС (90.03)" : "себестоимость (90.02)")).join(" и ")} — без субконто этого разреза` : "не считается по этому регистру"}). Сортируйте по ${kind === "sales" ? "revenue" : "amount"} или quantity либо возьмите другой разрез.`,
           );
+        }
 
         // Сравнение: тот же разрез за прошлый период; period-разрез сопоставляется по номеру части.
         let prevByKey: Map<string, Aggregated> | undefined;
@@ -352,7 +370,7 @@ function registerReport(server: McpServer, ctx: ServerContext, kind: Kind): void
         if (a.compareWith) {
           const range =
             a.compareWith === "previousYear"
-              ? { from: minusYear(a.from), to: minusYear(a.to) }
+              ? { from: minusYear(a.from), to: minusYear(a.to, true) }
               : previousPeriod(a.from, a.to);
           const prev = await read(range.from, range.to);
           // Части прошлого периода без пары (в марте недель больше, чем в апреле) — своей меткой с пометкой: голая
@@ -360,6 +378,24 @@ function registerReport(server: McpServer, ctx: ServerContext, kind: Kind): void
           const labelMap = new Map(
             prev.parts.map((p, i) => [p.label, cur.parts[i]?.label ?? `${p.label} (прошлый период)`]),
           );
+          // Неполные части (край периода) сравниваются по номеру — называем, какие дни с какими, если длины разные:
+          // 1–4 октября против 1–6 сентября (ревью 1.1).
+          if (granularity) {
+            const uneven = cur.parts.flatMap((c, i) => {
+              const p = prev.parts[i];
+              return p &&
+                (partialBucket(c, granularity) || partialBucket(p, granularity)) &&
+                bucketDays(c) !== bucketDays(p)
+                ? [
+                    `${c.label}: ${c.from}…${c.to} (${bucketDays(c)} дн.) против ${p.from}…${p.to} (${bucketDays(p)} дн.)`,
+                  ]
+                : [];
+            });
+            if (uneven.length)
+              notes.push(
+                `Неполные части периода сравниваются по номеру, дней в них разное число — ${uneven.join("; ")}.`,
+              );
+          }
           const shifted = (prev.rows as ReportRow[]).map((r) =>
             r.dims.period
               ? { ...r, dims: { ...r.dims, period: labelMap.get(r.dims.period) ?? r.dims.period } }
@@ -373,7 +409,7 @@ function registerReport(server: McpServer, ctx: ServerContext, kind: Kind): void
             notes.push(
               `${gone.length} строк разреза были только в прошлом периоде (${kind === "sales" ? "выручка" : "сумма"} ${total(gone).revenueCents / 100}): в items их нет, в compare они учтены.`,
             );
-          compare = { from: range.from, to: range.to, ...metrics(total(prevRows), kind) };
+          compare = { from: range.from, to: range.to, ...metrics(totalOf(prevRows), kind) };
         }
 
         const sortBy = (
@@ -452,7 +488,7 @@ function registerReport(server: McpServer, ctx: ServerContext, kind: Kind): void
           groupBy: dims,
           ...(granularity ? { period: granularity } : {}),
           ...(org ? { organization: org.name } : {}),
-          ...metrics(total(rows), kind),
+          ...metrics(totalOf(rows), kind),
           ...(compare ? { compare } : {}),
           count: sorted.length,
           note: notes.join(" "),

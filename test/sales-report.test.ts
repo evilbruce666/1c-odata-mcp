@@ -45,6 +45,10 @@ describe("части периода и сравнение", () => {
     expect(previousPeriod("2026-11-10", "2026-11-16")).toEqual({ from: "2026-11-03", to: "2026-11-09" });
     expect(minusYear("2024-02-29")).toBe("2023-02-28");
     expect(minusYear("2026-10-31")).toBe("2025-10-31");
+    // Ревью 1.1: конец периода 28.02 в году после високосного — 29.02 год назад, а не потерянный день.
+    expect(minusYear("2025-02-28", true)).toBe("2024-02-29");
+    expect(minusYear("2025-02-28")).toBe("2024-02-28");
+    expect(minusYear("2026-02-28", true)).toBe("2025-02-28");
   });
 
   it("свёртка: метрика, которую нельзя разделить (undefined), не превращается в ноль", () => {
@@ -118,10 +122,14 @@ const SEP = [
   sale({ dep: D2, item: I2, q: 1, rev: 100, cost: 60 }),
 ];
 
-async function tradeSetup(schema: FakeSchema = "ut11", byStart?: (start: string) => object[]) {
+async function tradeSetup(
+  schema: FakeSchema = "ut11",
+  byStart?: (start: string) => object[],
+  env: Record<string, string> = {},
+) {
   const seen: FakeQuery[] = [];
   const fake = fake1C(
-    { READ_ONLY: "true" },
+    { READ_ONLY: "true", ...env },
     {
       schema,
       data: (q) => {
@@ -237,6 +245,36 @@ describe("get_sales_report в Управлении торговлей", () => {
     expect((first["prev"] as { revenue: number }).revenue).toBe(1);
     expect(r.structuredContent["compare"]).toMatchObject({ revenue: 62 });
     expect(String(r.structuredContent["note"])).toContain("только в прошлом периоде");
+  });
+
+  // Ревью 1.1: неполные недели сравниваются по номеру (1–4 октября против 1–6 сентября) — без слова об этом.
+  it("сравнение неполных частей разной длины — названо в note; целые месяцы — без заметки", async () => {
+    const { call } = await tradeSetup();
+    const w = await call({ groupBy: ["period"], period: "week", compareWith: "previousPeriod" });
+    expect(w.isError, w.text).toBeFalsy();
+    const note = String(w.structuredContent["note"]);
+    expect(note).toContain("2026-10-01…2026-10-04 (4 дн.) против 2026-09-01…2026-09-06 (6 дн.)");
+    const m = await call({ groupBy: ["period"], period: "month", compareWith: "previousPeriod" });
+    expect(String(m.structuredContent["note"])).not.toContain("Неполные части");
+  });
+
+  // Ревью 1.1: при переполнении общая подсказка советовала «добавьте фильтр», а отборы отчёта применяются после чтения.
+  it("переполнение: подсказка про разрезы и шаг, тип ошибки прежний (overflow)", async () => {
+    const many = Array.from({ length: 1001 }, (_, i) =>
+      sale({
+        dep: D1,
+        item: `${"0".repeat(8)}-0000-0000-0000-${String(i).padStart(12, "0")}`,
+        q: 1,
+        rev: 1,
+        cost: 0,
+      }),
+    );
+    const { call } = await tradeSetup("ut11", () => many, { ODATA_ANALYTICS_MAX_ROWS: "1000" });
+    const r = await call({ groupBy: ["item"] });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("отборы отчёта число строк из 1С не уменьшают");
+    expect(r.text).not.toContain("добавьте фильтр");
+    expect(JSON.stringify((r as { _meta?: unknown })._meta)).toContain("overflow");
   });
 });
 
@@ -372,6 +410,19 @@ describe("get_sales_report в Бухгалтерии — счёт 90", () => {
     const ok = await call({ groupBy: ["itemGroup"], sortBy: "margin", abc: true });
     expect(ok.isError, ok.text).toBeFalsy();
     expect(ok.structuredContent.items[0]).toMatchObject({ margin: 500, abcClass: "A" });
+  });
+
+  // Ревью 1.1, второй раунд: отказ на discount называл причиной НДС и себестоимость, а скидок в Бухгалтерии нет вовсе;
+  // в итоге пустого результата стояло discount: 0.
+  it("discount в Бухгалтерии: отказ с верной причиной; в итоге пустого результата скидки нет", async () => {
+    const call = await bpSetup();
+    const r = await call({ groupBy: ["item"], sortBy: "discount" });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("не считается по этому регистру");
+    expect(r.text).not.toContain("90.03");
+    const empty = await call({ from: "2026-05-01", to: "2026-05-31", groupBy: ["itemGroup"] });
+    expect(empty.isError, empty.text).toBeFalsy();
+    expect(empty.structuredContent).not.toHaveProperty("discount");
   });
 
   it("разрезы УТ в Бухгалтерии — отказ с подсказкой get_sales_breakdown", async () => {

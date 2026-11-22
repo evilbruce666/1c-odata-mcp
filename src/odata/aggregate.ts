@@ -26,10 +26,12 @@ export class AggregateOverflowError extends Error {
     readonly entitySet: string,
     readonly cap: number,
     readonly period?: string,
+    /** Своя подсказка вместо «сузьте период или добавьте фильтр» — там, где фильтр не помогает. */
+    hint?: string,
   ) {
     super(
       `Слишком много документов для точного итога${period ? ` за ${period}` : ""} ` +
-        `(> ${cap}) по ${entitySet}. Сузьте период или добавьте фильтр ` +
+        `(> ${cap}) по ${entitySet}. ${hint ?? "Сузьте период или добавьте фильтр"} ` +
         `(или увеличьте ODATA_ANALYTICS_MAX_ROWS).`,
     );
     this.name = "AggregateOverflowError";

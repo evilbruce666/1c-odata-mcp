@@ -1,7 +1,7 @@
 import type { Connection } from "../context.js";
 import type { ODataEntity } from "../types/odata.js";
 import { InputError } from "../errors.js";
-import { fetchAllForAggregation } from "./aggregate.js";
+import { AggregateOverflowError, fetchAllForAggregation } from "./aggregate.js";
 import { nextDay, num, resolveAccounts, turnoversByAccounts } from "./accounting.js";
 import { tradeWithoutAccounting } from "./configuration.js";
 import { requireEntity } from "./publication.js";
@@ -68,7 +68,12 @@ const ymd = (d: Date) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pa
 const parse = (s: string) => new Date(`${s}T00:00:00Z`);
 
 /** Части периода: день, неделя (с понедельника), месяц, квартал; первая и последняя обрезаны по from/to. */
-export function buckets(from: string, to: string, g: Granularity | undefined): Bucket[] {
+export function buckets(
+  from: string,
+  to: string,
+  g: Granularity | undefined,
+  tooMany = "возьмите шаг крупнее (неделя, месяц или квартал) или сократите интервал",
+): Bucket[] {
   nextDay(from);
   nextDay(to);
   if (from > to) throw new InputError(`Начало периода ${from} позже конца ${to}.`);
@@ -102,19 +107,19 @@ export function buckets(from: string, to: string, g: Granularity | undefined): B
     last.setUTCDate(last.getUTCDate() - 1);
     out.push({ label, from: ymd(start), to: ymd(last > end ? end : last) });
     if (out.length > MAX_BUCKETS)
-      throw new InputError(
-        `Слишком много частей периода (больше ${MAX_BUCKETS}): возьмите шаг крупнее (неделя, месяц или квартал) или сократите интервал.`,
-      );
+      throw new InputError(`Слишком много частей периода (больше ${MAX_BUCKETS}): ${tooMany}.`);
     cur = next;
   }
   return out;
 }
 
 /** Даты, сдвинутые на год назад (29 февраля → 28). */
-export function minusYear(d: string): string {
+export function minusYear(d: string, end = false): string {
   const [y, m, day] = d.split("-").map(Number) as [number, number, number];
   const leap = (x: number) => (x % 4 === 0 && x % 100 !== 0) || x % 400 === 0;
-  const dd = m === 2 && day === 29 && !leap(y - 1) ? 28 : day;
+  // Конец периода 28.02 в году после високосного — конец февраля и год назад (29.02), иначе 29.02 выпадал (ревью 1.1).
+  const dd =
+    m === 2 && day === 29 && !leap(y - 1) ? 28 : end && m === 2 && day === 28 && leap(y - 1) ? 29 : day;
   return `${y - 1}-${pad(m)}-${pad(dd)}`;
 }
 
@@ -123,6 +128,33 @@ export function minusYear(d: string): string {
  * сентябрь, IV квартал → III (живая проверка: «31 день назад» давал 31 августа — 30 сентября и сравнивал октябрь с
  * одним днём августа). Иначе — столько же дней прямо перед периодом.
  */
+/** Часть короче своей единицы (неделя не с понедельника по воскресенье, месяц не целиком) — обрезана краем периода. */
+export function partialBucket(b: Bucket, g: Granularity): boolean {
+  if (g === "day") return false;
+  const f = parse(b.from);
+  const t = parse(b.to);
+  let start: Date;
+  let next: Date;
+  if (g === "week") {
+    start = new Date(f);
+    start.setUTCDate(start.getUTCDate() - ((start.getUTCDay() + 6) % 7));
+    next = new Date(start);
+    next.setUTCDate(next.getUTCDate() + 7);
+  } else if (g === "month") {
+    start = new Date(Date.UTC(f.getUTCFullYear(), f.getUTCMonth(), 1));
+    next = new Date(Date.UTC(f.getUTCFullYear(), f.getUTCMonth() + 1, 1));
+  } else {
+    const q = Math.floor(f.getUTCMonth() / 3);
+    start = new Date(Date.UTC(f.getUTCFullYear(), q * 3, 1));
+    next = new Date(Date.UTC(f.getUTCFullYear(), q * 3 + 3, 1));
+  }
+  return f.getTime() !== start.getTime() || t.getTime() !== next.getTime() - 86_400_000;
+}
+
+/** Дней в части. */
+export const bucketDays = (b: Bucket) =>
+  Math.round((parse(b.to).getTime() - parse(b.from).getTime()) / 86_400_000) + 1;
+
 export function previousPeriod(from: string, to: string): { from: string; to: string } {
   const f = parse(from);
   const t = parse(to);
@@ -278,12 +310,23 @@ export async function readTradeReport(
       // Свёртка на стороне 1С — только по нужным измерениям.
       `Dimensions='${[...registerDims].join(",")}'`,
     ];
+    // Переполнение: строк — сочетаний значений разрезов за часть — больше потолка. Отборы отчёта (склады, менеджеры…)
+    // применяются после чтения и не помогают — подсказка своя, а не общая «добавьте фильтр» (ревью 1.1).
     const { rows: raw } = await fetchAllForAggregation(
       conn,
       `${register}/Turnovers(${params.join(",")})`,
       { select: [...select, ...resources], ...(expand.size ? { expand: [...expand] } : {}) },
       `${b.from}…${b.to}`,
-    );
+    ).catch((e: unknown) => {
+      if (e instanceof AggregateOverflowError)
+        throw new AggregateOverflowError(
+          e.entitySet,
+          e.cap,
+          e.period,
+          "Строк — сочетаний значений разрезов за часть периода: возьмите шаг period мельче или период короче, уберите самый дробный разрез (товар, клиент) или замените его группой (itemGroup); отборы отчёта число строк из 1С не уменьшают",
+        );
+      throw e;
+    });
     scanned += raw.length;
     for (const r of raw) {
       const item = (r[KEY_ITEM] ?? {}) as ODataEntity;

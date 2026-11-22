@@ -116,7 +116,7 @@ export function registerPartnerSettlementTools(server: McpServer, ctx: ServerCon
             "Платёжный календарь (schedule): долг по датам планового погашения вперёд от on — по дням, неделям или месяцам; отдельно просрочка, долг за горизонтом и без даты",
           ),
         horizon: dateField(
-          "Конец календаря (по умолчанию: day — 30 дней, week — 13 недель, month — 6 месяцев от on)",
+          "Конец календаря, только вместе с schedule (по умолчанию: day — 30 дней, week — 13 недель, month — 6 месяцев, считая текущие неделю и месяц)",
         ).optional(),
         byManager: z
           .boolean()
@@ -143,6 +143,10 @@ export function registerPartnerSettlementTools(server: McpServer, ctx: ServerCon
     }) =>
       guard("read.analytics.get_partner_settlements", async () => {
         const t0 = Date.now();
+        if (horizon && !schedule)
+          throw new InputError(
+            "horizon — конец платёжного календаря: задайте и schedule (day, week или month).",
+          );
         const conn = ctx.db(database);
         const org = organization ? await resolveOrganization(conn, organization) : undefined;
         // Сначала регистр: в базе без него отказ должен называть регистр, а не «партнёр не найден».
@@ -247,9 +251,16 @@ export function registerPartnerSettlementTools(server: McpServer, ctx: ServerCon
         // Платёжный календарь: тот же долг «по срокам», что и в итогах, — по датам погашения вперёд.
         let calendar: Record<string, unknown> | undefined;
         if (schedule) {
-          const end = horizon ?? addDays(on, schedule === "day" ? 29 : schedule === "week" ? 90 : 182);
+          // По умолчанию ровно 30 дней, 13 недель и 6 месяцев, считая текущие: раньше +90 и +182 дня давали 14 недель
+          // и седьмой обрывок месяца (ревью 1.1).
+          const end = horizon ?? defaultHorizon(on, schedule);
           if (end < on) throw new InputError(`horizon ${end} раньше даты расчёта ${on}.`);
-          const parts = buckets(on, end, schedule);
+          const parts = buckets(
+            on,
+            end,
+            schedule,
+            "возьмите schedule крупнее (week или month) или horizon ближе",
+          );
           const sums = parts.map(() => 0);
           let overdueC = 0;
           let beyond = 0;
@@ -327,6 +338,14 @@ export function registerPartnerSettlementTools(server: McpServer, ctx: ServerCon
         });
       }),
   );
+}
+
+/** Конец календаря по умолчанию: 30 дней; конец 13-й недели и 6-го месяца, считая текущие. */
+export function defaultHorizon(on: string, step: "day" | "week" | "month"): string {
+  if (step === "day") return addDays(on, 29);
+  const d = new Date(`${on}T00:00:00Z`);
+  if (step === "week") return addDays(on, 13 * 7 - 1 - ((d.getUTCDay() + 6) % 7));
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 6, 0)).toISOString().slice(0, 10);
 }
 
 /** YYYY-MM-DD плюс n дней. */

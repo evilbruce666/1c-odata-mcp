@@ -3337,7 +3337,7 @@
           "horizon": {
             "type": "string",
             "pattern": "^\\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])$",
-            "description": "Конец календаря (по умолчанию: day — 30 дней, week — 13 недель, month — 6 месяцев от on) (YYYY-MM-DD)"
+            "description": "Конец календаря, только вместе с schedule (по умолчанию: day — 30 дней, week — 13 недель, month — 6 месяцев, считая текущие неделю и месяц) (YYYY-MM-DD)"
           },
           "byManager": {
             "default": false,
