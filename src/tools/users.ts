@@ -21,7 +21,7 @@ export function registerUserTools(server: McpServer, ctx: ServerContext): void {
       title: "Пользователи 1С",
       description:
         "Пользователи 1С (справочник «Пользователи», Бухгалтерия и Управление торговлей) — чтобы выбрать " +
-        "ответственного документа (responsibleRef в create_price_setting, create_payout_order). Поля: ref (Ref_Key), " +
+        "ответственного документа (responsibleRef в инструментах создания документов и copy_document). Поля: ref (Ref_Key), " +
         "name, inactive (недействителен), service (служебный), deletionMark, department — подразделение, если задано. " +
         "Контактов, фото и кадровых данных нет. query — части слов имени (все, без учёта регистра, ё как е). По " +
         "умолчанию только действующие: без помеченных на удаление, недействительных и служебных — includeInactive=true, " +

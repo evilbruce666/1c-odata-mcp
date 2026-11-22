@@ -89,6 +89,15 @@ function metricOf(a: Aggregated, m: Metric): number {
   return x[m] ?? 0;
 }
 
+/** Метрика считается по строкам (в итоге не undefined). */
+function hasMetric(t: Sums, m: Metric): boolean {
+  if (m === "quantity" || m === "revenue") return true;
+  if (m === "revenueExVat") return t.revenueExVatCents !== undefined;
+  if (m === "discount") return t.discountCents !== undefined;
+  if (m === "margin") return t.costCents !== undefined;
+  return t.costExVatCents !== undefined && t.revenueExVatCents !== undefined;
+}
+
 function total(rows: readonly Aggregated[]): Aggregated {
   const add = (a: number | undefined, b: number | undefined) =>
     a === undefined || b === undefined ? undefined : a + b;
@@ -327,6 +336,15 @@ function registerReport(server: McpServer, ctx: ServerContext, kind: Kind): void
           }
         }
         const rows = aggregate(cur.rows as ReportRow[], dims, groupOf);
+        // Метрики, которой в этом разрезе нет (Бухгалтерия: себестоимость и НДС без субконто разреза), сортировать нечем:
+        // раньше все строки шли нулями — порядок по ключу и класс C у всех. Отказ, как на неподдерживаемый разрез.
+        const wanted = (
+          a.sortBy === "amount" ? "revenue" : a.sortBy === "amountExVat" ? "revenueExVat" : a.sortBy
+        ) as Metric | undefined;
+        if (wanted && rows.length && !hasMetric(total(rows), wanted))
+          throw new InputError(
+            `sortBy: ${a.sortBy} — этой метрики в выбранном разрезе нет (${cur.missing.length ? `${cur.missing.map((m) => (m === "vat" ? "НДС (90.03)" : "себестоимость (90.02)")).join(" и ")} — без субконто этого разреза` : "не считается по этому регистру"}). Сортируйте по ${kind === "sales" ? "revenue" : "amount"} или quantity либо возьмите другой разрез.`,
+          );
 
         // Сравнение: тот же разрез за прошлый период; period-разрез сопоставляется по номеру части.
         let prevByKey: Map<string, Aggregated> | undefined;
@@ -337,7 +355,11 @@ function registerReport(server: McpServer, ctx: ServerContext, kind: Kind): void
               ? { from: minusYear(a.from), to: minusYear(a.to) }
               : previousPeriod(a.from, a.to);
           const prev = await read(range.from, range.to);
-          const labelMap = new Map(prev.parts.map((p, i) => [p.label, cur.parts[i]?.label ?? p.label]));
+          // Части прошлого периода без пары (в марте недель больше, чем в апреле) — своей меткой с пометкой: голая
+          // метка могла совпасть с меткой текущей части и сложиться с чужой (ревью 1.1: неделя «30.03» = 1.03 + 30–31.03).
+          const labelMap = new Map(
+            prev.parts.map((p, i) => [p.label, cur.parts[i]?.label ?? `${p.label} (прошлый период)`]),
+          );
           const shifted = (prev.rows as ReportRow[]).map((r) =>
             r.dims.period
               ? { ...r, dims: { ...r.dims, period: labelMap.get(r.dims.period) ?? r.dims.period } }

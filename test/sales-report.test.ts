@@ -118,7 +118,7 @@ const SEP = [
   sale({ dep: D2, item: I2, q: 1, rev: 100, cost: 60 }),
 ];
 
-async function tradeSetup(schema: FakeSchema = "ut11") {
+async function tradeSetup(schema: FakeSchema = "ut11", byStart?: (start: string) => object[]) {
   const seen: FakeQuery[] = [];
   const fake = fake1C(
     { READ_ONLY: "true" },
@@ -126,6 +126,8 @@ async function tradeSetup(schema: FakeSchema = "ut11") {
       schema,
       data: (q) => {
         seen.push(q);
+        if (q.base === "AccumulationRegister_ВыручкаИСебестоимостьПродаж" && q.fn === "Turnovers" && byStart)
+          return byStart(String(q.args["StartPeriod"]));
         if (q.base === "AccumulationRegister_ВыручкаИСебестоимостьПродаж" && q.fn === "Turnovers")
           return String(q.args["StartPeriod"]).includes("2026-10")
             ? OCT
@@ -208,6 +210,33 @@ describe("get_sales_report в Управлении торговлей", () => {
     ]);
     const only = await call({ groupBy: ["item"], departments: [D2] });
     expect(only.structuredContent["revenue"]).toBe(50);
+  });
+
+  // Ревью 1.1: у марта 6 недельных частей, у апреля 5. Лишняя мартовская часть «2026-03-30 (неделя)» сохраняла метку,
+  // совпадавшую с меткой первой апрельской части, и prev строки складывал 1 марта и 30–31 марта. Старые тесты
+  // сравнивали месяц с месяцем — частей поровну, лишней не бывало.
+  it("сравнение по неделям: лишняя часть прошлого периода не складывается с чужой строкой — она в «ушедших»", async () => {
+    const { call } = await tradeSetup("ut11", (start) =>
+      start.includes("2026-03-01")
+        ? [sale({ dep: D1, item: I1, q: 1, rev: 1, cost: 0 })]
+        : start.includes("2026-03-30")
+          ? [sale({ dep: D1, item: I1, q: 1, rev: 61, cost: 0 })]
+          : start.includes("2026-04-01")
+            ? [sale({ dep: D1, item: I1, q: 1, rev: 10, cost: 0 })]
+            : [],
+    );
+    const r = await call({
+      from: "2026-04-01",
+      to: "2026-04-30",
+      groupBy: ["period"],
+      period: "week",
+      compareWith: "previousPeriod",
+    });
+    expect(r.isError, r.text).toBeFalsy();
+    const first = r.structuredContent.items.find((i) => i["period"] === "2026-03-30 (неделя)")!;
+    expect((first["prev"] as { revenue: number }).revenue).toBe(1);
+    expect(r.structuredContent["compare"]).toMatchObject({ revenue: 62 });
+    expect(String(r.structuredContent["note"])).toContain("только в прошлом периоде");
   });
 });
 
@@ -329,6 +358,20 @@ describe("get_sales_report в Бухгалтерии — счёт 90", () => {
     expect(it0).not.toHaveProperty("margin");
     expect(it0).not.toHaveProperty("revenueExVat");
     expect(String(r.structuredContent["note"])).toContain("без нужного субконто");
+  });
+
+  // Ревью 1.1: у метрики без субконто разреза все строки сортировались нулями — порядок по ключу, класс C у всех, без
+  // отказа и заметки. Старые тесты Бухгалтерии не задавали sortBy, а в УТ все метрики есть.
+  it("sortBy по метрике, которой в разрезе нет (маржа по номенклатуре), — отказ, а не нули и класс C", async () => {
+    const call = await bpSetup();
+    for (const sortBy of ["margin", "marginExVat", "revenueExVat"]) {
+      const r = await call({ groupBy: ["item"], sortBy, abc: true });
+      expect(r.isError, sortBy).toBe(true);
+      expect(r.text).toContain("этой метрики в выбранном разрезе нет");
+    }
+    const ok = await call({ groupBy: ["itemGroup"], sortBy: "margin", abc: true });
+    expect(ok.isError, ok.text).toBeFalsy();
+    expect(ok.structuredContent.items[0]).toMatchObject({ margin: 500, abcClass: "A" });
   });
 
   it("разрезы УТ в Бухгалтерии — отказ с подсказкой get_sales_breakdown", async () => {
