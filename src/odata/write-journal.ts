@@ -12,12 +12,10 @@ const STALE_FILE_MS = 24 * 60 * 60 * 1_000;
 const PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
 
 /**
- * Метка запуска процесса — в lock-файле операции. Чужая метка — lock упавшего или перезапущенного процесса: один
- * процесс записи на каталог журнала (требование 1.1, docs/WRITE.md). PID для этого не годится: в контейнере после
- * рестарта он снова 1.
+ * Операции, по которым этот процесс прямо сейчас ждёт ответа 1С: каталог журнала + operationId. Lock операции, которой
+ * здесь нет, — от упавшего или перезапущенного процесса: повтор создания его снимает (один процесс записи на каталог
+ * журнала — docs/WRITE.md). Владельца lock по PID не определить: в контейнере после рестарта он снова 1.
  */
-const BOOT_ID = randomUUID();
-/** Операции, по которым этот процесс прямо сейчас ждёт ответа 1С: каталог журнала + operationId. */
 const LIVE = new Set<string>();
 
 /**
@@ -35,7 +33,7 @@ export function inProgressError(operationId: string): ODataError {
     kind: "in_progress",
     message:
       `Запрос записи operationId ${operationId} ещё выполняется в этом процессе. Подождите ответа и повторите ` +
-      "подтверждение с тем же operationId и аргументами — второго объекта не будет.",
+      "подтверждение с тем же operationId и аргументами — второй записи не будет.",
   });
 }
 
@@ -178,7 +176,6 @@ export class WriteOperationJournal {
     // in_progress, а не «исход неизвестен» (живая проверка 1.1, два одновременных подтверждения по HTTP).
     const live = this.liveKey(operationId);
     LIVE.add(live);
-    await lock.writeFile(BOOT_ID, "utf8").catch(() => undefined);
 
     let requestStarted = false;
     try {
@@ -193,7 +190,8 @@ export class WriteOperationJournal {
           await lock.close().catch(() => undefined);
           await rm(lockPath, { force: true }).catch(() => undefined);
           LIVE.delete(live);
-          return this.retryCreate(entry, entitySet, payload, requestHash, send, findExisting);
+          // await: иначе finally ниже снял бы отметку «запрос идёт», уже поставленную retryCreate (ревью 1.1).
+          return await this.retryCreate(entry, entitySet, payload, requestHash, send, findExisting);
         }
         throw this.unknownResult(operationId);
       }
@@ -339,7 +337,6 @@ export class WriteOperationJournal {
   private async takeOverLock(lockPath: string, operationId: string) {
     try {
       const lock = await open(lockPath, "wx", 0o600);
-      await lock.writeFile(BOOT_ID, "utf8").catch(() => undefined);
       return lock;
     } catch (error) {
       if (!isNodeError(error, "EEXIST")) throw error;
@@ -347,7 +344,6 @@ export class WriteOperationJournal {
     await rm(lockPath, { force: true });
     try {
       const lock = await open(lockPath, "wx", 0o600);
-      await lock.writeFile(BOOT_ID, "utf8").catch(() => undefined);
       return lock;
     } catch (error) {
       if (isNodeError(error, "EEXIST")) throw inProgressError(operationId);
@@ -651,7 +647,9 @@ export class WriteOperationJournal {
       message: retrySafe
         ? `Результат записи operationId ${operationId} неизвестен${reason}. Повторите подтверждение с тем же ` +
           "operationId и теми же аргументами: объект с назначенной ссылкой 1С создаст не больше одного раза, а повтор " +
-          "сначала проверит, не создан ли он уже. Новый предпросмотр с новым operationId до этого не делайте."
+          "сначала проверит, не создан ли он уже. Новый предпросмотр с новым operationId до этого не делайте. Если 1С " +
+          "на каждый повтор отвечает той же ошибкой — причина в данных или в базе: сверьте и закройте операцию через " +
+          "write.operation.status с markNotApplied=true."
         : `Результат записи operationId ${operationId} неизвестен${reason}. Повторная отправка заблокирована. ` +
           "Проверьте состояние операции через write.operation.status и точный объект или настройку в 1С. Новый предпросмотр допустим только после подтверждения отсутствия результата.",
       cause,

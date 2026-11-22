@@ -1,5 +1,6 @@
 import { writableHint, type Behavior, type ConnectionConfig } from "../config/env.js";
 import { logger } from "../logger.js";
+import { InputError } from "../errors.js";
 import { ODataError, fromHttpStatus } from "./errors.js";
 import type { ODataCollection, ODataEntity } from "../types/odata.js";
 import { currentWriteOperationId, currentWriteRequestHash } from "./write-operation-context.js";
@@ -333,6 +334,13 @@ export class ODataClient {
     // Создание с назначенной ссылкой и неизвестным исходом (1.1): сначала чтение по ссылке — до того, как инструмент
     // заново проверит 1С (иначе, например, проверка дубля ИНН нашла бы уже созданного контрагента и отказала).
     const entry = await this.writeJournal.lookup(operationId);
+    // Другие аргументы при неизвестном исходе создания: совет «новый предпросмотр» создал бы второй объект, если первая
+    // запись дошла (ревью 1.1) — просим повторить с теми же аргументами.
+    if (entry && isRetryableCreate(entry) && entry.requestHash !== requestHash)
+      throw new InputError(
+        `Аргументы не совпадают с предпросмотром operationId ${operationId}, а исход прошлой попытки создания неизвестен. ` +
+          "Повторите подтверждение с теми же аргументами, что в предпросмотре: новый предпросмотр мог бы создать второй объект.",
+      );
     if (entry && isRetryableCreate(entry) && entry.requestHash === requestHash) {
       if (this.writeJournal.isLive(operationId)) throw inProgressError(operationId);
       const found = await this.findByRef(entry.entitySet, entry.refKey);

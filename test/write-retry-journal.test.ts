@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ODataError } from "../src/odata/errors.js";
 import { WriteOperationJournal } from "../src/odata/write-journal.js";
 
@@ -110,11 +110,58 @@ describe("журнал: повтор создания после неизвес�
       return { Ref_Key: REF };
     };
     const find = async () => undefined;
-    const first = j.execute(OP, SET, { a: 1 }, "h", send, undefined, find);
-    const second = j.execute(OP, SET, { a: 1 }, "h", send, undefined, find);
-    await expect(second).rejects.toMatchObject({ kind: "in_progress" });
+    // Lock достаётся любому из двух (ревью 1.1: тест ждал отказа именно от второго и падал через раз).
+    const both = Promise.allSettled([
+      j.execute(OP, SET, { a: 1 }, "h", send, undefined, find),
+      j.execute(OP, SET, { a: 1 }, "h", send, undefined, find),
+    ]);
+    await vi.waitFor(() => expect(posts).toBe(1));
     release();
-    await expect(first).resolves.toMatchObject({ Ref_Key: REF });
+    const results = await both;
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
+    expect(rejected.reason).toMatchObject({ kind: "in_progress" });
     expect(posts).toBe(1);
+  });
+
+  // Ревью 1.1: подтверждение, захватившее lock уже после неизвестного исхода первого, уходило в retryCreate без await,
+  // и finally снимал отметку «запрос идёт» — соседнее подтверждение отправило бы второй POST (объект один — индекс 1С).
+  it("переход в повтор под lock: пока повтор шлёт POST, операция отмечена как идущая", async () => {
+    const j = journal();
+    await j.prepare(OP, SET, { a: 1 }, "h", REF);
+    const internal = j as unknown as { read: (id: string) => Promise<unknown> };
+    const read = internal.read.bind(j);
+    let releaseRead!: () => void;
+    const readGate = new Promise<void>((r) => (releaseRead = r));
+    let calls = 0;
+    internal.read = async (id: string) => {
+      const entry = await read(id);
+      calls += 1;
+      if (calls === 1) await readGate; // B прочитал «prepared» и ждёт, пока A закончится неизвестным исходом
+      return entry;
+    };
+    let releasePost!: () => void;
+    const postGate = new Promise<void>((r) => (releasePost = r));
+    const b = j.execute(
+      OP,
+      SET,
+      { a: 1 },
+      "h",
+      async () => {
+        await postGate;
+        return { Ref_Key: REF };
+      },
+      undefined,
+      async () => undefined,
+    );
+    internal.read = read;
+    await expect(j.execute(OP, SET, { a: 1 }, "h", lost, undefined, async () => undefined)).rejects.toThrow();
+    internal.read = async (id: string) => read(id);
+    releaseRead();
+    await vi.waitFor(async () => expect((await j.lookup(OP))?.state).toBe("executing"));
+    const liveDuringPost = j.isLive(OP);
+    releasePost();
+    await expect(b).resolves.toMatchObject({ Ref_Key: REF });
+    expect(liveDuringPost).toBe(true);
   });
 });

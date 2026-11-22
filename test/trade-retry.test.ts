@@ -550,6 +550,8 @@ describe("1.1: повтор подтверждения создания посл
     await confirm(w, op);
     const c = await w.call(PT, { ...pArgs, name: "ZZ-TEST другой", confirm: true, operationId: op });
     expect(c.isError).toBe(true);
+    // Ревью 1.1: раньше совет «выполните новый предпросмотр» — он создал бы второй объект, если первая запись дошла.
+    expect(c.text).toContain("Повторите подтверждение с теми же аргументами");
     expect(w.writes.filter((x) => x.set === PS)).toHaveLength(1);
     expect(w.store[PS]!.size).toBe(0);
   });

@@ -291,7 +291,7 @@ async function main(): Promise<number> {
         ref: String(inv["ref"]),
       });
 
-    // --- создание: ответ потерян → повтор заблокирован → статус по Ref_Key → повтор из журнала
+    // --- создание: ответ потерян → повтор находит объект по Ref_Key (1.1) → статус succeeded → повтор из журнала
     {
       const a = { name: `${tag} потерянный ответ` };
       const p = await run("write.counterparty.create_counterparty", { ...a, confirm: false });
@@ -299,9 +299,7 @@ async function main(): Promise<number> {
       lose("POST", "after");
       const c1 = await run("write.counterparty.create_counterparty", { ...a, confirm: true, operationId });
       restore();
-      const blocked = (
-        await run("write.counterparty.create_counterparty", { ...a, confirm: true, operationId })
-      ).err;
+      const retry = await run("write.counterparty.create_counterparty", { ...a, confirm: true, operationId });
       const st = await run("write.operation.status", { operationId });
       const c3 = await run("write.counterparty.create_counterparty", { ...a, confirm: true, operationId });
       if (typeof st.sc["ref"] === "string") made.push(["Catalog_Контрагенты", st.sc["ref"]]);
@@ -311,11 +309,11 @@ async function main(): Promise<number> {
       check(
         "создание: потерянный ответ → сверка по Ref_Key",
         c1.err &&
-          blocked &&
-          st.sc["status"] === "found_reconciled" &&
+          retry.sc["reconciled"] === true &&
+          st.sc["status"] === "succeeded" &&
           c3.sc["replayed"] === true &&
           found.value.length === 1,
-        `статус ${String(st.sc["status"])}, в 1С объектов: ${found.value.length}`,
+        `повтор: ${retry.sc["reconciled"] === true ? "найден по ссылке" : retry.text.slice(0, 120)}; статус ${String(st.sc["status"])}, в 1С объектов: ${found.value.length}`,
       );
     }
 
