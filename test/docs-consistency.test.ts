@@ -139,6 +139,7 @@ describe("документация совпадает с кодом", () => {
     expect(manifest.long_description).toContain(`${names.length} ${toolsWord(names.length)}`);
     // Объём описаний для профиля инструментов — там же, где число: CONNECTING и .env.example (аудит: отставали).
     expect(read("docs/CONNECTING.md")).toContain(`всех ${names.length} ${genitive}`);
+    expect(read("docs/INTEGRATIONS.md")).toContain(`У всех ${names.length} ${genitive}`);
     expect(read(".env.example")).toContain(`всех ${names.length} —`);
   });
 

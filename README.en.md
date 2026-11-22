@@ -9,7 +9,7 @@ standard OData interface. Ask your 1C database in plain language; nothing is ins
 - **1C:Accounting 3.0** — full support: a morning cash-and-debts brief, overdue receivables and payables, unpaid
   invoices, a month-end close check traced down to the document, account ledger cards, trial balance, postings,
   reconciliation statements, sales, taxes; write of documents and catalogs with preview and confirmation, including payments split across contracts, transfers between own accounts and card acquiring receipts.
-- **1C:Trade Management 11** (verified on 11.5) — stock by warehouse and item group (with cost from the «Себестоимость товаров» register), unit sales including retail with
+- **1C:Trade Management 11** (verified on 11.5) — stock by warehouse and item group (with cost from the «Себестоимость товаров» register), unit sales and gross margin by item, manager and department, including retail with
   revenue and returns, customer and supplier balances by due date, cash in bank accounts, cash desks and POS, current
   prices; write of price settings, catalogs (partners, counterparties, bank accounts, contacts, contracts,
   agreements, items and their folders), warehouse documents, cash and bank documents, payment requests, sales and
