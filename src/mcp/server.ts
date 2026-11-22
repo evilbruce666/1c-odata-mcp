@@ -166,6 +166,7 @@ const PAGE_LISTS: Record<string, PageList> = {
   "read.analytics.get_partner_settlements": { list: "partners", countIsTotal: true },
   "read.catalog.list_warehouses": { list: "items", countIsTotal: true },
   "read.catalog.list_items": { list: "items", countIsTotal: true },
+  "read.catalog.list_users": { list: "items", countIsTotal: true },
   "read.analytics.get_prices": { list: "items", countIsTotal: true },
   "read.analytics.get_debtors": { list: "debtors", countIsTotal: true },
   "read.analytics.get_creditors": { list: "creditors", countIsTotal: true },

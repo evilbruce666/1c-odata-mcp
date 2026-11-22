@@ -48,7 +48,10 @@ export function registerUserTools(server: McpServer, ctx: ServerContext): void {
         // Как у номенклатуры: сначала буквально, похожие буквы кириллицы и латиницы — только если ничего нет.
         const literal = query ? visible.filter((u) => matches(u, query, strictText)) : visible;
         const found = query && !literal.length ? visible.filter((u) => matches(u, query, foldText)) : literal;
-        const hidden = users.length - visible.length;
+        // Скрытые — среди подходящих под запрос, а не во всём справочнике (ревью 1.1).
+        const fits = (u: UserRow) => !query || matches(u, query, strictText) || matches(u, query, foldText);
+        const shown = new Set(visible);
+        const hidden = users.filter((u) => fits(u) && !shown.has(u)).length;
         // Вторичный ключ обязателен: каждая страница считается заново.
         const sorted = found.sort((a, b) => a.name.localeCompare(b.name, "ru") || a.ref.localeCompare(b.ref));
         const page = sorted.slice(0, limit);

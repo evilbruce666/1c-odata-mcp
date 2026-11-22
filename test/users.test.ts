@@ -132,9 +132,7 @@ describe("responsibleRef проверяется до записи", () => {
     const { call } = await setup("ut11");
     const r = await call("write.pricing.create_price_setting", price(g(1).toUpperCase()));
     expect(r.isError, r.text).toBeFalsy();
-    expect((r.structuredContent["payload"] as Record<string, unknown>)["Ответственный_Key"]).toBe(
-      g(1).toUpperCase(),
-    );
+    expect((r.structuredContent["payload"] as Record<string, unknown>)["Ответственный_Key"]).toBe(g(1));
   });
 
   it("create_payout_order (Бухгалтерия): недействительный ответственный — отказ до записи", async () => {
@@ -150,5 +148,24 @@ describe("responsibleRef проверяется до записи", () => {
     expect(r.isError).toBe(true);
     expect(r.text).toContain("недействителен");
     expect(fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
+  });
+});
+
+describe("ревью 1.1", () => {
+  it("list_users: ровно limit пользователей — без пустой следующей страницы, listTotal сразу", async () => {
+    const { call } = await setup("ut11");
+    const r = await call("read.catalog.list_users", { limit: 2 });
+    expect(r.structuredContent["nextOffset"]).toBeUndefined();
+    expect(r.structuredContent["listTotal"] ?? r.structuredContent["count"]).toBe(2);
+    const one = await call("read.catalog.list_users", { limit: 1 });
+    expect(one.structuredContent["nextOffset"]).toBe(1);
+  });
+
+  it("list_users: «Скрыто N» — только среди подходящих под запрос", async () => {
+    const { call } = await setup("ut11");
+    const r = await call("read.catalog.list_users", { query: "иванов" });
+    expect(String(r.structuredContent["note"])).toContain("Скрыто 1");
+    const none = await call("read.catalog.list_users", { query: "сидоров" });
+    expect(String(none.structuredContent["note"] ?? "")).not.toContain("Скрыто");
   });
 });

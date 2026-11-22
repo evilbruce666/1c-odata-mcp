@@ -733,6 +733,13 @@ describe("Бухгалтерия: прочие операции денежных
       }
     }
     // Правка без счётов (комментарий) — не проверяется; тот же вид с верным счётом — не отказ «правкой нельзя».
+    // Явный вид не перевод — документ не читается (ревью 1.1): запросов как у правки комментария.
+    const before = s.fake.requests.length;
+    await upd({ Комментарий: "y" });
+    const plain = s.fake.requests.length - before;
+    const mid = s.fake.requests.length;
+    await upd({ ВидОперации: "ОплатаПоставщику", СчетКонтрагента_Key: B2 });
+    expect(s.fake.requests.length - mid).toBeLessThanOrEqual(plain);
     const comment = await upd({ Комментарий: "x" });
     expect(comment.err, comment.text).toBe(false);
     const same = await upd({ ВидОперации: "ПереводНаДругойСчет" });

@@ -84,10 +84,15 @@ export async function checkResponsible(
     );
   const set = await requireEntity(conn, [USERS], "Справочник «Пользователи»");
   const hint = "Выберите действующего пользователя через read.catalog.list_users. Ничего не записано.";
+  // Поля — по схеме базы: в старой БСП нет «Служебный», и запрос с ним упал бы ошибкой 400 (ревью 1.1).
+  const props = new Set((await conn.getMetadata()).entities.get(set)?.properties.map((p) => p.name) ?? []);
+  const select = ["Ref_Key", "Description", "DeletionMark", "Недействителен", "Служебный"].filter((f) =>
+    props.has(f),
+  );
   let u: ODataEntity;
   try {
     u = await conn.client.getEntity<ODataEntity>(
-      `${set}(${odataGuid(guid)})?$format=json&$select=Ref_Key,Description,DeletionMark,Недействителен,Служебный`,
+      `${set}(${odataGuid(guid)})?$format=json&$select=${select.join(",")}`,
     );
   } catch (e) {
     if (e instanceof ODataError && e.kind === "not_found")

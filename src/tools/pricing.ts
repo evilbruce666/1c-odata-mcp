@@ -237,7 +237,7 @@ export function registerPricingTools(server: McpServer, ctx: ServerContext): voi
           ...(s.trade ? { Статус: "Согласован", Согласован: true } : {}),
           ...(s.headerKind ? { [s.headerKind]: kind.ref } : {}),
           ...(comment ? { Комментарий: comment } : {}),
-          ...(responsible ? { Ответственный_Key: responsible } : {}),
+          ...(responsible ? { Ответственный_Key: clean(responsible) } : {}),
           ...(s.trade ? { ВидыЦен: [{ LineNumber: 1, ВидЦены_Key: kind.ref }] } : {}),
           [s.rows]: lines.map((l, i) => ({
             LineNumber: i + 1,

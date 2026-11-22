@@ -1588,6 +1588,8 @@ async function writeoffKindRefusal(
   let doc = fields;
   if (updateRef) {
     if (!keys.some((k) => Object.hasOwn(fields, k))) return undefined;
+    // Вид задан правкой и это не перевод — итог не перевод, читать документ незачем (ревью 1.1).
+    if (typeof kind === "string" && kind !== TRANSFER_KIND) return undefined;
     const current = await conn.client.getEntity<ODataEntity>(
       `${entitySet}(${odataGuid(updateRef.replace(/[{}']/g, ""))})${buildQuery({ select: keys })}`,
     );
