@@ -44,6 +44,9 @@ describe("части периода и сравнение", () => {
     expect(previousPeriod("2026-10-01", "2026-12-31")).toEqual({ from: "2026-07-01", to: "2026-09-30" });
     expect(previousPeriod("2026-03-01", "2026-03-31")).toEqual({ from: "2026-02-01", to: "2026-02-28" });
     expect(previousPeriod("2026-11-10", "2026-11-16")).toEqual({ from: "2026-11-03", to: "2026-11-09" });
+    // Ревью 1.1: текущий месяц «по сегодня» — те же числа прошлого месяца, а не столько же дней перед периодом.
+    expect(previousPeriod("2026-11-01", "2026-11-22")).toEqual({ from: "2026-10-01", to: "2026-10-22" });
+    expect(previousPeriod("2026-03-01", "2026-03-30")).toEqual({ from: "2026-02-01", to: "2026-02-28" });
     expect(minusYear("2024-02-29")).toBe("2023-02-28");
     expect(minusYear("2026-10-31")).toBe("2025-10-31");
     // Ревью 1.1: конец периода 28.02 в году после високосного — 29.02 год назад, а не потерянный день.
@@ -317,7 +320,7 @@ const BP_ROWS = [
     СуммаTurnoverCr: 0,
   },
 ];
-async function bpSetup() {
+async function bpSetup(rows: object[] = BP_ROWS) {
   const fake = fake1C(
     { READ_ONLY: "true" },
     {
@@ -340,7 +343,7 @@ async function bpSetup() {
               },
             ]
           : q.fn === "BalanceAndTurnovers"
-            ? BP_ROWS.map((r) => ({
+            ? rows.map((r) => ({
                 СуммаOpeningBalanceDr: 0,
                 СуммаOpeningBalanceCr: 0,
                 СуммаClosingBalanceDr: 0,
@@ -424,6 +427,18 @@ describe("get_sales_report в Бухгалтерии — счёт 90", () => {
     const empty = await call({ from: "2026-05-01", to: "2026-05-31", groupBy: ["itemGroup"] });
     expect(empty.isError, empty.text).toBeFalsy();
     expect(empty.structuredContent).not.toHaveProperty("discount");
+  });
+
+  // Ревью 1.1: в незакрытом месяце 90.02 пуст — маржа равна выручке (100 %), а note говорил только общее.
+  it("месяц без себестоимости по 90.02 — названо в note, цифры не прячутся", async () => {
+    const noCost = BP_ROWS.filter((r) => r.Account_Key !== A.c);
+    const call = await bpSetup(noCost);
+    const r = await call({ groupBy: ["itemGroup"] });
+    expect(r.isError, r.text).toBeFalsy();
+    expect(r.structuredContent).toMatchObject({ revenue: 1200, margin: 1200 });
+    expect(String(r.structuredContent["note"])).toContain("по 90.02 нет себестоимости");
+    const closed = await (await bpSetup())({ groupBy: ["itemGroup"] });
+    expect(String(closed.structuredContent["note"])).not.toContain("по 90.02 нет себестоимости");
   });
 
   it("разрезы УТ в Бухгалтерии — отказ с подсказкой get_sales_breakdown", async () => {
@@ -585,6 +600,10 @@ describe("сценарий sales_review: его вызовы работают в
       'groupBy=["item"], sortBy="revenue"',
       'compareWith="previousYear"',
       'compareWith="previousPeriod"',
+      'sortBy="revenue", limit=10',
+      "abc=true, limit=10",
+      "compare.from",
+      "по 90.02 нет себестоимости",
     ])
       expect(prompt.text).toContain(s);
   });

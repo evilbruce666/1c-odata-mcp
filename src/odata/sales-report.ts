@@ -166,6 +166,18 @@ export function previousPeriod(from: string, to: string): { from: string; to: st
     const pt = new Date(Date.UTC(f.getUTCFullYear(), f.getUTCMonth(), 0));
     return { from: ymd(pf), to: ymd(pt) };
   }
+  // Начало месяца по число того же месяца (текущий месяц «по сегодня») — те же числа прошлого месяца: 1–22 ноября
+  // против 1–22 октября, а не 22 последних дня октября (ревью 1.1). Число за концом прошлого месяца — его конец.
+  if (
+    f.getUTCDate() === 1 &&
+    f.getUTCFullYear() === t.getUTCFullYear() &&
+    f.getUTCMonth() === t.getUTCMonth()
+  ) {
+    const pf = new Date(Date.UTC(f.getUTCFullYear(), f.getUTCMonth() - 1, 1));
+    const last = new Date(Date.UTC(f.getUTCFullYear(), f.getUTCMonth(), 0)).getUTCDate();
+    const pt = new Date(Date.UTC(f.getUTCFullYear(), f.getUTCMonth() - 1, Math.min(t.getUTCDate(), last)));
+    return { from: ymd(pf), to: ymd(pt) };
+  }
   const days = Math.round((t.getTime() - f.getTime()) / 86_400_000) + 1;
   const pt = new Date(f);
   pt.setUTCDate(pt.getUTCDate() - 1);
@@ -388,7 +400,13 @@ export async function readAccountingReport(
   dims: readonly Dim[],
   parts: readonly Bucket[],
   filter: AccountingFilter,
-): Promise<{ rows: ReportRow[]; scanned: number; missing: Array<"vat" | "cost"> }> {
+): Promise<{
+  rows: ReportRow[];
+  scanned: number;
+  missing: Array<"vat" | "cost">;
+  /** Части с выручкой без единого оборота Дт 90.02 — обычно месяц ещё не закрыт: маржа там равна выручке. */
+  uncosted: Bucket[];
+}> {
   const [revenue, vat, cost] = await Promise.all([
     resolveAccounts(conn, ["90.01"]),
     resolveAccounts(conn, ["90.03"]),
@@ -406,10 +424,12 @@ export async function readAccountingReport(
     : undefined;
   const missing = new Set<"vat" | "cost">();
   const rows: ReportRow[] = [];
+  const uncosted: Bucket[] = [];
   let scanned = 0;
   for (const b of parts) {
     const { rows: raw } = await turnoversByAccounts(conn, [...kind.keys()], b.from, b.to, filter.orgKey);
     scanned += raw.length;
+    const before = rows.length;
     for (const r of raw) {
       const k = kind.get(String(r["Account_Key"]));
       if (!k) continue;
@@ -464,6 +484,10 @@ export async function readAccountingReport(
         });
       }
     }
+    // Ревью 1.1: в незакрытом месяце 90.02 пуст, и маржа выходила равной выручке (100 %) без слова об этом.
+    // Только сигнал в note — цифры не прячем: нулевая себестоимость бывает и законной.
+    const part = rows.slice(before);
+    if (part.some((r) => r.revenueCents > 0) && !part.some((r) => (r.costCents ?? 0) !== 0)) uncosted.push(b);
   }
   if (missing.has("vat") || missing.has("cost"))
     for (const r of rows) {
@@ -473,7 +497,7 @@ export async function readAccountingReport(
         r.costExVatCents = undefined;
       }
     }
-  return { rows, scanned, missing: [...missing] };
+  return { rows, scanned, missing: [...missing], uncosted };
 }
 
 // ─── Свёртка ───

@@ -214,7 +214,7 @@ function registerReport(server: McpServer, ctx: ServerContext, kind: Kind): void
             "У строки: quantity, revenue и revenueExVat (выручка с НДС и без), cost, costExVat, margin, marginExVat " +
             "(себестоимость и валовая прибыль; до расчёта себестоимости за месяц — предварительные, дату называет note). " +
             "Метрика, которую нельзя разделить по разрезу (в Бухгалтерии себестоимость и НДС без номенклатуры), не выводится — " +
-            "сказано в note. compareWith — previousPeriod (такой же период перед этим) или previousYear: у строки prev и " +
+            "сказано в note. compareWith — previousPeriod (такой же период перед этим; целые месяцы — столько же месяцев назад, месяц «по сегодня» — те же числа прошлого месяца) или previousYear: у строки prev и " +
             "growth (рост выручки в %), итог сравнения — в compare. sortBy — по чему сортировать (по умолчанию revenue); abc=true — " +
             "класс A/B/C по накопленной доле этой метрики (80 % / 95 %). Отборы: organization, а в УТ ещё warehouses, " +
             "departments, managers, partners (Ref_Key). count — всего строк; длинный список — с offset=nextOffset.",
@@ -316,6 +316,7 @@ function registerReport(server: McpServer, ctx: ServerContext, kind: Kind): void
                 kind === "sales" ? SALES_SPEC : PURCHASES_SPEC,
               )),
               missing: [] as string[],
+              uncosted: [] as { from: string; to: string }[],
             };
           return {
             parts,
@@ -460,6 +461,10 @@ function registerReport(server: McpServer, ctx: ServerContext, kind: Kind): void
           };
         });
 
+        if (cur.uncosted.length)
+          notes.push(
+            `За ${cur.uncosted.map((b) => `${b.from}…${b.to}`).join(", ")} по 90.02 нет себестоимости при выручке: месяц, вероятно, ещё не закрыт — маржа там равна выручке и не окончательна.`,
+          );
         if (cur.missing.length)
           notes.push(
             `В Бухгалтерии ${cur.missing.map((m) => (m === "vat" ? "НДС (90.03)" : "себестоимость (90.02)")).join(" и ")} ведётся без нужного субконто — в этом разрезе не делится и не выводится; итог по ней — при разрезе без номенклатуры.`,
