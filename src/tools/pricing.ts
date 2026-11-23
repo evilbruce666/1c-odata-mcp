@@ -53,7 +53,10 @@ const DEVIATION_PCT = 20;
 /** Название позиции в сжатой строке. */
 const COMPACT_NAME = 60;
 
-/** Запас к пределу ответа: operationId, сведения о базе, примечание о сжатии. */
+/** Поле operationId, которое обёртка записи добавит к ответу: `,"operationId":"<uuid>"`. */
+const OPERATION_ID_CHARS = 55;
+
+/** Запас к пределу сжатого ответа: operationId, примечание о сжатии. */
 const RESPONSE_RESERVE = 1_500;
 
 const mechanismField = z
@@ -178,7 +181,9 @@ function fitPrices(
   const limit = Math.min(maxResponseChars, MAX_RESPONSE_CHARS);
   const budget = (limit >= MAX_RESPONSE_CHARS ? limit : limit - 1_000) - RESPONSE_RESERVE;
   const size = (o: Record<string, unknown>) => renderJson(o).length;
-  if (size(sc) <= budget) return result;
+  // Как в 1.1, пока ответ помещается в сам предел: запас нужен только сжатым ответам (ревью: при пределе 10 000
+  // ответ 15–25 строк, помещавшийся в 1.1, терял таблицу view).
+  if (size(sc) + OPERATION_ID_CHARS <= limit) return result;
   const notes = [...((sc["notes"] as string[] | undefined) ?? [])];
   let extra: Record<string, unknown> = {};
   const view = sc["view"] as PreviewView | undefined;

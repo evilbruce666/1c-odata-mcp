@@ -985,6 +985,43 @@ describe("масштаб: до 1000 строк, ответ в пределе, с
     expect(s.posts).toHaveLength(1);
   });
 
+  it("ответ, помещавшийся в предел в 1.1, не меняется: таблица строк view и полные prices на месте", async () => {
+    // Ревью: при пределе 10 000 ответ на 18 строк (8 943 в 1.1) помещался, а сжимался по бюджету с запасом.
+    const c = scaleCase(18, 100, 0);
+    const s = setup({ items: c.items, base: c.base, maxResponseChars: 10_000 });
+    const r = await s.call(SET, { priceKind: "Закупочная", lines: c.lines, date: AT });
+    expect(r.isError, r.text.slice(0, 300)).toBeFalsy();
+    expect(r.text.length).toBeGreaterThan(8_900);
+    expect(r.text.length).toBeLessThanOrEqual(10_000);
+    const view = r.structuredContent["view"] as { tables: Record<string, unknown[]> };
+    expect(Object.values(view.tables).some((t) => t.length === 18)).toBe(true);
+    expect((r.structuredContent["prices"] as Array<Record<string, unknown>>)[0]).toHaveProperty("ref");
+    expect(String(r.structuredContent["notes"])).not.toMatch(/view не повторены|сжаты|не помещаются/);
+    expect(r.structuredContent["pricesFormat"]).toBeUndefined();
+  });
+
+  it("только отклонения: сначала более поздние цены, затем по величине изменения; процент до десятых", async () => {
+    const n = 300;
+    const base = BIG.slice(0, n).flatMap((i) => [
+      rec(I(i), K_BASE, 100, "2026-11-01T00:00:01"),
+      ...(i % 50 === 0 ? [rec(I(i), K_BASE, 101, "2026-12-01T00:00:00")] : []),
+    ]);
+    const price = (i: number) => Math.round((121 + (i % 97) + (i % 7) / 3) * 100) / 100;
+    const s = setup({ items: scaleCase(n, 10, 0).items, base, maxResponseChars: 10_000 });
+    const lines = BIG.slice(0, n).map((i) => ({ itemRef: I(i), price: price(i) }));
+    const r = await s.call(SET, { priceKind: "Закупочная", lines, date: AT });
+    expect(r.isError, r.text.slice(0, 300)).toBeFalsy();
+    expect(r.structuredContent["pricesComplete"]).toBe(false);
+    const rows = r.structuredContent["prices"] as Array<Record<string, number | string>>;
+    const later = rows.filter((x) => x["laterPriceFrom"]);
+    expect(later.map((x) => Number(x["line"]) % 50)).toEqual(later.map(() => 0));
+    expect(later.every((x) => x["laterPriceFrom"] === "2026-12-01T00:00:00")).toBe(true);
+    expect(rows.slice(0, later.length)).toEqual(later);
+    const rest = rows.slice(later.length).map((x) => Number(x["changePct"]));
+    expect(rest).toEqual([...rest].sort((a, b) => b - a));
+    for (const x of rows) expect(x["changePct"]).toBe(Math.round((price(Number(x["line"])) - 100) * 10) / 10);
+  });
+
   it("порог 20 %: ровно 20 % — не отклонение, больше — отклонение, текущая 0 — отклонение", async () => {
     const base = [1, 2, 3, 4, 5].map((i) => rec(I(i), K_BASE, 100, "2026-11-01T00:00:01"));
     base.push(rec(I(6), K_BASE, 0, "2026-11-01T00:00:01"), rec(I(7), K_BASE, 30, "2026-11-01T00:00:01"));
