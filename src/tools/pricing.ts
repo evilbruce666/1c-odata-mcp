@@ -341,7 +341,7 @@ export function registerPricingTools(server: McpServer, ctx: ServerContext): voi
         const current = new Map(
           (
             await kindWide(
-              () => slicePrices(conn, mech, { kindRefs: [kind.ref], at }),
+              () => slicePrices(conn, mech, { kindRefs: [kind.ref], at, lean: true }),
               () => slicePrices(conn, mech, { kindRefs: [kind.ref], itemRefs, at }),
             )
           )
@@ -349,7 +349,7 @@ export function registerPricingTools(server: McpServer, ctx: ServerContext): voi
             .map((r) => [priceKey(r), r]),
         );
         const later = await kindWide(
-          () => laterPrices(conn, mech, { kindRef: kind.ref, after: at }),
+          () => laterPrices(conn, mech, { kindRef: kind.ref, after: at, lean: true }),
           () => laterPrices(conn, mech, { kindRef: kind.ref, itemRefs, after: at }),
         );
         const sameMoment = later.filter((r) => r.period === at && seen.has(priceKey(r)));

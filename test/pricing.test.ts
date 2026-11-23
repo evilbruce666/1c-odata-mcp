@@ -916,7 +916,14 @@ describe("масштаб: до 1000 строк, ответ в пределе, с
     expect(p.structuredContent["operationId"]).toEqual(expect.any(String));
     // Больше 80 строк — цены по виду цен целиком, без пачек по ссылкам. Больше 200 — и справочник целиком
     // (readPageAttributes): 1000 строк — не больше 15 запросов вместо 150.
-    if (n > 80) expect(gets.filter((g) => /ЦеныНоменклатуры.*Номенклатура_Key eq/.test(g))).toEqual([]);
+    if (n > 80) {
+      expect(gets.filter((g) => /ЦеныНоменклатуры.*Номенклатура_Key eq/.test(g))).toEqual([]);
+      // Вид цен целиком — только поля цены: со всеми полями на рабочей УТ 20,8 МБ вместо 1,4.
+      const wide = gets.filter((g) => /ЦеныНоменклатуры_RecordType(\/SliceLast\(|\?.*Period ge)/.test(g));
+      expect(wide).toHaveLength(2);
+      for (const g of wide)
+        expect(g).toMatch(/\$select=Номенклатура_Key,ВидЦены_Key,Характеристика_Key,Цена,Period/);
+    }
     if (n > 200) {
       expect(gets.filter((g) => /Catalog_Номенклатура.*Ref_Key eq/.test(g))).toEqual([]);
       expect(gets.length).toBeLessThanOrEqual(15);

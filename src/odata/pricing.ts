@@ -299,15 +299,43 @@ const BATCH = 20;
 
 const quoted = (text: string) => `'${text.replace(/'/g, "''")}'`;
 
-/** Действующие цены на момент (срез последних); без itemRefs — все позиции этих видов цен. */
+/**
+ * Только поля записи цены, что опубликованы у регистра. Нужно чтению вида цен целиком: со всеми полями срез вида на
+ * 14 тыс. позиций на копии рабочей УТ — 20,8 МБ и 7,4 с, с этими — 1,4 МБ и 0,9 с.
+ */
+async function recordFields(conn: Connection, mech: PriceMechanism): Promise<string[]> {
+  const s = MECHANISMS[mech];
+  const props = new Set(
+    (await conn.getMetadata()).entities.get(s.records)?.properties.map((p) => p.name) ?? [],
+  );
+  const wanted = [
+    "Номенклатура_Key",
+    s.kindKey,
+    ...(s.characteristic ? [s.characteristic] : []),
+    "Цена",
+    "Period",
+  ];
+  return wanted.filter((f) => props.has(f));
+}
+
+/**
+ * Действующие цены на момент (срез последних); без itemRefs — все позиции этих видов цен. lean — только поля цены
+ * (без регистратора): для чтения вида цен целиком.
+ */
 export async function slicePrices(
   conn: Connection,
   mech: PriceMechanism,
-  { kindRefs, itemRefs, at }: { kindRefs: readonly string[]; itemRefs?: readonly string[]; at?: string },
+  {
+    kindRefs,
+    itemRefs,
+    at,
+    lean,
+  }: { kindRefs: readonly string[]; itemRefs?: readonly string[]; at?: string; lean?: boolean },
 ): Promise<PriceRecord[]> {
   const { records, kindKey } = MECHANISMS[mech];
   const kinds = or(...kindRefs.map((k) => cmp(kindKey, "eq", odataGuid(k))));
   const groups: Array<string[] | undefined> = itemRefs ? chunk([...new Set(itemRefs)], BATCH) : [undefined];
+  const select = lean ? await recordFields(conn, mech) : undefined;
   const out: PriceRecord[] = [];
   for (const items of groups) {
     const condition = items
@@ -317,7 +345,7 @@ export async function slicePrices(
     const { rows } = await fetchAllForAggregation(
       conn,
       `${records}/SliceLast(${params.join(",")})`,
-      {},
+      select?.length ? { select } : {},
       `цены на ${at ?? "сейчас"}`,
     );
     for (const r of rows) {
@@ -335,18 +363,29 @@ export async function slicePrices(
 export async function laterPrices(
   conn: Connection,
   mech: PriceMechanism,
-  { kindRef, itemRefs, after }: { kindRef: string; itemRefs?: readonly string[]; after: string },
+  {
+    kindRef,
+    itemRefs,
+    after,
+    lean,
+  }: { kindRef: string; itemRefs?: readonly string[]; after: string; lean?: boolean },
 ): Promise<PriceRecord[]> {
   const { records, kindKey } = MECHANISMS[mech];
   const out: PriceRecord[] = [];
   const groups: Array<string[] | undefined> = itemRefs ? chunk([...new Set(itemRefs)], BATCH) : [undefined];
+  const select = lean ? await recordFields(conn, mech) : undefined;
   for (const items of groups) {
     const filter = [
       cmp(kindKey, "eq", odataGuid(kindRef)),
       cmp("Period", "ge", `datetime'${after}'`),
       ...(items ? [`(${or(...items.map((i) => cmp("Номенклатура_Key", "eq", odataGuid(i))))})`] : []),
     ].join(" and ");
-    const { rows } = await fetchAllForAggregation(conn, records, { filter }, "более поздние цены");
+    const { rows } = await fetchAllForAggregation(
+      conn,
+      records,
+      { filter, ...(select?.length ? { select } : {}) },
+      "более поздние цены",
+    );
     for (const r of rows) {
       const rec = toRecord(mech)(r);
       if (rec) out.push(rec);
