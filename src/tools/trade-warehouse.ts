@@ -2,6 +2,7 @@ import type { CallToolResult } from "@modelcontextprotocol/server";
 import type { Connection } from "../context.js";
 import type { ODataEntity } from "../types/odata.js";
 import { ODataError } from "../odata/errors.js";
+import { AggregateOverflowError, fetchAllForAggregation } from "../odata/aggregate.js";
 import { EMPTY_REF } from "../odata/pricing.js";
 import { buildQuery, cmp, odataGuid, or } from "../odata/query.js";
 import { InputError } from "../errors.js";
@@ -112,6 +113,9 @@ export interface StockLine {
 }
 
 const REF_CHUNK = 20;
+/** С этого числа ссылок справочник читается целиком, страницами по WHOLE_SET_PAGE (строки короткие: 3 поля). */
+const WHOLE_SET_FROM = 200;
+const WHOLE_SET_PAGE = 5000;
 const guidOf = (s: string) => s.replace(/[{}']/g, "").trim();
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -132,8 +136,18 @@ async function seriesNotes(
   const meta = await conn.getMetadata();
   const has = (set: string, f: string) => !!meta.entities.get(set)?.properties.some((p) => p.name === f);
   if (!has(ITEMS, "ВидНоменклатуры_Key") || !has(KINDS, "ИспользоватьСерии")) return [];
-  // По ссылкам — частями: длинный отбор «or» 1С не примет (как у цен).
+  // По ссылкам — частями: длинный отбор «or» 1С не примет (как у цен). Много ссылок — справочник целиком: документ на
+  // 1000 позиций читал номенклатуру 50 запросами (около минуты в облачной 1С), справочник на 15 тыс. — 3 запроса.
   const byRefs = async (set: string, refs: readonly string[], select: string[]) => {
+    if (refs.length >= WHOLE_SET_FROM)
+      try {
+        const wanted = new Set(refs.map((r) => r.toLowerCase()));
+        const { rows } = await fetchAllForAggregation(conn, set, { select }, undefined, WHOLE_SET_PAGE);
+        return rows.filter((r) => wanted.has(String(r["Ref_Key"]).toLowerCase()));
+      } catch (e) {
+        // Справочник больше предела выборки — по ссылкам, как раньше.
+        if (!(e instanceof AggregateOverflowError)) throw e;
+      }
     const out: ODataEntity[] = [];
     for (let i = 0; i < refs.length; i += REF_CHUNK)
       out.push(

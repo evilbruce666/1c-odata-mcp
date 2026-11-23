@@ -38,6 +38,7 @@ import { APPS_EXTENSION_ID, appMetaFor, registerApps } from "./apps.js";
 import { registerCashflowTools } from "../tools/cashflow.js";
 import { registerSalesTools } from "../tools/sales.js";
 import { registerOrganizationTools } from "../tools/organization.js";
+import { fitWritePreview, OPERATION_ID_CHARS } from "../tools/preview-fit.js";
 import { registerWriteTools } from "../tools/write.js";
 import { registerAuditTools } from "../tools/audit.js";
 import { registerFreshnessTools } from "../tools/freshness.js";
@@ -742,7 +743,11 @@ export function createServer(ctx: ServerContext): McpServer {
       });
     }
     if (!isCreateTool && !JOURNALED_UPDATE_TOOLS.has(name)) {
-      return original(name, annotatedConfig, name.startsWith("write.") ? requireDatabase(ctx, cb) : cb);
+      if (!name.startsWith("write.")) return original(name, annotatedConfig, cb);
+      // Правка строк без журнала: предпросмотр тоже в пределе ответа.
+      const fitted = async (args: Record<string, unknown>, extra: unknown) =>
+        fitWritePreview(await cb(args, extra), ctx.behavior.maxResponseChars, 0);
+      return original(name, annotatedConfig, requireDatabase(ctx, fitted));
     }
 
     // v2: inputSchema — z.object(...); добавляем operationId через extend (разворот zod-объекта
@@ -873,11 +878,14 @@ export function createServer(ctx: ServerContext): McpServer {
         const result = await withResponsible(responsible, () => cb(args, extra));
         if (result?.isError || !result?.structuredContent || typeof result.structuredContent !== "object")
           return result;
-        const structuredContent = { ...result.structuredContent, operationId: token };
+        // operationId — первым: клиент, обрезающий длинный ответ, теряет конец, а без operationId нет подтверждения.
+        const fitted = fitWritePreview(result, ctx.behavior.maxResponseChars, OPERATION_ID_CHARS);
+        const { operationId: _own, ...rest } = fitted.structuredContent as Record<string, unknown>;
+        const structuredContent = { operationId: token, ...rest };
         const content = result.content.map((item) =>
           item.type === "text" ? { ...item, text: renderJson(structuredContent) } : item,
         );
-        return { ...result, content, structuredContent };
+        return { ...fitted, content, structuredContent };
       });
     };
     return original(name, { ...annotatedConfig, inputSchema }, requireDatabase(ctx, wrapped));

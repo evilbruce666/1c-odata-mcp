@@ -1,6 +1,7 @@
 import type { Connection } from "../context.js";
 import { CATALOGS } from "../config/mapping.js";
 import { documentTitle, printNumber } from "../odata/names.js";
+import { readPageAttributes } from "../odata/inventory.js";
 import { listOrganizations } from "../odata/orgs.js";
 import { buildQuery, cmp, odataGuid, or } from "../odata/query.js";
 import type { EntityMeta, ODataEntity } from "../types/odata.js";
@@ -12,8 +13,9 @@ import type { EntityMeta, ODataEntity } from "../types/odata.js";
  * fields) не меняется: подтверждение отправляет именно её. Идея — из форка 1c-odata-mcp-kz (#34).
  *
  * Цель ссылки берётся из связей $metadata (Association), у составных полей — из соседнего *_Type.
- * Названия читаются одним запросом на справочник (не больше MAX_SETS справочников и MAX_REFS
- * ссылок); сбой чтения вид не роняет — остаётся GUID.
+ * Названия читаются одним запросом на справочник до MAX_REFS ссылок, больше — пачками по MAX_REFS, номенклатура от
+ * WHOLE_CATALOG_FROM позиций — справочником целиком (не больше MAX_SETS справочников); сбой чтения вид не роняет —
+ * остаётся GUID.
  */
 
 export interface PreviewView {
@@ -23,7 +25,13 @@ export interface PreviewView {
   changes?: Array<{ field: string; from: unknown; to: unknown }>;
 }
 
+/** Ссылок в одном запросе названий: «or» по 50 ссылкам справочника проходит в Scloud и на копии УТ (23.11.2026). */
 const MAX_REFS = 50;
+/**
+ * С этого числа позиций номенклатура читается справочником целиком (страницы по 5000, с откатом на чтение по ссылкам,
+ * если справочник не помещается в предел выборки): документ на 1000 позиций — 3–4 запроса вместо 20.
+ */
+const WHOLE_CATALOG_FROM = 200;
 /**
  * Названия читаются одним запросом на справочник, а на облачной 1С каждый запрос — около секунды.
  * Поэтому — не больше MAX_SETS справочников, в порядке важности для того, кто подтверждает:
@@ -123,17 +131,30 @@ async function readNames(conn: Connection, wanted: Map<string, Set<string>>): Pr
     const refs = wanted.get(set)!;
     const props = new Set((meta.entities.get(set)?.properties ?? []).map((p) => p.name));
     const select = ["Ref_Key", "Description", "Code", "Number", "Date"].filter((f) => props.has(f));
-    try {
-      const page = await conn.client.getCollection(
-        `${set}${buildQuery({ select, filter: or(...[...refs].map((g) => cmp("Ref_Key", "eq", odataGuid(g)))) })}`,
-      );
-      for (const r of page.value ?? []) {
-        const text = titleOf(set, r);
-        if (text) names.set(String(r["Ref_Key"]).toLowerCase(), text);
+    const list = [...refs];
+    if (set === CATALOGS.nomenclature[0] && list.length >= WHOLE_CATALOG_FROM) {
+      try {
+        for (const [ref, a] of await readPageAttributes(conn, set, list)) {
+          const text = a.name || a.code;
+          if (text) names.set(ref.toLowerCase(), text);
+        }
+      } catch {
+        // Название не прочиталось — в виде останется GUID.
       }
-    } catch {
-      // Название не прочиталось — в виде останется GUID.
+      continue;
     }
+    for (let i = 0; i < list.length; i += MAX_REFS)
+      try {
+        const page = await conn.client.getCollection(
+          `${set}${buildQuery({ select, filter: or(...list.slice(i, i + MAX_REFS).map((g) => cmp("Ref_Key", "eq", odataGuid(g)))) })}`,
+        );
+        for (const r of page.value ?? []) {
+          const text = titleOf(set, r);
+          if (text) names.set(String(r["Ref_Key"]).toLowerCase(), text);
+        }
+      } catch {
+        // Название не прочиталось — в виде останется GUID.
+      }
   }
   return names;
 }
@@ -153,11 +174,9 @@ export async function buildPreviewView(
 
   // Сначала собираем ссылки всех уровней, чтобы прочитать названия пачкой.
   const wanted = new Map<string, Set<string>>();
-  let count = 0;
   const want = (target: string | undefined, value: unknown) => {
-    if (!target || !isRef(value) || count >= MAX_REFS) return;
+    if (!target || !isRef(value)) return;
     const refs = wanted.get(target) ?? new Set<string>();
-    if (!refs.has(value.toLowerCase())) count++;
     refs.add(value.toLowerCase());
     wanted.set(target, refs);
   };

@@ -32,6 +32,7 @@ import { createResultSchema, getPricesResultSchema } from "../schemas/output.js"
 import { MAX_RESPONSE_CHARS, databaseField, fitToChars, guard, ok, renderJson } from "./_shared.js";
 import { confirmField, createCore } from "./write.js";
 import type { PreviewView } from "./preview-view.js";
+import { OPERATION_ID_CHARS, RESPONSE_RESERVE } from "./preview-fit.js";
 
 const GUID = /^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$/;
 const MOMENT_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2})?$/;
@@ -52,12 +53,6 @@ const DEVIATION_PCT = 20;
 
 /** Название позиции в сжатой строке. */
 const COMPACT_NAME = 60;
-
-/** Поле operationId, которое обёртка записи добавит к ответу: `,"operationId":"<uuid>"`. */
-const OPERATION_ID_CHARS = 55;
-
-/** Запас к пределу сжатого ответа: operationId, примечание о сжатии. */
-const RESPONSE_RESERVE = 1_500;
 
 const mechanismField = z
   .enum(["legacy", "2.5", "bp"])
