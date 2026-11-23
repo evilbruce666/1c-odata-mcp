@@ -17,7 +17,7 @@ standard OData interface. Ask your 1C database in plain language; nothing is ins
   cash and settlement registers. Per-tool evidence — [docs/SUPPORT.md](docs/SUPPORT.md) (in Russian).
 - **1C:Integrated Automation 2, ERP 2** — expected to work with both tool groups; not yet verified on a live base and
   not part of the full-support claim.
-- **Other and customised configurations** — documents, catalogs and the schema.
+- **Other and customised configurations** (UNF, ZUP, Retail and others) — documents, catalogs and the schema; no dedicated analytics for them.
 
 **Safety.** Read-only by default. Writing requires two independent switches (`READ_ONLY=false` and a per-database
 `ODATA_WRITABLE=true` for a single database or `ODATA_DB_<NAME>_WRITABLE=true` for each of several), always shows a preview first and needs a confirmation with the same `operationId`;
