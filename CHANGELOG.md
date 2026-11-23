@@ -5,6 +5,8 @@
 
 ## [Не выпущено]
 
+## [1.1.0] — 2026-11-23
+
 **Главное.** Продажи и закупки в разрезах со сравнением периодов и ABC, маржа и менеджеры в Управлении торговлей, платёжный календарь, ответственный во всех документах записи и безопасный повтор создания после неизвестного исхода.
 
 ### Что изменится при обновлении
@@ -1031,7 +1033,8 @@ POST-тестом (create → read → mark) на реальной базе — 
   коды плана счетов); вежливый фоллбэк при отсутствии объекта в «Составе OData».
 - npm-пакет с запуском через `npx 1c-odata-mcp`.
 
-[Не выпущено]: https://github.com/evilbruce666/1c-odata-mcp/compare/v1.0.0...HEAD
+[Не выпущено]: https://github.com/evilbruce666/1c-odata-mcp/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.17.0...v1.0.0
 [0.17.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.15.0...v0.16.0
