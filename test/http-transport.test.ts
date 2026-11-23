@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { parseConfig, type HttpTransport } from "../src/config/env.js";
@@ -205,6 +206,10 @@ describe("настоящий клиент по настоящему сокету
     expect(r.isError).toBeFalsy();
     expect(r.structuredContent["baseUrl"]).toBeUndefined();
     expect(r.content[0]!.text).not.toContain("baseUrl");
+    // Версия коннектора — та, что в package.json и в serverInfo: по ней видно, обновился ли он.
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { version: string };
+    expect(r.structuredContent["serverVersion"]).toBe(pkg.version);
+    expect(client.getServerVersion()?.version).toBe(pkg.version);
     await client.close();
     await server.close();
   });

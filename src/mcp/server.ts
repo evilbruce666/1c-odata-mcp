@@ -1,7 +1,6 @@
 import { registerExistingBankSettlementTools } from "../tools/existing-bank-settlement.js";
 import { registerCounterpartyGroupTools } from "../tools/counterparty-groups.js";
 import { registerSettlementSettingsTools } from "../tools/settlement-settings.js";
-import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/server";
 import type { CallToolResult } from "@modelcontextprotocol/server";
@@ -57,19 +56,9 @@ import {
   pageCharsLimit,
   renderJson,
   responseCharsLimit,
+  serverVersion,
   toolListed,
 } from "../tools/_shared.js";
-
-/** Версия берётся из package.json (в собранном пакете он на два уровня выше dist/mcp/). */
-function readVersion(): string {
-  try {
-    const url = new URL("../../package.json", import.meta.url);
-    const pkg = JSON.parse(readFileSync(url, "utf8")) as { version?: string };
-    return pkg.version ?? "0.0.0";
-  } catch {
-    return "0.0.0";
-  }
-}
 
 const INSTRUCTIONS =
   "Доступ к данным 1С:Предприятие через OData. По умолчанию только чтение " +
@@ -664,7 +653,7 @@ export function createServer(ctx: ServerContext): McpServer {
   const listed = (name: string) => toolListed(ctx.behavior, name);
   const known = new Set<string>();
   const server = new McpServer(
-    { name: "1c-odata-mcp", version: readVersion() },
+    { name: "1c-odata-mcp", version: serverVersion() },
     {
       instructions: allowed
         ? `${INSTRUCTIONS} ${LISTED_TOOLS_NOTE}`

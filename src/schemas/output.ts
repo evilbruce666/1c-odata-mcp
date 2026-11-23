@@ -211,6 +211,7 @@ export const listDatabasesResultSchema = z
 export const healthCheckResultSchema = z
   .object({
     status: z.string(),
+    serverVersion: z.string(),
     database: z.string(),
     label: z.string().optional(),
     odataVersion: z.string().optional(),

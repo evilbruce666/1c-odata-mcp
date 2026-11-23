@@ -166,6 +166,9 @@
           "status": {
             "type": "string"
           },
+          "serverVersion": {
+            "type": "string"
+          },
           "database": {
             "type": "string"
           },
@@ -246,6 +249,7 @@
         },
         "required": [
           "status",
+          "serverVersion",
           "database",
           "entityCount",
           "readOnly",

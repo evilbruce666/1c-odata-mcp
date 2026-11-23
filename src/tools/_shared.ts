@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { ODataError } from "../odata/errors.js";
@@ -7,6 +8,18 @@ import { AggregateOverflowError } from "../odata/aggregate.js";
 import { callResponseLimit } from "../odata/call-context.js";
 import { InputError } from "../errors.js";
 import { logger } from "../logger.js";
+
+/** Версия коннектора из package.json (в собранном пакете он на два уровня выше dist/tools/). */
+export function serverVersion(): string {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as {
+      version?: string;
+    };
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
 
 /** Общее поле выбора базы — добавляется во все инструменты. */
 export const databaseField = z

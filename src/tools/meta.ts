@@ -2,7 +2,17 @@ import { logger } from "../logger.js";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { ServerContext } from "../context.js";
-import { ok, fail, guard, databaseField, offsetField, pageOf, snapshotField, toolListed } from "./_shared.js";
+import {
+  ok,
+  fail,
+  guard,
+  databaseField,
+  offsetField,
+  pageOf,
+  serverVersion,
+  snapshotField,
+  toolListed,
+} from "./_shared.js";
 import { listOrganizations } from "../odata/orgs.js";
 import type { EntityClass } from "../types/odata.js";
 import {
@@ -70,6 +80,8 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
           logger.warn({ db: conn.cfg.name, err: journal.error }, "журнал записи недоступен");
         return ok({
           status: "ok",
+          // Какая версия коннектора запущена: npx обновляет её при запуске, глобальная установка — нет.
+          serverVersion: serverVersion(),
           database: conn.cfg.name,
           label: conn.cfg.label,
           odataVersion: meta.odataVersion,

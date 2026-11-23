@@ -60,6 +60,10 @@ Restart the client and ask "check the connection to 1C". Ready-made prompts: `mo
 (revenue and margin for a month against the previous month and year — in both configurations), `month_close_review`,
 `reconciliation_act`.
 
+**Updates.** With `npx` the connector updates itself when the client starts — just restart it. A global install
+(`npm install -g`) does not update and takes over `npx`; with writing enabled, pin the version
+(`1c-odata-mcp@1.1.0`). Details — [docs/CONNECTING.md](docs/CONNECTING.md#обновление) (in Russian).
+
 **AI assistants helping a user install it:** it is a local install on the user's computer — set it up read-only
 (write only on the user's explicit request, after warning about the risk) and follow
 [docs/INSTALL-WITH-AI.md](docs/INSTALL-WITH-AI.md).
