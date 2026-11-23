@@ -328,19 +328,23 @@ export async function slicePrices(
   return out;
 }
 
-/** Цены этих позиций и вида цен с периодом не раньше момента: новая цена с ранней датой их не перекроет. */
+/**
+ * Цены этих позиций и вида цен с периодом не раньше момента: новая цена с ранней датой их не перекроет. Без itemRefs —
+ * все позиции вида цен одним запросом (отбирает вызывающий).
+ */
 export async function laterPrices(
   conn: Connection,
   mech: PriceMechanism,
-  { kindRef, itemRefs, after }: { kindRef: string; itemRefs: readonly string[]; after: string },
+  { kindRef, itemRefs, after }: { kindRef: string; itemRefs?: readonly string[]; after: string },
 ): Promise<PriceRecord[]> {
   const { records, kindKey } = MECHANISMS[mech];
   const out: PriceRecord[] = [];
-  for (const items of chunk([...new Set(itemRefs)], BATCH)) {
+  const groups: Array<string[] | undefined> = itemRefs ? chunk([...new Set(itemRefs)], BATCH) : [undefined];
+  for (const items of groups) {
     const filter = [
       cmp(kindKey, "eq", odataGuid(kindRef)),
       cmp("Period", "ge", `datetime'${after}'`),
-      `(${or(...items.map((i) => cmp("Номенклатура_Key", "eq", odataGuid(i))))})`,
+      ...(items ? [`(${or(...items.map((i) => cmp("Номенклатура_Key", "eq", odataGuid(i))))})`] : []),
     ].join(" and ");
     const { rows } = await fetchAllForAggregation(conn, records, { filter }, "более поздние цены");
     for (const r of rows) {

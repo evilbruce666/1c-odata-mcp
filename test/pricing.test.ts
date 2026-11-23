@@ -102,12 +102,21 @@ interface Options {
   /** Табличная часть последних проведённых документов: legacy или 2.5. */
   recentRows?: "Товары" | "Товары2_5" | "both";
   schema?: FakeSchema;
+  /** Справочник номенклатуры вместо ITEMS (масштаб: длинные названия, тысяча позиций). */
+  items?: typeof ITEMS;
+  /** Записи регистра цен до проверки вместо стандартных. */
+  base?: Rec[];
+  /** Предел текста ответа (ODATA_MAX_RESPONSE_CHARS). */
+  maxResponseChars?: number;
+  /** Предел строк чтения (ODATA_ANALYTICS_MAX_ROWS). */
+  analyticsMaxRows?: number;
 }
 
 function setup(o: Options = {}) {
   const bp = o.schema === "bp30";
+  const items = o.items ?? ITEMS;
   const docs = new Map<string, { body: Record<string, unknown>; posted: boolean; version: number }>();
-  const base: Rec[] = [
+  const base: Rec[] = o.base ?? [
     rec(I(1), K_BASE, 100, "2026-11-01T00:00:01"),
     rec(I(1), K_MARKUP, 150, "2026-11-01T00:00:01"),
     rec(I(2), K_BASE, 200, "2026-11-01T00:00:01"),
@@ -149,6 +158,8 @@ function setup(o: Options = {}) {
       READ_ONLY: "false",
       ODATA_WRITABLE: "true",
       ODATA_WRITE_JOURNAL_DIR: mkdtempSync(join(tmpdir(), "1c-odata-pricing-")),
+      ...(o.maxResponseChars ? { ODATA_MAX_RESPONSE_CHARS: String(o.maxResponseChars) } : {}),
+      ...(o.analyticsMaxRows ? { ODATA_ANALYTICS_MAX_ROWS: String(o.analyticsMaxRows) } : {}),
     },
     {
       schema: o.schema ?? "ut11",
@@ -162,11 +173,11 @@ function setup(o: Options = {}) {
           // Чтение по ссылкам находит и папку: её отличает только IsFolder.
           if (filter.includes("Ref_Key eq"))
             return [
-              ...ITEMS,
+              ...items,
               { Ref_Key: G, Description: "Группа", Parent_Key: EMPTY, IsFolder: true },
             ].filter((i) => refs.has(i.Ref_Key));
-          if (filter.includes("Parent_Key eq")) return ITEMS.filter((i) => refs.has(i.Parent_Key));
-          return ITEMS;
+          if (filter.includes("Parent_Key eq")) return items.filter((i) => refs.has(i.Parent_Key));
+          return items;
         }
         return undefined;
       },
@@ -241,9 +252,9 @@ function setup(o: Options = {}) {
     if (path.startsWith("InformationRegister_ЦеныНоменклатуры_RecordType")) {
       const all = guids(path);
       const kinds = new Set(all.filter((g) => KINDS.some((k) => k.Ref_Key === g)));
-      const items = new Set(all.filter((g) => ITEMS.some((i) => i.Ref_Key === g)));
+      const itemRefs = new Set(all.filter((g) => items.some((i) => i.Ref_Key === g)));
       const pick = (r: Rec) =>
-        (!kinds.size || kinds.has(r.ВидЦены_Key)) && (!items.size || items.has(r.Номенклатура_Key));
+        (!kinds.size || kinds.has(r.ВидЦены_Key)) && (!itemRefs.size || itemRefs.has(r.Номенклатура_Key));
       if (path.includes("/SliceLast(")) {
         const at = /Period=datetime'([^']+)'/.exec(path)?.[1];
         const last = new Map<string, Rec>();
@@ -597,7 +608,7 @@ describe("находки ревью и живой проверки", () => {
     expect(done.structuredContent).toMatchObject({ done: true, verified: false, movementsVerified: false });
   });
 
-  it("предпросмотр на 80 строк укладывается в норму ответа и несёт operationId; 81 строка — отказ", async () => {
+  it("предпросмотр на 80 строк укладывается в норму ответа и несёт operationId; 1001 строка — отказ", async () => {
     const s = setup();
     const many = ITEMS.slice(0, 80).map((i) => ({ itemRef: i.Ref_Key, price: 99.99 }));
     const r = await s.call(SET, { priceKind: "Розничная", lines: many, date: AT });
@@ -605,12 +616,11 @@ describe("находки ревью и живой проверки", () => {
     expect(r.text.length).toBeLessThan(45_000);
     expect(r.text).toContain('"operationId"');
     expect(r.structuredContent["prices"]).toHaveLength(80);
-    const over = await s.call(SET, {
-      priceKind: "Розничная",
-      lines: ITEMS.slice(0, 81).map((i) => ({ itemRef: i.Ref_Key, price: 1 })),
-      date: AT,
-    });
+    const c = scaleCase(1001, 10, 0);
+    const big = setup({ items: c.items, base: c.base });
+    const over = await big.call(SET, { priceKind: "Закупочная", lines: c.lines, date: AT });
     expect(over.isError).toBe(true);
+    expect(big.posts).toEqual([]);
   });
 
   it("папка номенклатуры вместо позиции — отказ", async () => {
@@ -750,5 +760,260 @@ describe("момент цены по умолчанию — время пред�
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * Корпус масштаба: число строк, длина названий, доля отклонений, предел ответа. PRICE_DUMP=<каталог> — записать
+ * нормализованные ответы и запросы в 1С для сравнения версий (scratchpad), без него — ничего не пишет.
+ */
+const BIG = Array.from({ length: 1001 }, (_, n) => n + 1);
+function scaleCase(n: number, nameLen: number, share: number) {
+  const items = BIG.map((i) => ({
+    Ref_Key: I(i),
+    Description: `Позиция ${i} `.padEnd(nameLen, "ж"),
+    Артикул: `A-${i}`,
+    Parent_Key: G,
+    IsFolder: false,
+    DeletionMark: share > 0 && i % 13 === 0,
+  }));
+  const base: Rec[] = [];
+  const lines = BIG.slice(0, n).map((i, j) => {
+    const noCurrent = share > 0 && i % 5 === 0;
+    if (!noCurrent) base.push(rec(I(i), K_BASE, share > 0 && i % 11 === 0 ? 0 : 100, "2026-11-01T00:00:01"));
+    if (share > 0 && i % 9 === 0) base.push(rec(I(i), K_BASE, 101, "2026-12-01T00:00:00"));
+    const dev = share === 1 || (share > 0 && j % 10 === 0);
+    return { itemRef: I(i), price: dev ? (j % 2 ? 150 : 70) : j % 10 === 3 ? 120 : 105 };
+  });
+  return { items, base, lines };
+}
+
+const normalize = (v: unknown): unknown => {
+  const ids = new Map<string, string>();
+  return JSON.parse(
+    JSON.stringify(v).replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, (g) =>
+      /^a0000000-/.test(g) || /^[cdef]0000000-/.test(g) || /^0{8}-/.test(g)
+        ? g
+        : (ids.get(g) ?? ids.set(g, `id${ids.size}`).get(g)!),
+    ),
+  );
+};
+
+describe("корпус масштаба: дамп для сравнения версий", () => {
+  const dir = process.env["PRICE_DUMP"];
+  const cases: Array<[number, number, number, number]> = [];
+  for (const n of (process.env["PRICE_DUMP_N"] ?? "1,2,40,80").split(",").map(Number))
+    for (const len of [10, 100, 150])
+      for (const share of [0, 0.1, 1])
+        for (const limit of [45_000, 10_000]) cases.push([n, len, share, limit]);
+  it.runIf(!!dir).each(cases)("n=%i длина=%i доля=%f предел=%i", async (n, len, share, limit) => {
+    const c = scaleCase(n, len, share);
+    const s = setup({ items: c.items, base: c.base, maxResponseChars: limit });
+    const gets: string[] = [];
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      gets.push(`${init?.method ?? "GET"} ${decodeURIComponent(url.replace(/^https?:\/\/[^/]+/, ""))}`);
+      return inner(input, init);
+    });
+    const p = await s.call(SET, { priceKind: "Закупочная", lines: c.lines, date: AT });
+    const cf = await s.call(SET, {
+      priceKind: "Закупочная",
+      lines: c.lines,
+      date: AT,
+      confirm: true,
+      operationId: p.structuredContent["operationId"],
+    });
+    const { writeFileSync, mkdirSync } = await import("node:fs");
+    mkdirSync(dir!, { recursive: true });
+    writeFileSync(
+      join(dir!, `n${n}-l${len}-s${share}-m${limit}.json`),
+      JSON.stringify(
+        normalize({
+          preview: { len: p.text.length, isError: !!p.isError, sc: p.structuredContent },
+          confirm: { len: cf.text.length, isError: !!cf.isError, sc: cf.structuredContent },
+          gets,
+        }),
+        null,
+        1,
+      ),
+    );
+  });
+});
+
+/** Ожидание по данным случая, независимо от кода: действующая цена на AT, более поздняя, пометка, порог в копейках. */
+function expected(c: ReturnType<typeof scaleCase>) {
+  const del = new Set(c.items.filter((i) => i.DeletionMark).map((i) => i.Ref_Key));
+  const rows = c.lines.map((l) => {
+    const recs = c.base.filter((r) => r.Номенклатура_Key === l.itemRef && r.ВидЦены_Key === K_BASE);
+    const cur = recs
+      .filter((r) => r.Period <= AT)
+      .sort((a, b) => a.Period.localeCompare(b.Period))
+      .pop();
+    const later = recs.some((r) => r.Period >= AT);
+    const c100 = cur ? Math.round(cur.Цена * 100) : undefined;
+    const over = c100 !== undefined && Math.abs(Math.round(l.price * 100) - c100) * 5 > c100;
+    return {
+      cur: c100,
+      later,
+      del: del.has(l.itemRef),
+      over,
+      dev: c100 === undefined || later || del.has(l.itemRef) || over,
+    };
+  });
+  const n = (f: (r: (typeof rows)[number]) => boolean) => rows.filter(f).length;
+  return {
+    lines: rows.length,
+    withoutCurrent: n((r) => r.cur === undefined),
+    overThreshold: n((r) => r.over),
+    laterPrices: n((r) => r.later),
+    deletionMarked: n((r) => r.del),
+    deviations: n((r) => r.dev),
+  };
+}
+
+describe("масштаб: до 1000 строк, ответ в пределе, сводка по всем строкам", () => {
+  const cases: Array<[number, number, number, number]> = [];
+  for (const n of [40, 81, 300, 1000])
+    for (const len of [10, 150])
+      for (const share of [0, 0.1, 1])
+        for (const limit of [45_000, 10_000]) cases.push([n, len, share, limit]);
+  it.each(cases)("n=%i длина=%i доля=%f предел=%i", async (n, len, share, limit) => {
+    const c = scaleCase(n, len, share);
+    const s = setup({ items: c.items, base: c.base, maxResponseChars: limit });
+    const gets: string[] = [];
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if ((init?.method ?? "GET") === "GET") gets.push(decodeURIComponent(url));
+      return inner(input, init);
+    });
+    const p = await s.call(SET, { priceKind: "Закупочная", lines: c.lines, date: AT });
+    expect(p.isError, p.text.slice(0, 300)).toBeFalsy();
+    const exp = expected(c);
+    for (const r of [p]) {
+      expect(r.text.length).toBeLessThanOrEqual(limit);
+      expect(r.structuredContent["summary"]).toMatchObject(exp);
+      const prices = r.structuredContent["prices"] as Array<Record<string, unknown>>;
+      if (r.structuredContent["pricesComplete"] === false) {
+        expect(r.structuredContent).toMatchObject({
+          pricesTotal: n,
+          pricesShown: prices.length,
+          deviationsTotal: exp.deviations,
+        });
+        const devLines = new Set(
+          c.lines.flatMap((_, i) => (expected({ ...c, lines: [c.lines[i]!] }).deviations ? [i + 1] : [])),
+        );
+        for (const row of prices) expect(devLines.has(Number(row["line"]))).toBe(true);
+        // Пометка удаления и более поздняя цена — первыми.
+        const rank = (row: Record<string, unknown>) =>
+          row["deletionMark"] ? 0 : row["laterPriceFrom"] ? 1 : 2;
+        expect(prices.map(rank)).toEqual([...prices.map(rank)].sort((a, b) => a - b));
+        if (prices.length < exp.deviations)
+          expect(String(r.structuredContent["notes"])).toContain("самые важные первыми");
+      } else expect(prices).toHaveLength(n);
+    }
+    expect(p.structuredContent["operationId"]).toEqual(expect.any(String));
+    // Больше 80 строк — цены по виду цен целиком, без пачек по ссылкам. Больше 200 — и справочник целиком
+    // (readPageAttributes): 1000 строк — не больше 15 запросов вместо 150.
+    if (n > 80) expect(gets.filter((g) => /ЦеныНоменклатуры.*Номенклатура_Key eq/.test(g))).toEqual([]);
+    if (n > 200) {
+      expect(gets.filter((g) => /Catalog_Номенклатура.*Ref_Key eq/.test(g))).toEqual([]);
+      expect(gets.length).toBeLessThanOrEqual(15);
+    }
+    const cf = await s.call(SET, {
+      priceKind: "Закупочная",
+      lines: c.lines,
+      date: AT,
+      confirm: true,
+      operationId: p.structuredContent["operationId"],
+    });
+    expect(cf.isError, cf.text.slice(0, 300)).toBeFalsy();
+    expect(cf.text.length).toBeLessThanOrEqual(limit);
+    expect(cf.structuredContent["ref"]).toEqual(expect.any(String));
+    expect(cf.structuredContent["summary"]).toMatchObject(exp);
+    expect(s.posts).toHaveLength(1);
+    const body = [...s.docs.values()][0]!.body;
+    expect(body["Товары"]).toHaveLength(n);
+  });
+
+  it("100 строк с длинными названиями: prices полный, строки документа не повторены в view", async () => {
+    const c = scaleCase(100, 150, 0.1);
+    const s = setup({ items: c.items, base: c.base });
+    const r = await s.call(SET, { priceKind: "Закупочная", lines: c.lines, date: AT });
+    expect(r.isError, r.text.slice(0, 300)).toBeFalsy();
+    expect(r.text.length).toBeLessThanOrEqual(45_000);
+    expect(r.structuredContent["prices"]).toHaveLength(100);
+    expect((r.structuredContent["prices"] as Array<Record<string, unknown>>)[0]).toHaveProperty("ref");
+    expect(r.structuredContent["pricesComplete"]).toBeUndefined();
+    const view = r.structuredContent["view"] as { tables: Record<string, unknown[]> };
+    expect(Object.values(view.tables).some((t) => t.length === 100)).toBe(false);
+    expect(String(r.structuredContent["notes"])).toContain("view не повторены");
+  });
+
+  it("документ на 1000 строк: проведение, отмена, чтение, статус операции — в пределе ответа", async () => {
+    const c = scaleCase(1000, 150, 1);
+    const s = setup({ items: c.items, base: c.base, maxResponseChars: 10_000 });
+    const args = { priceKind: "Закупочная", lines: c.lines, date: AT };
+    const p = await s.call(SET, args);
+    const operationId = p.structuredContent["operationId"];
+    const cf = await s.call(SET, { ...args, confirm: true, operationId });
+    const ref = String(cf.structuredContent["ref"]);
+    const doc = { entitySet: "Document_УстановкаЦенНоменклатуры", ref };
+    const calls: Array<[string, Record<string, unknown>]> = [
+      ["write.document.post_document", { ...doc, post: true }],
+      ["write.document.post_document", { ...doc, post: true, confirm: true }],
+      ["write.document.post_document", { ...doc, post: false, confirm: true }],
+      ["read.document.get_document", doc],
+      ["write.operation.status", { operationId }],
+      [SET, { ...args, confirm: true, operationId }],
+    ];
+    for (const [name, a] of calls) {
+      const r = await s.call(name, a);
+      expect(r.isError, `${name}: ${r.text.slice(0, 300)}`).toBeFalsy();
+      expect(r.text.length, name).toBeLessThanOrEqual(10_000);
+      if (name === "write.document.post_document" && a["confirm"])
+        expect(r.structuredContent["movementsVerified"], r.text.slice(0, 300)).toBe(true);
+    }
+    expect(s.posts).toHaveLength(1);
+  });
+
+  it("порог 20 %: ровно 20 % — не отклонение, больше — отклонение, текущая 0 — отклонение", async () => {
+    const base = [1, 2, 3, 4, 5].map((i) => rec(I(i), K_BASE, 100, "2026-11-01T00:00:01"));
+    base.push(rec(I(6), K_BASE, 0, "2026-11-01T00:00:01"), rec(I(7), K_BASE, 30, "2026-11-01T00:00:01"));
+    const s = setup({ base });
+    const prices = [120, 120.01, 80, 79, 100, 5, 36];
+    const r = await s.call(SET, {
+      priceKind: "Закупочная",
+      lines: prices.map((price, i) => ({ itemRef: I(i + 1), price })),
+      date: AT,
+    });
+    expect(r.isError, r.text).toBeFalsy();
+    expect(r.structuredContent["summary"]).toEqual({
+      lines: 7,
+      withoutCurrent: 0,
+      up: 4,
+      down: 2,
+      unchanged: 1,
+      deviationThresholdPct: 20,
+      overThreshold: 3,
+      maxIncreasePct: 20,
+      maxDecreasePct: -21,
+      laterPrices: 0,
+      deletionMarked: 0,
+      deviations: 3,
+    });
+  });
+
+  it("у вида цен записей больше предела чтения — те же цены чтением по ссылкам", async () => {
+    const c = scaleCase(100, 10, 0.1);
+    const wide = setup({ items: c.items, base: c.base });
+    const capped = setup({ items: c.items, base: c.base, analyticsMaxRows: 20 });
+    const args = { priceKind: "Закупочная", lines: c.lines, date: AT };
+    const a = await wide.call(SET, args);
+    const b = await capped.call(SET, args);
+    expect(b.isError, b.text.slice(0, 300)).toBeFalsy();
+    expect(b.structuredContent["prices"]).toEqual(a.structuredContent["prices"]);
+    expect(b.structuredContent["summary"]).toEqual(a.structuredContent["summary"]);
   });
 });

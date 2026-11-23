@@ -8,7 +8,6 @@ import { callPageStart } from "../odata/call-context.js";
 import {
   MAX_ITEM_GROUPS,
   nomenclatureSet,
-  readItemAttributes,
   readPageAttributes,
   selectByItem,
   selectionNotes,
@@ -27,19 +26,35 @@ import {
   type PriceKind,
 } from "../odata/pricing.js";
 import { localToday } from "../odata/settlements-aging.js";
+import { AggregateOverflowError } from "../odata/aggregate.js";
 import { currentWriteOperationId } from "../odata/write-operation-context.js";
 import { createResultSchema, getPricesResultSchema } from "../schemas/output.js";
-import { databaseField, guard, ok, renderJson } from "./_shared.js";
+import { MAX_RESPONSE_CHARS, databaseField, fitToChars, guard, ok, renderJson } from "./_shared.js";
 import { confirmField, createCore } from "./write.js";
+import type { PreviewView } from "./preview-view.js";
 
 const GUID = /^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$/;
 const MOMENT_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2})?$/;
 /**
- * Строк в документе. Предпросмотр — одна строка ответа на позицию: на 500 строках он выходил за норму ответа, и клиент
- * терял operationId (ревью); 100 строк с названиями по 100 символов и более поздними ценами — около 44,5 тыс. из 45.
- * В ночных документах базы — до 32 строк; больше — несколькими документами.
+ * Строк в документе. Ответ больше не растёт со строками: что не помещается, сжимается (fitPrices). Предел — время
+ * чтения и записи: на копии рабочей УТ предпросмотр 1000 строк — около 15 с.
  */
-const MAX_LINES = 80;
+const MAX_LINES = 1000;
+
+/**
+ * До стольких позиций цены читаются по ссылкам пачками по 20, как в 1.1. Больше — по виду цен целиком, одним запросом:
+ * 1000 строк пачками — 100 запросов цен, в облачной 1С это минуты.
+ */
+const BY_REFS_UP_TO = 80;
+
+/** Отклонение цены: изменение больше стольких процентов текущей. Ровно 20 % — не отклонение. */
+const DEVIATION_PCT = 20;
+
+/** Название позиции в сжатой строке. */
+const COMPACT_NAME = 60;
+
+/** Запас к пределу ответа: operationId, сведения о базе, примечание о сжатии. */
+const RESPONSE_RESERVE = 1_500;
 
 const mechanismField = z
   .enum(["legacy", "2.5", "bp"])
@@ -75,6 +90,149 @@ function withFields(result: Awaited<ReturnType<typeof createCore>>, extra: Recor
   };
 }
 
+/** Чтение по виду цен целиком; записей больше предела чтения — тем же чтением по ссылкам. */
+async function overflowFallback<T>(wide: () => Promise<T>, byRefs: () => Promise<T>): Promise<T> {
+  try {
+    return await wide();
+  } catch (e) {
+    if (e instanceof AggregateOverflowError) return byRefs();
+    throw e;
+  }
+}
+
+interface PriceRow {
+  item: string;
+  ref: string;
+  article?: string;
+  characteristicRef?: string;
+  current: number | null;
+  currentSince?: string;
+  price: number;
+  change?: number;
+  laterPriceFrom?: string;
+  deletionMark?: boolean;
+}
+
+const cents = (n: number) => Math.round(n * 100);
+/** Изменение в процентах к текущей цене; без текущей или при нулевой — нет. */
+const changePct = (p: PriceRow) =>
+  p.current ? Math.round(((p.price - p.current) / p.current) * 1000) / 10 : undefined;
+/** Больше 20 % текущей — в копейках, без ошибок округления: ровно 20 % не отклонение. */
+const overThreshold = (p: PriceRow) =>
+  p.current !== null && Math.abs(cents(p.price) - cents(p.current)) * 100 > DEVIATION_PCT * cents(p.current);
+const isDeviation = (p: PriceRow) =>
+  !!p.deletionMark || !!p.laterPriceFrom || p.current === null || overThreshold(p);
+/** Порядок отклонений в сжатом ответе: сначала то, что меняет смысл записи, затем крупные изменения. */
+const severity = (p: PriceRow) =>
+  p.deletionMark ? 0 : p.laterPriceFrom ? 1 : p.current === 0 ? 2 : overThreshold(p) ? 3 : 4;
+
+/** Сводка по всем строкам документа — и когда prices в ответе неполный. */
+function priceSummary(prices: readonly PriceRow[]) {
+  const pcts = prices.map(changePct).filter((v): v is number => v !== undefined);
+  const count = (f: (p: PriceRow) => boolean) => prices.filter(f).length;
+  return {
+    lines: prices.length,
+    withoutCurrent: count((p) => p.current === null),
+    up: count((p) => p.current !== null && cents(p.price) > cents(p.current)),
+    down: count((p) => p.current !== null && cents(p.price) < cents(p.current)),
+    unchanged: count((p) => p.current !== null && cents(p.price) === cents(p.current)),
+    deviationThresholdPct: DEVIATION_PCT,
+    overThreshold: count(overThreshold),
+    ...(pcts.some((v) => v > 0) ? { maxIncreasePct: Math.max(...pcts) } : {}),
+    ...(pcts.some((v) => v < 0) ? { maxDecreasePct: Math.min(...pcts) } : {}),
+    laterPrices: count((p) => !!p.laterPriceFrom),
+    deletionMarked: count((p) => !!p.deletionMark),
+    deviations: count(isDeviation),
+  };
+}
+
+const compactRow = (p: PriceRow, i: number) => {
+  const pct = changePct(p);
+  return {
+    line: i + 1,
+    item: p.item.length > COMPACT_NAME ? `${p.item.slice(0, COMPACT_NAME - 1)}…` : p.item,
+    ...(p.article ? { article: p.article } : {}),
+    current: p.current,
+    price: p.price,
+    ...(p.change !== undefined ? { change: p.change } : {}),
+    ...(pct !== undefined ? { changePct: pct } : {}),
+    ...(p.laterPriceFrom ? { laterPriceFrom: p.laterPriceFrom } : {}),
+    ...(p.deletionMark ? { deletionMark: true } : {}),
+  };
+};
+
+/**
+ * Ответ в пределе при любом числе строк. Помещается — как в 1.1. Нет — по шагам, пока не поместится: строки документа
+ * в view (они повторяют prices) → сжатые строки prices → в prices только отклонения, по важности, сколько войдёт.
+ * Сводка summary всегда по всем строкам; неполный prices помечен pricesComplete=false.
+ */
+function fitPrices(
+  result: Awaited<ReturnType<typeof createCore>>,
+  prices: PriceRow[],
+  created: boolean,
+  maxResponseChars: number,
+) {
+  const sc = result.structuredContent as Record<string, unknown> | undefined;
+  if (result.isError || !sc) return result;
+  // Запись идёт вне контекста чтения (withToolCall): предел — из настройки, как pageCharsLimit у чтения.
+  const limit = Math.min(maxResponseChars, MAX_RESPONSE_CHARS);
+  const budget = (limit >= MAX_RESPONSE_CHARS ? limit : limit - 1_000) - RESPONSE_RESERVE;
+  const size = (o: Record<string, unknown>) => renderJson(o).length;
+  if (size(sc) <= budget) return result;
+  const notes = [...((sc["notes"] as string[] | undefined) ?? [])];
+  let extra: Record<string, unknown> = {};
+  const view = sc["view"] as PreviewView | undefined;
+  if (view?.tables) {
+    const tables = Object.fromEntries(
+      Object.entries(view.tables).filter(([, t]) => t.length !== prices.length),
+    );
+    notes.push("Строки документа в view не повторены: они в prices.");
+    extra = { view: { ...view, tables } };
+    if (size({ ...sc, ...extra, notes }) <= budget) return withFields(result, { ...extra, notes });
+  }
+  const rows = prices.map(compactRow);
+  const compactNote =
+    "Строки prices сжаты: без ref, currentSince и характеристики, название до 60 знаков; line — номер строки во входе.";
+  if (size({ ...sc, ...extra, prices: rows, notes: [...notes, compactNote] }) <= budget)
+    return withFields(result, {
+      ...extra,
+      prices: rows,
+      pricesFormat: "compact",
+      notes: [...notes, compactNote],
+    });
+  const deviations = rows
+    .map((r, i) => ({ r, p: prices[i]! }))
+    .filter(({ p }) => isDeviation(p))
+    .sort(
+      (a, b) =>
+        severity(a.p) - severity(b.p) ||
+        Math.abs(b.r.changePct ?? 0) - Math.abs(a.r.changePct ?? 0) ||
+        a.r.line - b.r.line,
+    )
+    .map(({ r }) => r);
+  const where = created ? "в созданном документе в 1С" : "в документе в 1С после создания — он непроведённый";
+  const kinds = `изменение больше ${DEVIATION_PCT} %, нет текущей цены, более поздняя цена, пометка удаления`;
+  const note = (shown: number) =>
+    `Строк ${prices.length} — все в ответ не помещаются. ` +
+    (deviations.length
+      ? `В prices только отклонения (${kinds}): ${shown} из ${deviations.length}` +
+        `${shown < deviations.length ? ", самые важные первыми" : ""}. `
+      : `Отклонений (${kinds}) нет, prices пуст. `) +
+    `Счёт по всем строкам — summary; все строки видны ${where}.`;
+  const fixed = { ...sc, ...extra, prices: [], notes: [...notes, compactNote, note(deviations.length)] };
+  const kept = deviations.length ? fitToChars(deviations, size(fixed) + 100, budget) : [];
+  return withFields(result, {
+    ...extra,
+    prices: kept,
+    pricesFormat: "compact",
+    pricesComplete: false,
+    pricesTotal: prices.length,
+    pricesShown: kept.length,
+    deviationsTotal: deviations.length,
+    notes: [...notes, compactNote, note(kept.length)],
+  });
+}
+
 export function registerPricingTools(server: McpServer, ctx: ServerContext): void {
   server.registerTool(
     "write.pricing.create_price_setting",
@@ -86,7 +244,8 @@ export function registerPricingTools(server: McpServer, ctx: ServerContext): voi
         "текущую цену и новую (prices) и предупреждает: у вида цен есть зависимые виды (наценка на этот вид) — 1С их " +
         "при записи через OData не пересчитает; у позиции уже есть цена с более поздней датой — новая её не перекроет; " +
         "цена на тот же момент — отказ. date — момент цены, по умолчанию сейчас (по часам компьютера с коннектором); дата " +
-        "без времени — начало дня. До 80 строк на документ. " +
+        "без времени — начало дня. До 1000 строк на документ; не помещаются в ответ — строки prices сжимаются, а то и остаются только " +
+        "отклонения (изменение больше 20 %, нет текущей цены, более поздняя цена, пометка удаления), счёт по всем строкам — summary. " +
         "Механизм определяется по базе (mechanism — явно): Управление торговлей 11 — прежний (legacy) или " +
         "ценообразование 2.5 (на живой базе не проверено); Бухгалтерия 3.0 — по типам цен (bp, вид цен — тип цен " +
         "номенклатуры). КА 2 и ERP 2 — по тем же полям, что УТ, без проверки.",
@@ -166,7 +325,9 @@ export function registerPricingTools(server: McpServer, ctx: ServerContext): voi
         const itemRefs = lines.map((l) => clean(l.itemRef));
         const nomSet = await nomenclatureSet(conn);
         if (!nomSet) throw new InputError("Справочник номенклатуры не опубликован: позиции не проверить.");
-        const attrs = await readItemAttributes(conn, nomSet, itemRefs);
+        const many = new Set(itemRefs).size > BY_REFS_UP_TO;
+        // До 200 позиций — по ссылкам (до 80 строк — те же запросы, что в 1.1), больше — справочник целиком.
+        const attrs = await readPageAttributes(conn, nomSet, itemRefs);
         const unknown = itemRefs.filter((r) => !attrs.has(r) || attrs.get(r)!.isFolder);
         if (unknown.length)
           throw new InputError(
@@ -174,13 +335,23 @@ export function registerPricingTools(server: McpServer, ctx: ServerContext): voi
           );
 
         // Что действует сейчас и что установлено позже.
+        // Много строк — по виду цен целиком, один запрос; слишком много записей у вида — пачками, как раньше.
+        const kindWide = <T>(wide: () => Promise<T>, byRefs: () => Promise<T>) =>
+          many ? overflowFallback(wide, byRefs) : byRefs();
         const current = new Map(
-          (await slicePrices(conn, mech, { kindRefs: [kind.ref], itemRefs, at })).map((r) => [
-            priceKey(r),
-            r,
-          ]),
+          (
+            await kindWide(
+              () => slicePrices(conn, mech, { kindRefs: [kind.ref], at }),
+              () => slicePrices(conn, mech, { kindRefs: [kind.ref], itemRefs, at }),
+            )
+          )
+            .filter((r) => seen.has(priceKey(r)))
+            .map((r) => [priceKey(r), r]),
         );
-        const later = await laterPrices(conn, mech, { kindRef: kind.ref, itemRefs, after: at });
+        const later = await kindWide(
+          () => laterPrices(conn, mech, { kindRef: kind.ref, after: at }),
+          () => laterPrices(conn, mech, { kindRef: kind.ref, itemRefs, after: at }),
+        );
         const sameMoment = later.filter((r) => r.period === at && seen.has(priceKey(r)));
         if (sameMoment.length)
           throw new InputError(
@@ -194,7 +365,7 @@ export function registerPricingTools(server: McpServer, ctx: ServerContext): voi
             laterByKey.set(k, r.period);
         }
 
-        const prices = lines.map((l) => {
+        const prices: PriceRow[] = lines.map((l) => {
           const key = priceKey({
             itemRef: clean(l.itemRef),
             characteristicRef: l.characteristicRef && clean(l.characteristicRef),
@@ -271,14 +442,16 @@ export function registerPricingTools(server: McpServer, ctx: ServerContext): voi
                   [s.rows]: `${lines.length} строк — см. prices`,
                 },
               });
-        return withFields(compact, {
+        const full = withFields(compact, {
           mechanism: mech,
           priceKind: { name: kind.name, ref: kind.ref },
           date: at,
           posted: false,
           prices,
+          summary: priceSummary(prices),
           ...(confirm ? { next: "Цены вступят в силу после проведения: write.document.post_document." } : {}),
         });
+        return fitPrices(full, prices, confirm, ctx.behavior.maxResponseChars);
       }),
   );
 
