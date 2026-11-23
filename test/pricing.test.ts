@@ -1000,6 +1000,20 @@ describe("масштаб: до 1000 строк, ответ в пределе, с
     expect(r.structuredContent["pricesFormat"]).toBeUndefined();
   });
 
+  it("ответ вплотную к пределу: с полем operationId не выходит за предел", async () => {
+    const c = scaleCase(30, 100, 0);
+    const args = { priceKind: "Закупочная", lines: c.lines, date: AT };
+    const free = await setup({ items: c.items, base: c.base }).call(SET, args);
+    const t = free.text.length;
+    expect(t).toBeGreaterThan(10_000);
+    for (const limit of [t - 1, t, t + 1]) {
+      const r = await setup({ items: c.items, base: c.base, maxResponseChars: limit }).call(SET, args);
+      expect(r.isError, r.text.slice(0, 300)).toBeFalsy();
+      expect(r.text.length, `предел ${limit}`).toBeLessThanOrEqual(limit);
+      expect(r.structuredContent["operationId"]).toEqual(expect.any(String));
+    }
+  });
+
   it("только отклонения: сначала более поздние цены, затем по величине изменения; процент до десятых", async () => {
     const n = 300;
     const base = BIG.slice(0, n).flatMap((i) => [
