@@ -116,6 +116,8 @@ const REF_CHUNK = 20;
 /** С этого числа ссылок справочник читается целиком, страницами по WHOLE_SET_PAGE (строки короткие: 3 поля). */
 const WHOLE_SET_FROM = 200;
 const WHOLE_SET_PAGE = 5000;
+/** Сколько позиций назвать в заметке о сериях. */
+const NOTE_NAMES = 10;
 const guidOf = (s: string) => s.replace(/[{}']/g, "").trim();
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -174,9 +176,14 @@ async function seriesNotes(
   const names = items.value
     .filter((i) => series.has(String(i["ВидНоменклатуры_Key"])))
     .map((i) => `«${i["Description"]}»`);
+  // Первые NOTE_NAMES позиций, остальные — числом: на 1000 строк перечень занимал 58 тыс. знаков (копия УТ, 23.11.2026).
+  const listed =
+    names.length > NOTE_NAMES
+      ? `${names.slice(0, NOTE_NAMES).join(", ")} и ещё ${names.length - NOTE_NAMES}`
+      : names.join(", ");
   return names.length
     ? [
-        `Вид номенклатуры ведёт серии, а серия не указана: ${names.join(", ")}. 1С проведёт документ и без ` +
+        `Вид номенклатуры ведёт серии, а серия не указана: ${listed}. 1С проведёт документ и без ` +
           `серии, но учёт серий на складе останется неполным — ${advice}`,
       ]
     : [];

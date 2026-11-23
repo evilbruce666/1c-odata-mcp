@@ -24,7 +24,11 @@ interface Opts {
   limit?: number;
   /** Позиций в справочнике (по умолчанию — столько, сколько строк). */
   catalog?: number;
+  /** Вид всех позиций ведёт серии (а серии в строках не указаны). */
+  series?: boolean;
 }
+
+const KIND = "b0b0b0b0-0000-4000-8000-000000000001";
 
 function setup(o: Opts) {
   const name = (i: number) =>
@@ -53,6 +57,12 @@ function setup(o: Opts) {
             { Ref_Key: DOC, Posted: false, DeletionMark: false, Товары: docRows },
             ...[...posted.values()].map((b) => ({ ...b, Posted: false, DeletionMark: false })),
           ];
+        if (
+          o.series &&
+          q.base === "Catalog_ВидыНоменклатуры" &&
+          q.params.get("$select") === "Ref_Key,ИспользоватьСерии"
+        )
+          return [{ Ref_Key: KIND, ИспользоватьСерии: true }];
         if (q.base !== "Catalog_Номенклатура") return undefined;
         // Только чтения названий: иначе — синтетическая строка схемы (сборщику нужны все её поля).
         const select = (q.params.get("$select") ?? "").split(",").filter(Boolean);
@@ -72,6 +82,7 @@ function setup(o: Opts) {
             Code: String(i),
             DeletionMark: false,
             IsFolder: false,
+            ВидНоменклатуры_Key: o.series ? KIND : null,
           };
           return Object.fromEntries(select.map((k) => [k, all[k] ?? null]));
         });
@@ -397,4 +408,28 @@ describe("предпросмотр документа: уровень 1 и со�
     }
     expect(results.slice(2).map((r) => r.isError)).toEqual([false, false, false, false]);
   }, 60_000);
+});
+
+describe("заметки предпросмотра не растут со строками", () => {
+  it.each([
+    "write.warehouse.create_transfer",
+    "write.warehouse.create_writeoff",
+    "write.warehouse.create_surplus",
+  ])(
+    "%s: 1000 позиций без серии у вида с сериями — предпросмотр и подтверждение в пределе",
+    async (tool) => {
+      // Живая проверка на копии УТ (23.11.2026): заметка перечисляла все позиции — 58 тыс. знаков на 1000 строк.
+      const c = CASES.find((x) => x.schema === "ut11" && x.tool === tool)!;
+      const s = setup({ schema: "ut11", n: 1000, nameLen: 60, series: true });
+      const p = await s.call(tool, c.args(1000));
+      expect(p.isError, p.text.slice(0, 300)).toBe(false);
+      const note = (p.sc["notes"] as string[]).find((x) => x.includes("ведёт серии"))!;
+      expect(note).toContain("ещё 990");
+      expect(p.text.length).toBeLessThanOrEqual(45_000);
+      const d = await s.call(tool, { ...c.args(1000), confirm: true, operationId: p.sc["operationId"] });
+      expect(d.isError, d.text.slice(0, 300)).toBe(false);
+      expect(d.text.length).toBeLessThanOrEqual(45_000);
+    },
+    60_000,
+  );
 });
