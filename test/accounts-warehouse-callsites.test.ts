@@ -13,6 +13,9 @@ import { SNAPSHOT_REF as id } from "./helpers/metadata-snapshot.js";
 const E = "00000000-0000-0000-0000-000000000000";
 const GENERAL = "aaaaaaaa-0000-4000-8000-000000000001";
 const OWN = "aaaaaaaa-0000-4000-8000-000000000002";
+/** Склад-получатель перемещения и счёт его записи: подбор идёт по отправителю. */
+const TO = "b1b1b1b1-0000-4000-8000-000000000002";
+const RECEIVER = "aaaaaaaa-0000-4000-8000-000000000003";
 const row = (warehouse: string, account: string) => ({
   Организация_Key: E,
   Номенклатура_Key: E,
@@ -55,7 +58,7 @@ const CASES: Array<[string, Record<string, unknown>]> = [
   ],
   [
     "write.warehouse.create_transfer",
-    { fromWarehouse: id, toWarehouse: id, lines: [{ nomenclatureRef: id, quantity: 1 }] },
+    { fromWarehouse: id, toWarehouse: TO, lines: [{ nomenclatureRef: id, quantity: 1 }] },
   ],
 ];
 
@@ -74,5 +77,6 @@ describe("склад документа доходит до подбора сч�
       expect(r.isError, text.slice(0, 300)).not.toBe(true);
       expect(text, tool).toContain(OWN);
       expect(text, tool).not.toContain(GENERAL);
+      expect(text, tool).not.toContain(RECEIVER);
     });
 });
