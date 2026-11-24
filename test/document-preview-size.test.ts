@@ -28,6 +28,8 @@ interface Opts {
   series?: boolean;
   /** Дополнительные переменные окружения сервера. */
   env?: Record<string, string>;
+  /** 1С не отдаёт число позиций ($inlinecount). */
+  noCount?: boolean;
 }
 
 const KIND = "b0b0b0b0-0000-4000-8000-000000000001";
@@ -55,6 +57,7 @@ function setup(o: Opts) {
       schema: o.schema,
       data: (q: FakeQuery) => {
         if (q.fn) return undefined;
+        if (o.noCount && q.params.has("$inlinecount")) return undefined;
         if (q.base === "Document_РеализацияТоваровУслуг" && q.params.get("$select") === null)
           return [
             { Ref_Key: DOC, Posted: false, DeletionMark: false, Товары: docRows },
@@ -233,6 +236,35 @@ describe.runIf(DUMP)("дамп предпросмотров (сравнение 
   }, 600_000);
 });
 
+const GRID = process.env["DOC_GRID"];
+
+describe.runIf(GRID)("дамп сетки справочников (сравнение версий)", () => {
+  it("дамп", async () => {
+    mkdirSync(GRID!, { recursive: true });
+    for (const tool of [
+      "write.warehouse.create_transfer",
+      "write.warehouse.create_writeoff",
+      "write.warehouse.create_surplus",
+      "write.sales.create_shipment",
+    ])
+      for (const catalog of [1500, 20_000, 60_000, 150_000])
+        for (const n of [200, 300, 1000])
+          for (const series of [false, true]) {
+            const c = CASES.find((x) => x.schema === "ut11" && x.tool === tool)!;
+            const s = setup({ schema: "ut11", n, nameLen: 10, catalog, series });
+            const r = await s.call(tool, c.args(n));
+            writeFileSync(
+              join(GRID!, `${tool}-${catalog}-${n}-${series}.json`),
+              JSON.stringify({
+                isError: r.isError,
+                sc: JSON.parse(normalize(JSON.stringify(r.sc), r.sc)),
+                gets: s.log.filter((l) => l.startsWith("GET")).length,
+              }),
+            );
+          }
+  }, 1_800_000);
+});
+
 type Res = Awaited<ReturnType<ReturnType<typeof setup>["call"]>>;
 const viewRows = (r: Res, table = "Товары") =>
   (r.sc["view"] as { tables?: Record<string, Record<string, unknown>[]> } | undefined)?.tables?.[table] ?? [];
@@ -395,7 +427,7 @@ describe("мелочи пачки А/Б", () => {
     }
   });
 
-  it("справочник больше предела выборки в проверке серий: второй предпросмотр сразу по ссылкам", async () => {
+  it("справочник больше предела выборки в проверке серий — сразу по ссылкам, без попытки целиком", async () => {
     const c = CASES.find((x) => x.schema === "ut11" && x.tool === "write.warehouse.create_transfer")!;
     const s = setup({
       schema: "ut11",
@@ -407,15 +439,14 @@ describe("мелочи пачки А/Б", () => {
     const whole = () =>
       s.log.filter((l) => /Catalog_Номенклатура\?.*ВидНоменклатуры_Key/.test(l) && !l.includes(" or "))
         .length;
-    const r1 = await s.call(c.tool, c.args(300));
-    expect(r1.isError, r1.text.slice(0, 300)).toBe(false);
-    const first = whole();
-    expect(first).toBeGreaterThan(0); // попытка целиком была и не удалась
-    s.log.length = 0;
-    const r2 = await s.call(c.tool, c.args(300));
-    expect(r2.isError, r2.text.slice(0, 300)).toBe(false);
-    expect(whole()).toBe(0);
-    expect(r2.sc["notes"]).toEqual(r1.sc["notes"]);
+    for (let k = 0; k < 2; k++) {
+      s.log.length = 0;
+      const r = await s.call(c.tool, c.args(300));
+      expect(r.isError, r.text.slice(0, 300)).toBe(false);
+      expect(whole()).toBe(0);
+      // Число позиций — не чаще раза в 10 минут.
+      expect(s.log.filter((l) => l.includes("$inlinecount")).length).toBe(k === 0 ? 1 : 0);
+    }
   });
 
   it("summary: поле есть не во всех строках — withValue называет, по скольким сложено", async () => {
@@ -477,6 +508,40 @@ describe("сокращение предпросмотра делит место 
     const sum = r.sc["summary"] as Record<string, Record<string, number>>;
     expect(sum["Товары"]!["lines"]).toBe(n);
   });
+});
+
+describe("номенклатура целиком — только если дешевле пачек, и один раз на предпросмотр", () => {
+  const whole = (log: string[]) =>
+    log.filter(
+      (l) => /^GET Catalog_Номенклатура\?.*\$skip=/.test(l) && !l.includes(" or ") && !l.includes("$top=1&"),
+    );
+  const chunks = (log: string[]) => log.filter((l) => /^GET Catalog_Номенклатура\?.*Ref_Key eq/.test(l));
+
+  it("перемещение на 1000 строк, справочник 1500 — справочник читается один раз: названия и серии", async () => {
+    const c = CASES.find((x) => x.schema === "ut11" && x.tool === "write.warehouse.create_transfer")!;
+    const s = setup({ schema: "ut11", n: 1000, nameLen: 10, catalog: 1500, series: true });
+    const r = await s.call(c.tool, c.args(1000));
+    expect(r.isError, r.text.slice(0, 300)).toBe(false);
+    expect(whole(s.log)).toHaveLength(1);
+    expect(chunks(s.log)).toHaveLength(0);
+    for (const row of viewRows(r)) expect(String(row["Номенклатура"])).not.toMatch(GUID_TEXT);
+  }, 60_000);
+
+  it("реализация на 300 строк, справочник 60 тыс. — названия пачками по 50: 13 страниц дороже 6 пачек", async () => {
+    const s = setup({ schema: "ut11", n: 300, nameLen: 10, catalog: 60_000 });
+    const r = await s.call("write.sales.create_shipment", CASES[12]!.args(300));
+    expect(r.isError, r.text.slice(0, 300)).toBe(false);
+    expect(whole(s.log)).toHaveLength(0);
+    expect(chunks(s.log)).toHaveLength(6);
+  }, 60_000);
+
+  it("1С не сказала число позиций — по ссылкам, без отказа", async () => {
+    const s = setup({ schema: "ut11", n: 1000, nameLen: 10, catalog: 1500, noCount: true });
+    const r = await s.call("write.sales.create_shipment", CASES[12]!.args(1000));
+    expect(r.isError, r.text.slice(0, 300)).toBe(false);
+    expect(whole(s.log)).toHaveLength(0);
+    expect(chunks(s.log)).toHaveLength(20);
+  }, 60_000);
 });
 
 describe("предпросмотр документа: уровень 1 и соседи на 1000 строк", () => {

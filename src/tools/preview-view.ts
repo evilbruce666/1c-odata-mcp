@@ -1,7 +1,7 @@
 import type { Connection } from "../context.js";
 import { CATALOGS } from "../config/mapping.js";
 import { documentTitle, printNumber } from "../odata/names.js";
-import { readPageAttributes, WHOLE_CATALOG_FIRST_PAGE_FROM } from "../odata/inventory.js";
+import { readCatalogBrief, wholeCatalogCheaper } from "../odata/catalog-whole.js";
 import { listOrganizations } from "../odata/orgs.js";
 import { buildQuery, cmp, odataGuid, or } from "../odata/query.js";
 import type { EntityMeta, ODataEntity } from "../types/odata.js";
@@ -14,7 +14,7 @@ import type { EntityMeta, ODataEntity } from "../types/odata.js";
  *
  * Цель ссылки берётся из связей $metadata (Association), у составных полей — из соседнего *_Type.
  * Названия читаются одним запросом на справочник до MAX_REFS ссылок, больше — пачками по MAX_REFS, номенклатура
- * больше WHOLE_CATALOG_FROM позиций — справочником целиком (не больше MAX_SETS справочников); сбой чтения вид не роняет —
+ * больше WHOLE_CATALOG_FROM позиций — справочником целиком, если так дешевле (не больше MAX_SETS справочников); сбой чтения вид не роняет —
  * остаётся GUID.
  */
 
@@ -28,11 +28,10 @@ export interface PreviewView {
 /** Ссылок в одном запросе названий: «or» по 50 ссылкам справочника проходит в Scloud и на копии УТ (23.11.2026). */
 const MAX_REFS = 50;
 /**
- * Больше стольких позиций номенклатура читается справочником целиком (страницы по 5000, с откатом на чтение по
- * ссылкам, если справочник не помещается в предел выборки): документ на 1000 позиций — 3–4 запроса вместо 20. Порог —
- * тот же, что у readPageAttributes: на ровно 200 позициях она читает по ссылкам пачками по 20 (10 запросов вместо 4).
+ * Больше стольких позиций номенклатура может читаться справочником целиком — если это дешевле пачек по MAX_REFS
+ * (wholeCatalogCheaper): документ на 1000 позиций при справочнике на 15 тыс. — 1 запрос числа и 4 страницы вместо 20.
  */
-const WHOLE_CATALOG_FROM = WHOLE_CATALOG_FIRST_PAGE_FROM;
+const WHOLE_CATALOG_FROM = 200;
 /**
  * Названия читаются одним запросом на справочник, а на облачной 1С каждый запрос — около секунды.
  * Поэтому — не больше MAX_SETS справочников, в порядке важности для того, кто подтверждает:
@@ -133,21 +132,29 @@ async function readNames(conn: Connection, wanted: Map<string, Set<string>>): Pr
     const props = new Set((meta.entities.get(set)?.properties ?? []).map((p) => p.name));
     const select = ["Ref_Key", "Description", "Code", "Number", "Date"].filter((f) => props.has(f));
     const list = [...refs];
-    if (set === CATALOGS.nomenclature[0] && list.length > WHOLE_CATALOG_FROM) {
+    let byRefs = list;
+    if (
+      set === CATALOGS.nomenclature[0] &&
+      list.length > WHOLE_CATALOG_FROM &&
+      (await wholeCatalogCheaper(conn, set, list.length, MAX_REFS).catch(() => false))
+    ) {
       try {
-        for (const [ref, a] of await readPageAttributes(conn, set, list)) {
-          const text = a.name || a.code;
+        const all = await readCatalogBrief(conn, set);
+        byRefs = [];
+        for (const ref of list) {
+          const r = all.get(ref.toLowerCase());
+          const text = r && titleOf(set, r);
           if (text) names.set(ref.toLowerCase(), text);
+          else if (!r) byRefs.push(ref); // заведена после чтения справочника — по ссылке
         }
       } catch {
-        // Название не прочиталось — в виде останется GUID.
+        // Справочник не прочитался целиком — по ссылкам.
       }
-      continue;
     }
-    for (let i = 0; i < list.length; i += MAX_REFS)
+    for (let i = 0; i < byRefs.length; i += MAX_REFS)
       try {
         const page = await conn.client.getCollection(
-          `${set}${buildQuery({ select, filter: or(...list.slice(i, i + MAX_REFS).map((g) => cmp("Ref_Key", "eq", odataGuid(g)))) })}`,
+          `${set}${buildQuery({ select, filter: or(...byRefs.slice(i, i + MAX_REFS).map((g) => cmp("Ref_Key", "eq", odataGuid(g)))) })}`,
         );
         for (const r of page.value ?? []) {
           const text = titleOf(set, r);
