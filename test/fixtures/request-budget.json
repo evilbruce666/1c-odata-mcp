@@ -84,7 +84,7 @@
   "write.sales.create_issued_invoice": 4,
   "write.sales.create_services_act": 12,
   "write.sales.create_shipment": 14,
-  "write.warehouse.create_inventory": 8,
+  "write.warehouse.create_inventory": 7,
   "write.warehouse.create_return_from_customer": 13,
   "write.warehouse.create_return_to_supplier": 13,
   "write.warehouse.create_surplus": 7,

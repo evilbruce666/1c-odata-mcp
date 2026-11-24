@@ -4245,6 +4245,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
             price: l.price,
             vatRate: "БезНДС",
           })),
+          warehouseKey,
         );
         const rows = lines.map((l, i) =>
           clean({
