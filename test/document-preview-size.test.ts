@@ -460,6 +460,23 @@ describe("мелочи пачки А/Б", () => {
     }
   });
 
+  it("одинаковые заметки строк — одной заметкой с диапазонами; прочие — как есть", async () => {
+    const { compactLineNotes } = await import("../src/tools/preview-fit.js");
+    expect(
+      compactLineNotes([
+        "Общая",
+        "Строка 1: X",
+        "Строка 1: Y",
+        "Строка 2: X",
+        "Строка 3: X",
+        "Строка 5: X",
+        "Строка 2: Y",
+        "Строка 4: Z",
+      ]),
+    ).toEqual(["Общая", "Строки 1–3, 5: X", "Строки 1–2: Y", "Строка 4: Z"]);
+    expect(compactLineNotes(["Строка 7: только одна"])).toEqual(["Строка 7: только одна"]);
+  });
+
   it("summary: поле есть не во всех строках — withValue называет, по скольким сложено", async () => {
     const { linesSummary } = await import("../src/tools/preview-fit.js");
     const rows = {

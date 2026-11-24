@@ -765,6 +765,47 @@ describe("Бухгалтерия: прочие операции денежных
     expect(s.fake.requests.filter((q) => q.method !== "GET")).toEqual([]);
   });
 
+  it("оплата на 50 договоров: предпросмотр в пределе ответа и при ODATA_MAX_RESPONSE_CHARS 10 000", async () => {
+    const contracts = Array.from({ length: 50 }, (_, i) => g("9", 100 + i));
+    for (const limit of ["45000", "10000"]) {
+      const s = setup({
+        plainChart: true,
+        env: { ODATA_MAX_RESPONSE_CHARS: limit },
+        extra: {
+          Catalog_ДоговорыКонтрагентов: contracts.map((c, i) => ({
+            Ref_Key: c,
+            Owner_Key: CP,
+            Description: `Договор поставки № ${i + 1} от 01.01.2026 с длинным наименованием для проверки`,
+          })),
+        },
+      });
+      for (const [tool, op] of [
+        ["write.money.create_bank_writeoff", "ОплатаПоставщику"],
+        ["write.money.create_payment", "ОплатаПокупателя"],
+      ] as const) {
+        const r = await s.call(tool, {
+          operationKind: op,
+          amount: 50 * 10,
+          counterpartyRef: CP,
+          settlementLines: contracts.map((contractRef) => ({ contractRef, amount: 10 })),
+        });
+        expect(r.err, r.text.slice(0, 300)).toBe(false);
+        expect(r.text.length, `${tool} ${limit}`).toBeLessThanOrEqual(Number(limit));
+        expect(r.text.startsWith('{"operationId"'), tool).toBe(true);
+        const c = await s.call(tool, {
+          operationKind: op,
+          amount: 50 * 10,
+          counterpartyRef: CP,
+          settlementLines: contracts.map((contractRef) => ({ contractRef, amount: 10 })),
+          confirm: true,
+          operationId: r.sc["operationId"],
+        });
+        expect(c.err, c.text.slice(0, 300)).toBe(false);
+        expect(c.text.length, `подтверждение ${tool} ${limit}`).toBeLessThanOrEqual(Number(limit));
+      }
+    }
+  });
+
   it("1.1: оплата по нескольким договорам (settlementLines) — строка на договор, договор шапки — первой строки", async () => {
     const C1 = g("9", 1);
     const C2 = g("9", 2);

@@ -61,6 +61,45 @@ export function linesSummary(
   );
 }
 
+/**
+ * Заметки строк с одинаковым текстом — одной заметкой: «Строка 1: X», …, «Строка 50: X» → «Строки 1–50: X». Оплата
+ * на 50 договоров давала 100 заметок (две на строку) — 11 800 знаков, и при пределе 10 000 ответ не помещался.
+ * Порядок — по первому появлению; прочие заметки — как есть.
+ */
+export function compactLineNotes(notes: readonly string[]): string[] {
+  const groups = new Map<string, number[]>();
+  const order: Array<string | { text: string }> = [];
+  for (const n of notes) {
+    const m = /^Строка (\d+): ([\s\S]*)$/.exec(n);
+    if (!m) {
+      order.push(n);
+      continue;
+    }
+    const text = m[2]!;
+    if (!groups.has(text)) {
+      groups.set(text, []);
+      order.push({ text });
+    }
+    groups.get(text)!.push(Number(m[1]));
+  }
+  const ranges = (lines: number[]) => {
+    const sorted = [...new Set(lines)].sort((a, b) => a - b);
+    const out: string[] = [];
+    for (let i = 0; i < sorted.length; i++) {
+      let j = i;
+      while (j + 1 < sorted.length && sorted[j + 1] === sorted[j]! + 1) j++;
+      out.push(j > i ? `${sorted[i]}–${sorted[j]}` : String(sorted[i]));
+      i = j;
+    }
+    return out.join(", ");
+  };
+  return order.map((o) => {
+    if (typeof o === "string") return o;
+    const lines = groups.get(o.text)!;
+    return `${new Set(lines).size > 1 ? "Строки" : "Строка"} ${ranges(lines)}: ${o.text}`;
+  });
+}
+
 /** Машинная часть предпросмотра: payload у создания, fields у изменения. */
 const ROW_KEYS = ["payload", "fields"] as const;
 
@@ -71,7 +110,14 @@ export function fitDocumentPreview(
   added: number,
 ): Record<string, unknown> {
   const size = (o: unknown) => renderJson(o).length;
-  if (sc["dryRun"] !== true || size(sc) + added <= limit) return sc;
+  if (size(sc) + added <= limit) return sc;
+  // Не предпросмотр (ответ подтверждения) — сводятся только одинаковые заметки строк: строки документа в нём не
+  // повторяются, а заметки на 50 строк оплаты — 11 800 знаков.
+  if (sc["dryRun"] !== true) {
+    if (!Array.isArray(sc["notes"])) return sc;
+    const compact = compactLineNotes(sc["notes"] as string[]);
+    return compact.length < (sc["notes"] as string[]).length ? { ...sc, notes: compact } : sc;
+  }
   const rowsKey = ROW_KEYS.find((k) => sc[k] && typeof sc[k] === "object" && !Array.isArray(sc[k]));
   if (!rowsKey) return sc;
   const rows = sc[rowsKey] as Row;
@@ -79,7 +125,8 @@ export function fitDocumentPreview(
   if (!tables.length) return sc;
   const budget = fittedBudget(limit);
   const view = sc["view"] as PreviewView | undefined;
-  const notes = Array.isArray(sc["notes"]) ? [...(sc["notes"] as string[])] : [];
+  // Ответ сокращается — одинаковые заметки строк сводятся в одну (ответ, который помещается, — как есть).
+  const notes = Array.isArray(sc["notes"]) ? compactLineNotes(sc["notes"] as string[]) : [];
   const keyOf = new Map(tables.map((k) => [fieldLabel(k), k]));
 
   /**
