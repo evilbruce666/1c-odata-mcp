@@ -146,25 +146,29 @@ const guidKey = (g: string) => g.replace(/[{}']/g, "").trim().toLowerCase();
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+/** Регистр до стольких строк читается целиком, как раньше; больше — с отбором по позициям документа. */
+const NOM_ACCOUNTS_WHOLE = 500;
+
 /**
- * Записи регистра для подбора. Весь регистр одним запросом (регистры не листаются: $skip теряет строки), как раньше,
- * но до предела выборки ODATA_ANALYTICS_MAX_ROWS, а не до 500 строк: обрезка молча отбрасывала записи после 500-й, и
- * позиция получала счёт общей записи вместо своей. Порядок строк тот же — среди равных по специфичности побеждает
- * та же запись. Регистр больше предела — только записи, которые могут подойти: без номенклатуры и по позициям
- * документа (пачками по KIND_CHUNK); подбор по ним тот же, что по всему регистру.
+ * Записи регистра для подбора. Регистр до NOM_ACCOUNTS_WHOLE строк — целиком одним запросом (регистры не листаются:
+ * $skip теряет строки), тот же запрос и порядок, что раньше. Больше — раньше молча брались первые 500 строк, и позиция
+ * получала счёт общей записи вместо своей; теперь только записи, которые могут подойти: без номенклатуры и по
+ * позициям документа (пачками по KIND_CHUNK). Подбор по ним тот же, что по всему регистру, а большой регистр не
+ * скачивается целиком на каждом предпросмотре и подтверждении.
  */
 async function readNomAccountRows(
   conn: Connection,
   reg: string,
   refs: readonly string[],
 ): Promise<ODataEntity[]> {
-  try {
-    return (
-      await fetchAllForAggregation(conn, reg, { select: NOM_ACCOUNTS_SELECT }, "счета учёта номенклатуры")
-    ).rows;
-  } catch (e) {
-    if (!(e instanceof AggregateOverflowError)) throw e;
-  }
+  const { rows: head } = await fetchAll(
+    conn.client,
+    reg,
+    { select: NOM_ACCOUNTS_SELECT },
+    conn.behavior.pageSize,
+    NOM_ACCOUNTS_WHOLE + 1,
+  );
+  if (head.length <= NOM_ACCOUNTS_WHOLE) return head;
   const read = async (filter: string) => {
     try {
       return (
@@ -178,7 +182,7 @@ async function readNomAccountRows(
     } catch (e) {
       if (!(e instanceof AggregateOverflowError)) throw e;
       throw new InputError(
-        `Регистр «Счета учёта номенклатуры» не помещается в предел выборки (ODATA_ANALYTICS_MAX_ROWS = ${conn.behavior.analyticsMaxRows}) даже в отборе по позициям документа — счета строк не подобрать точно. Увеличьте ODATA_ANALYTICS_MAX_ROWS.`,
+        `Регистр «Счета учёта номенклатуры»: записей, которые могут подойти позициям документа (общих или самих позиций), больше предела выборки ODATA_ANALYTICS_MAX_ROWS = ${conn.behavior.analyticsMaxRows} — счета строк не подобрать точно. Увеличьте ODATA_ANALYTICS_MAX_ROWS или разделите документ.`,
       );
     }
   };
