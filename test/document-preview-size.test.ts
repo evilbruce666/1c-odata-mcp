@@ -361,7 +361,11 @@ describe("предпросмотр документа: неухудшение и
         CASES[12]!.args(30),
       );
       expect(r.text.length, `предел ${limit}`).toBeLessThanOrEqual(limit);
-      expect(r.sc).toHaveProperty(limit >= t ? "payload.Товары" : "rowsInView");
+      // Не помещается — сокращается view, payload остаётся целиком.
+      expect((r.sc["payload"] as Record<string, unknown[]>)["Товары"], `предел ${limit}`).toHaveLength(30);
+      expect(r.sc).not.toHaveProperty("rowsInView");
+      if (limit >= t) expect(r.sc).not.toHaveProperty("linesComplete");
+      else expect(r.sc["linesComplete"]).toBe(false);
     }
   });
 
@@ -563,16 +567,33 @@ describe("номенклатура целиком — только если де
 });
 
 describe("предпросмотр документа: уровень 1 и соседи на 1000 строк", () => {
-  it("строки машинной части, повторённые в view, не повторяются — все строки видны", async () => {
-    // 80 строк с длинными названиями: вдвоём (payload и view) не помещаются, по одному разу — да.
+  it("80 строк с длинными названиями: payload целиком, сокращён только view", async () => {
+    // Раньше (rowsInView) payload.Товары пропадал, и клиент, который читает строки из payload, терял их.
     const s = setup({ schema: "ut11", n: 80, nameLen: 150 });
     const r = await s.call("write.sales.create_shipment", CASES[12]!.args(80));
-    expect(r.sc["rowsInView"]).toContain("Товары");
-    expect(r.sc).not.toHaveProperty("linesComplete");
-    expect(viewRows(r)).toHaveLength(80);
-    expect(r.sc["payload"]).not.toHaveProperty("Товары");
+    expect(r.sc).not.toHaveProperty("rowsInView");
+    expect((r.sc["payload"] as Record<string, unknown[]>)["Товары"]).toHaveLength(80);
+    expect(r.sc["linesComplete"]).toBe(false);
+    const shown = viewRows(r).length;
+    expect(shown).toBeGreaterThan(1);
+    expect(shown).toBeLessThan(80);
+    expect((r.sc["linesShown"] as Record<string, number>)["Товары"]).toBe(shown);
     expect((r.sc["summary"] as Record<string, Record<string, number>>)["Товары"]!["lines"]).toBe(80);
     expect(r.text.length).toBeLessThanOrEqual(45_000);
+  });
+
+  it("payload сам не помещается — строки только в view (rowsInView), все видны", async () => {
+    let hit = false;
+    for (const n of [120, 160, 200, 240]) {
+      const s = setup({ schema: "ut11", n, nameLen: 10 });
+      const r = await s.call("write.sales.create_shipment", CASES[12]!.args(n));
+      expect(r.text.length).toBeLessThanOrEqual(45_000);
+      if (!r.sc["rowsInView"]) continue;
+      hit = true;
+      expect(r.sc["payload"]).not.toHaveProperty("Товары");
+      expect(viewRows(r)).toHaveLength(n);
+    }
+    expect(hit).toBe(true);
   });
 
   it("реализация УТ на 1000 строк: подтверждение пишет все строки; проведение, чтение, статус, повтор — в пределе", async () => {

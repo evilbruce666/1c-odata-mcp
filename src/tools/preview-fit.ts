@@ -10,8 +10,10 @@ import { fieldLabel, type PreviewView } from "./preview-view.js";
  *
  * Уровни, пока ответ не уложится:
  *   0 — как есть, если помещается (вместе с operationId, который обёртка добавит);
- *   1 — строки машинной части, повторённые в view.tables, не повторяются; в summary — итоги по всем строкам;
- *   2 — показаны первые строки самых больших таблиц (linesComplete=false, linesShown).
+ *   1 — машинная часть целиком, сокращены читаемые таблицы view (linesComplete=false, linesShown), если так
+ *       помещается: клиент, который читает строки из payload, получает все;
+ *   2 — строки машинной части, повторённые в view.tables, не повторяются (rowsInView); в summary — итоги по всем;
+ *   3 — показаны первые строки таблиц, место делится поровну (linesComplete=false, linesShown).
  */
 
 /** Поле operationId, которое обёртка записи добавит к ответу: `"operationId":"<uuid>",` — ровно 53 знака. */
@@ -77,76 +79,94 @@ export function fitDocumentPreview(
   if (!tables.length) return sc;
   const budget = fittedBudget(limit);
   const view = sc["view"] as PreviewView | undefined;
-  const viewTables: Record<string, Row[]> = { ...(view?.tables ?? {}) };
-  // Таблица видна в view целиком — машинную копию не повторяем.
-  const inView = tables.filter((k) => viewTables[fieldLabel(k)]?.length === (rows[k] as unknown[]).length);
-  const machine: Row = Object.fromEntries(Object.entries(rows).filter(([k]) => !inView.includes(k)));
   const notes = Array.isArray(sc["notes"]) ? [...(sc["notes"] as string[])] : [];
-  const build = (extra: Row = {}) => ({
-    ...sc,
-    ...(view ? { view: { ...view, tables: viewTables } } : {}),
-    [rowsKey]: machine,
-    summary: linesSummary(rows, tables),
-    ...(inView.length ? { rowsInView: inView } : {}),
-    ...extra,
-    notes: [
-      ...notes,
-      ...(inView.length
-        ? [`Строки ${inView.join(", ")} не повторены в ${rowsKey}: они в view.tables, итоги — в summary.`]
-        : []),
-      ...(extra["linesComplete"] === false
-        ? [
-            `Документ большой: показаны первые строки (linesShown), итоги summary — по всем строкам. ${
-              rowsKey === "payload" ? "Подтверждение создаст документ" : "Подтверждение запишет таблицы"
-            } со всеми строками из аргументов вызова.`,
-          ]
-        : []),
-    ],
-  });
-  let out = build();
-  if (size(out) <= budget) return out;
-
-  // Показываемые списки: читаемые таблицы view и оставшиеся машинные. Место делится поровну: списки короче доли —
-  // целиком, остальные — до равной доли остатка. Раньше резался самый большой список до места, оставшегося после
-  // всех прочих целиком, и при больших «Сериях» «Товарам» доставалась одна строка. С одним длинным списком — как раньше.
   const keyOf = new Map(tables.map((k) => [fieldLabel(k), k]));
-  const shown: Record<string, number> = {};
-  const lists = (): Array<{ name: string; list: Row[]; set: (l: Row[]) => void }> => [
-    ...Object.keys(viewTables).map((label) => ({
-      name: keyOf.get(label) ?? label,
-      list: viewTables[label]!,
-      set: (l: Row[]) => (viewTables[label] = l),
-    })),
-    ...tables
-      .filter((k) => k in machine)
-      .map((k) => ({ name: k, list: machine[k] as Row[], set: (l: Row[]) => (machine[k] = l) })),
-  ];
-  for (let guard = 0; guard < 20; guard++) {
-    out = build({ linesComplete: false, linesShown: { ...shown } });
-    const total = size(out);
-    if (total <= budget) break;
-    const all = lists()
-      .map((l) => ({ ...l, chars: size(l.list) }))
-      .sort((a, b) => a.chars - b.chars);
-    let room = budget - (total - all.reduce((t, l) => t + l.chars, 0));
-    let cut = false;
-    for (let i = 0; i < all.length; i++) {
-      const l = all[i]!;
-      const share = Math.max(room, 0) / (all.length - i);
-      if (l.chars <= share) {
-        room -= l.chars;
-        continue;
+
+  /**
+   * Одна попытка. payloadFirst — машинная часть целиком, сокращаются только читаемые таблицы view: клиент, который
+   * берёт строки из payload, получает все (выбор владельца 24.11). Иначе — строки, видные в view целиком, не
+   * повторяются в машинной части (rowsInView), и сокращаются все списки.
+   */
+  const attempt = (payloadFirst: boolean): { out: Record<string, unknown>; fits: boolean } => {
+    const viewTables: Record<string, Row[]> = { ...(view?.tables ?? {}) };
+    const inView = payloadFirst
+      ? []
+      : tables.filter((k) => viewTables[fieldLabel(k)]?.length === (rows[k] as unknown[]).length);
+    const machine: Row = Object.fromEntries(Object.entries(rows).filter(([k]) => !inView.includes(k)));
+    const build = (extra: Row = {}) => ({
+      ...sc,
+      ...(view ? { view: { ...view, tables: viewTables } } : {}),
+      [rowsKey]: machine,
+      summary: linesSummary(rows, tables),
+      ...(inView.length ? { rowsInView: inView } : {}),
+      ...extra,
+      notes: [
+        ...notes,
+        ...(inView.length
+          ? [`Строки ${inView.join(", ")} не повторены в ${rowsKey}: они в view.tables, итоги — в summary.`]
+          : []),
+        ...(extra["linesComplete"] === false
+          ? [
+              `Документ большой: показаны первые строки (linesShown), итоги summary — по всем строкам. ${
+                payloadFirst ? `В ${rowsKey} — все строки, сокращены только view.tables. ` : ""
+              }${
+                rowsKey === "payload" ? "Подтверждение создаст документ" : "Подтверждение запишет таблицы"
+              } со всеми строками из аргументов вызова.`,
+            ]
+          : []),
+      ],
+    });
+    let out = build();
+    if (!payloadFirst && size(out) <= budget) return { out, fits: true };
+
+    // Показываемые списки: читаемые таблицы view и (кроме payloadFirst) оставшиеся машинные. Место делится поровну:
+    // списки короче доли — целиком, остальные — до равной доли остатка. Раньше резался самый большой список до места,
+    // оставшегося после всех прочих целиком, и при больших «Сериях» «Товарам» доставалась одна строка.
+    const shown: Record<string, number> = {};
+    const lists = (): Array<{ name: string; list: Row[]; set: (l: Row[]) => void }> => [
+      ...Object.keys(viewTables).map((label) => ({
+        name: keyOf.get(label) ?? label,
+        list: viewTables[label]!,
+        set: (l: Row[]) => (viewTables[label] = l),
+      })),
+      ...(payloadFirst ? [] : tables.filter((k) => k in machine)).map((k) => ({
+        name: k,
+        list: machine[k] as Row[],
+        set: (l: Row[]) => (machine[k] = l),
+      })),
+    ];
+    for (let guard = 0; guard < 20; guard++) {
+      out = build({ linesComplete: false, linesShown: { ...shown } });
+      const total = size(out);
+      if (total <= budget) break;
+      const all = lists()
+        .map((l) => ({ ...l, chars: size(l.list) }))
+        .sort((a, b) => a.chars - b.chars);
+      let room = budget - (total - all.reduce((t, l) => t + l.chars, 0));
+      let cut = false;
+      for (let i = 0; i < all.length; i++) {
+        const l = all[i]!;
+        const share = Math.max(room, 0) / (all.length - i);
+        if (l.chars <= share) {
+          room -= l.chars;
+          continue;
+        }
+        const kept = fitToChars(l.list, 0, share);
+        room -= size(kept);
+        if (kept.length >= l.list.length) continue;
+        l.set(kept);
+        shown[l.name] = Math.min(shown[l.name] ?? kept.length, kept.length);
+        cut = true;
       }
-      const kept = fitToChars(l.list, 0, share);
-      room -= size(kept);
-      if (kept.length >= l.list.length) continue;
-      l.set(kept);
-      shown[l.name] = Math.min(shown[l.name] ?? kept.length, kept.length);
-      cut = true;
+      if (!cut) break;
     }
-    if (!cut) break;
-  }
-  return Object.keys(shown).length ? build({ linesComplete: false, linesShown: shown }) : out;
+    if (Object.keys(shown).length) out = build({ linesComplete: false, linesShown: shown });
+    return { out, fits: size(out) <= budget };
+  };
+
+  // Сначала — машинная часть целиком, если она помещается (сокращается только view); иначе — прежний путь.
+  const first = view?.tables && Object.keys(view.tables).length ? attempt(true) : undefined;
+  return first?.fits ? first.out : attempt(false).out;
 }
 
 /** Обёртка сервера: подогнать предпросмотр записи и перерисовать текст ответа. */
