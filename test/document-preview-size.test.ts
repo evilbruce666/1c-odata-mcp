@@ -521,6 +521,26 @@ describe("сокращение предпросмотра делит место 
   });
 });
 
+describe("сокращение: список, который уже не урезать, не забирает долю", () => {
+  it("строки шире доли (5 × 6000 знаков) рядом с узкой таблицей на 300 строк — в пределе 10 000", async () => {
+    const { fitDocumentPreview } = await import("../src/tools/preview-fit.js");
+    const { renderJson } = await import("../src/tools/_shared.js");
+    const rows = (n: number, w: number, view: boolean) =>
+      Array.from({ length: n }, (_, i) =>
+        view ? { "№": i + 1, Н: "y".repeat(w) } : { LineNumber: i + 1, К: "x".repeat(w), Количество: 1 },
+      );
+    const sc = {
+      dryRun: true,
+      payload: { Серии: rows(300, 40, false), Товары: rows(5, 6000, false) },
+      view: { title: "т", fields: {}, tables: { Серии: rows(300, 40, true), Товары: rows(5, 6000, true) } },
+      notes: [],
+    };
+    const out = fitDocumentPreview(sc, 10_000, 53);
+    expect(renderJson(out).length + 53).toBeLessThanOrEqual(10_000);
+    expect(out["linesComplete"]).toBe(false);
+  });
+});
+
 describe("номенклатура целиком — только если дешевле пачек, и один раз на предпросмотр", () => {
   const whole = (log: string[]) =>
     log.filter(
@@ -546,15 +566,24 @@ describe("номенклатура целиком — только если де
     expect(chunks(s.log)).toHaveLength(6);
   }, 60_000);
 
-  it("разовый сбой запроса числа не запоминается: следующий предпросмотр читает справочник целиком", async () => {
+  it("сбой запроса числа помнится минуту, а не 10: внутри минуты не спрашивает, после — читает целиком", async () => {
     const s = setup({ schema: "ut11", n: 1000, nameLen: 10, catalog: 1500, countFailures: 1 });
     const r1 = await s.call("write.sales.create_shipment", CASES[12]!.args(1000));
     expect(r1.isError, r1.text.slice(0, 300)).toBe(false);
     s.log.length = 0;
-    const r2 = await s.call("write.sales.create_shipment", CASES[12]!.args(1000));
-    expect(r2.isError, r2.text.slice(0, 300)).toBe(false);
-    expect(whole(s.log)).toHaveLength(1);
-    expect(chunks(s.log)).toHaveLength(0);
+    await s.call("write.sales.create_shipment", CASES[12]!.args(1000));
+    expect(s.log.filter((l) => l.includes("$inlinecount"))).toHaveLength(0);
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 61_000);
+    try {
+      s.log.length = 0;
+      const r2 = await s.call("write.sales.create_shipment", CASES[12]!.args(1000));
+      expect(r2.isError, r2.text.slice(0, 300)).toBe(false);
+      expect(whole(s.log)).toHaveLength(1);
+      expect(chunks(s.log)).toHaveLength(0);
+    } finally {
+      clock.mockRestore();
+    }
   }, 60_000);
 
   it("1С не сказала число позиций — по ссылкам, без отказа", async () => {

@@ -16,6 +16,8 @@ import { buildQuery, cmp } from "./query.js";
 /** Позиций на странице чтения справочника целиком: строки короткие (3–4 поля). */
 export const WHOLE_CATALOG_PAGE = 5000;
 const COUNT_TTL_MS = 10 * 60_000;
+const COUNT_FAILURE_TTL_MS = 60_000;
+const countFailedAt = new WeakMap<object, Map<string, number>>();
 /**
  * Справочник общий для названий и серий предпросмотра и для вызовов в ближайшие 60 с (подтверждение, следующий
  * документ): прочитанное только показывается (названия, заметка о сериях), позиции вне него — по ссылкам.
@@ -27,11 +29,14 @@ async function propsOf(conn: Connection, set: string): Promise<Set<string>> {
 }
 
 /**
- * Позиций (не папок) в справочнике; undefined — 1С не сказала. На 10 минут запоминается только ответ 1С (с числом
- * или без); сбой запроса (таймаут, обрыв) не запоминается: иначе один сбой на 10 минут переводил бы большие
- * документы на пачки ссылок (ревью: около 70 запросов вместо 9). Следующий вызов спросит снова — это один запрос.
+ * Позиций (не папок) в справочнике; undefined — 1С не сказала. Ответ 1С (с числом или без) запоминается на 10 минут.
+ * Сбой запроса (таймаут, обрыв) — только на минуту: один сбой не переводит большие документы на пачки ссылок на 10
+ * минут (ревью: около 70 запросов вместо 9), а постоянный сбой не повторяется дважды в одном предпросмотре (названия
+ * и серии) и не ждёт таймаута на каждом.
  */
 export async function catalogItemCount(conn: Connection, set: string): Promise<number | undefined> {
+  const failed = countFailedAt.get(conn)?.get(set);
+  if (failed !== undefined && Date.now() - failed < COUNT_FAILURE_TTL_MS) return undefined;
   try {
     return await cached(
       conn,
@@ -52,7 +57,10 @@ export async function catalogItemCount(conn: Connection, set: string): Promise<n
       COUNT_TTL_MS,
     );
   } catch {
-    // cached не хранит ошибку загрузки.
+    // cached не хранит ошибку загрузки; помним сбой минуту.
+    const marks = countFailedAt.get(conn) ?? new Map<string, number>();
+    marks.set(set, Date.now());
+    countFailedAt.set(conn, marks);
     return undefined;
   }
 }
@@ -86,6 +94,7 @@ export function readCatalogBrief(conn: Connection, set: string): Promise<Map<str
     conn,
     `catalog-brief:${set}`,
     async () => {
+      const started = Date.now();
       const props = await propsOf(conn, set);
       const select = ["Ref_Key", "Description", "Code", "ВидНоменклатуры_Key"].filter((f) => props.has(f));
       const { rows } = await fetchAllForAggregation(
@@ -96,7 +105,7 @@ export function readCatalogBrief(conn: Connection, set: string): Promise<Map<str
         WHOLE_CATALOG_PAGE,
       );
       const marks = briefAt.get(conn) ?? new Map<string, number>();
-      marks.set(set, Date.now());
+      marks.set(set, started); // с начала чтения, как и запись кэша: иначе окно, где метка свежа, а кэш нет
       briefAt.set(conn, marks);
       return new Map(rows.map((r) => [String(r["Ref_Key"]).toLowerCase(), r]));
     },

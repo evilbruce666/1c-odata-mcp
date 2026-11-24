@@ -139,7 +139,10 @@ export function fitDocumentPreview(
       out = build({ linesComplete: false, linesShown: { ...shown } });
       const total = size(out);
       if (total <= budget) break;
+      // Список из одной строки не сокращается: в делении он — постоянная часть, иначе на него уходила бы доля, а
+      // остальные урезались бы по крупицам и не уложились (ревью: строки шире доли).
       const all = lists()
+        .filter((l) => l.list.length > 1)
         .map((l) => ({ ...l, chars: size(l.list) }))
         .sort((a, b) => a.chars - b.chars);
       let room = budget - (total - all.reduce((t, l) => t + l.chars, 0));
