@@ -197,6 +197,16 @@ describe("nomenclatureAccountsMany", () => {
     );
   });
 
+  it("ссылка позиции и организации в верхнем регистре или в скобках — своя запись, как у обычной формы", async () => {
+    const forms = (r: string) => [r, r.toUpperCase(), `{${r}}`, ` ${r.toUpperCase()} `];
+    for (const org of forms(ORG)) {
+      const c = conn({ register, kinds });
+      const m = (await nomenclatureAccountsMany(c.conn, org, [...forms(item(1)), ...forms(item(2))]))!;
+      for (const f of forms(item(1))) expect(m.get(f)?.goods, `${org} ${f}`).toBe(acc(5)); // номенклатура
+      for (const f of forms(item(2))) expect(m.get(f)?.goods, `${org} ${f}`).toBe(acc(4)); // вид + организация
+    }
+  });
+
   it("регистр не опубликован — undefined (вызывающий берёт счета по кодам)", async () => {
     const c = conn({ register: null, kinds });
     expect(await nomenclatureAccountsMany(c.conn, ORG, [item(1)])).toBeUndefined();

@@ -219,9 +219,10 @@ export async function nomenclatureAccountsMany(
 
   // Вид номенклатуры нужен для матчинга измерения ВидНоменклатуры в регистре — только если такие записи есть.
   const kinds = new Map<string, string | undefined>();
+  const org = guidKey(orgKey);
   const byKind = rows.some((r) => {
     const og = norm(r["Организация_Key"]);
-    return !!norm(r["ВидНоменклатуры_Key"]) && (!og || og === orgKey);
+    return !!norm(r["ВидНоменклатуры_Key"]) && (!og || guidKey(og) === org);
   });
   const nomSet = resolveEntity(CATALOGS.nomenclature, available);
   const kindPublished =
@@ -257,18 +258,22 @@ export async function nomenclatureAccountsMany(
     }
   }
 
+  // Ссылки сравниваются без учёта регистра букв, скобок и пробелов по краям, как их сравнивает 1С: ссылка позиции
+  // в верхнем регистре или в фигурных скобках раньше не находила свою запись и получала счёт общей.
   const out = new Map<string, NomAccounts | undefined>();
   for (const nomRef of refs) {
-    const vidRef = kinds.get(guidKey(nomRef));
+    const own = guidKey(nomRef);
+    const vidRef = kinds.get(own);
+    const vid = vidRef && guidKey(vidRef);
     let best: ODataEntity | undefined;
     let bestScore = -1;
     for (const r of rows) {
       const nm = norm(r["Номенклатура_Key"]);
       const og = norm(r["Организация_Key"]);
       const vd = norm(r["ВидНоменклатуры_Key"]);
-      if (nm && nm !== nomRef) continue;
-      if (og && og !== orgKey) continue;
-      if (vd && vd !== vidRef) continue; // запись для другого вида номенклатуры
+      if (nm && guidKey(nm) !== own) continue;
+      if (og && guidKey(og) !== org) continue;
+      if (vd && guidKey(vd) !== vid) continue; // запись для другого вида номенклатуры
       const score = (nm ? 4 : 0) + (vd ? 2 : 0) + (og ? 1 : 0);
       if (score > bestScore) {
         bestScore = score;
