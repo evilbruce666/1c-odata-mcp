@@ -269,7 +269,10 @@ describe("складские документы в Управлении торг
     expect(payloadOf(preview)).not.toHaveProperty("ПеремещениеПодДеятельность");
     expect(JSON.stringify(preview.sc["notes"])).toContain("нет проведённых перемещений");
     expect(s.posts).toHaveLength(1);
-    expect(s.posts[0]!.body).toMatchObject({ ...payloadOf(preview), Ref_Key: ref });
+    // Date без даты в аргументах — время вызова: на границе секунды у предпросмотра и подтверждения разная.
+    const { Date: previewDate, ...samePayload } = payloadOf(preview);
+    expect(s.posts[0]!.body).toMatchObject({ ...samePayload, Ref_Key: ref });
+    expect(String(s.posts[0]!.body["Date"]).slice(0, 10)).toBe(String(previewDate).slice(0, 10));
     expect(s.fake.violations).toEqual([]);
   });
 
