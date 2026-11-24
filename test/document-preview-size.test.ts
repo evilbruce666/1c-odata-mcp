@@ -30,11 +30,14 @@ interface Opts {
   env?: Record<string, string>;
   /** 1С не отдаёт число позиций ($inlinecount). */
   noCount?: boolean;
+  /** Первые столько запросов числа позиций обрываются (сбой провайдера). */
+  countFailures?: number;
 }
 
 const KIND = "b0b0b0b0-0000-4000-8000-000000000001";
 
 function setup(o: Opts) {
+  let countFailures = o.countFailures ?? 0;
   const name = (i: number) =>
     `Позиция ${String(i).padStart(4, "0")} `.padEnd(o.nameLen, "ж").slice(0, o.nameLen);
   const known = new Set(Array.from({ length: Math.max(o.catalog ?? 0, o.n) }, (_, i) => item(i + 1)));
@@ -58,6 +61,10 @@ function setup(o: Opts) {
       data: (q: FakeQuery) => {
         if (q.fn) return undefined;
         if (o.noCount && q.params.has("$inlinecount")) return undefined;
+        if (q.params.has("$inlinecount") && countFailures > 0) {
+          countFailures--;
+          throw new Error("Connection closed");
+        }
         if (q.base === "Document_РеализацияТоваровУслуг" && q.params.get("$select") === null)
           return [
             { Ref_Key: DOC, Posted: false, DeletionMark: false, Товары: docRows },
@@ -533,6 +540,17 @@ describe("номенклатура целиком — только если де
     expect(r.isError, r.text.slice(0, 300)).toBe(false);
     expect(whole(s.log)).toHaveLength(0);
     expect(chunks(s.log)).toHaveLength(6);
+  }, 60_000);
+
+  it("разовый сбой запроса числа не запоминается: следующий предпросмотр читает справочник целиком", async () => {
+    const s = setup({ schema: "ut11", n: 1000, nameLen: 10, catalog: 1500, countFailures: 1 });
+    const r1 = await s.call("write.sales.create_shipment", CASES[12]!.args(1000));
+    expect(r1.isError, r1.text.slice(0, 300)).toBe(false);
+    s.log.length = 0;
+    const r2 = await s.call("write.sales.create_shipment", CASES[12]!.args(1000));
+    expect(r2.isError, r2.text.slice(0, 300)).toBe(false);
+    expect(whole(s.log)).toHaveLength(1);
+    expect(chunks(s.log)).toHaveLength(0);
   }, 60_000);
 
   it("1С не сказала число позиций — по ссылкам, без отказа", async () => {

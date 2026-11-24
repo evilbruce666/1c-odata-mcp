@@ -26,13 +26,17 @@ async function propsOf(conn: Connection, set: string): Promise<Set<string>> {
   return new Set((await conn.getMetadata()).entities.get(set)?.properties.map((p) => p.name) ?? []);
 }
 
-/** Позиций (не папок) в справочнике; undefined — 1С не сказала. */
-export function catalogItemCount(conn: Connection, set: string): Promise<number | undefined> {
-  return cached(
-    conn,
-    `catalog-count:${set}`,
-    async () => {
-      try {
+/**
+ * Позиций (не папок) в справочнике; undefined — 1С не сказала. На 10 минут запоминается только ответ 1С (с числом
+ * или без); сбой запроса (таймаут, обрыв) не запоминается: иначе один сбой на 10 минут переводил бы большие
+ * документы на пачки ссылок (ревью: около 70 запросов вместо 9). Следующий вызов спросит снова — это один запрос.
+ */
+export async function catalogItemCount(conn: Connection, set: string): Promise<number | undefined> {
+  try {
+    return await cached(
+      conn,
+      `catalog-count:${set}`,
+      async () => {
         const props = await propsOf(conn, set);
         const page = await conn.client.getCollection<ODataEntity>(
           `${set}${buildQuery({
@@ -44,12 +48,13 @@ export function catalogItemCount(conn: Connection, set: string): Promise<number 
         );
         const n = Number(page["odata.count"]);
         return Number.isFinite(n) && page["odata.count"] !== undefined ? n : undefined;
-      } catch {
-        return undefined;
-      }
-    },
-    COUNT_TTL_MS,
-  );
+      },
+      COUNT_TTL_MS,
+    );
+  } catch {
+    // cached не хранит ошибку загрузки.
+    return undefined;
+  }
 }
 
 /** Когда справочник прочитан целиком (для кэша readCatalogBrief): свежий — бесплатен. */
