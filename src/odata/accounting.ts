@@ -153,32 +153,26 @@ const NOM_ACCOUNTS_WHOLE = 500;
  * Записи регистра для подбора. Регистр до NOM_ACCOUNTS_WHOLE строк — целиком одним запросом (регистры не листаются:
  * $skip теряет строки), тот же запрос и порядок, что раньше. Больше — раньше молча брались первые 500 строк, и позиция
  * получала счёт общей записи вместо своей; теперь только записи, которые могут подойти: без номенклатуры и по
- * позициям документа (пачками по KIND_CHUNK). Подбор по ним тот же, что по всему регистру, а большой регистр не
- * скачивается целиком на каждом предпросмотре и подтверждении.
+ * позициям документа и их группам (пачками по KIND_CHUNK). Подбор по ним тот же, что по всему регистру, а большой
+ * регистр не скачивается целиком на каждом предпросмотре и подтверждении.
  */
 async function readNomAccountRows(
   conn: Connection,
   reg: string,
-  refs: readonly string[],
+  select: string[],
+  candidates: () => Promise<string[]>,
 ): Promise<ODataEntity[]> {
   const { rows: head } = await fetchAll(
     conn.client,
     reg,
-    { select: NOM_ACCOUNTS_SELECT },
+    { select },
     conn.behavior.pageSize,
     NOM_ACCOUNTS_WHOLE + 1,
   );
   if (head.length <= NOM_ACCOUNTS_WHOLE) return head;
   const read = async (filter: string) => {
     try {
-      return (
-        await fetchAllForAggregation(
-          conn,
-          reg,
-          { select: NOM_ACCOUNTS_SELECT, filter },
-          "счета учёта номенклатуры",
-        )
-      ).rows;
+      return (await fetchAllForAggregation(conn, reg, { select, filter }, "счета учёта номенклатуры")).rows;
     } catch (e) {
       if (!(e instanceof AggregateOverflowError)) throw e;
       throw new InputError(
@@ -188,7 +182,7 @@ async function readNomAccountRows(
   };
   const rows = await read(cmp("Номенклатура_Key", "eq", odataGuid(EMPTY_GUID)));
   // Не-GUID ни с одной записью не совпадёт: в отбор не идёт.
-  const keys = [...new Set(refs.map(guidKey))].filter((k) => GUID.test(k));
+  const keys = [...new Set(await candidates())].filter((k) => GUID.test(k));
   for (let i = 0; i < keys.length; i += KIND_CHUNK)
     rows.push(
       ...(await read(
@@ -198,83 +192,192 @@ async function readNomAccountRows(
   return rows;
 }
 
+/** Сколько уровней групп номенклатуры подниматься: глубже в справочниках не бывает. */
+const MAX_GROUP_DEPTH = 10;
+
+/**
+ * Родитель позиций и групп (ключи — guidKey): уровень за уровнем, пачками по KIND_CHUNK. Пачка не прочиталась —
+ * у её позиций групп нет (подбор как раньше, по позиции, виду и организации).
+ */
+async function readParents(
+  conn: Connection,
+  nomSet: string,
+  keys: readonly string[],
+): Promise<Map<string, string>> {
+  const parent = new Map<string, string>();
+  const seen = new Set<string>();
+  let todo = [...new Set(keys)].filter((k) => GUID.test(k));
+  for (let depth = 0; depth <= MAX_GROUP_DEPTH && todo.length; depth++) {
+    for (const k of todo) seen.add(k);
+    const next = new Set<string>();
+    for (let i = 0; i < todo.length; i += KIND_CHUNK)
+      try {
+        const page = await conn.client.getCollection(
+          `${nomSet}${buildQuery({
+            select: ["Ref_Key", "Parent_Key"],
+            filter: or(...todo.slice(i, i + KIND_CHUNK).map((k) => cmp("Ref_Key", "eq", odataGuid(k)))),
+          })}`,
+        );
+        for (const item of page.value ?? []) {
+          const p = norm(item["Parent_Key"]);
+          if (!p) continue;
+          parent.set(guidKey(String(item["Ref_Key"])), guidKey(p));
+          if (!seen.has(guidKey(p))) next.add(guidKey(p));
+        }
+      } catch {
+        // без групп для этой пачки
+      }
+    todo = [...next];
+  }
+  return parent;
+}
+
 /**
  * Счета учёта позиций из регистра «Счета учёта номенклатуры»: для каждой — самая специфичная подходящая запись
- * (пустые измерения — «джокер»). Регистр читается один раз на вызов (раньше — заново на каждую позицию, 2 запроса на
- * строку документа), вид позиций — пачками и только если в регистре есть записи с видом. Регистр не кэшируется
- * между вызовами: подтверждение должно взять счета, действующие сейчас. Ключи карты — ссылки как переданы;
- * undefined всей карты — регистр не опубликован (вызывающий откатится на коды).
+ * (пустые измерения — «джокер»). Приоритет: позиция, затем её группа (ближайшая выше), затем вид номенклатуры, склад,
+ * тип склада, организация. Записи групп раньше не применялись вовсе (на ip — 14 из 28 записей регистра), а записи
+ * склада применялись к любому складу; теперь запись склада или типа склада — только при совпадении со складом
+ * документа (warehouseKey; не задан — такие записи не подходят). Регистр читается один раз на вызов, вид и группы
+ * позиций — пачками и только если в регистре есть такие записи. Регистр не кэшируется между вызовами: подтверждение
+ * должно взять счета, действующие сейчас. Ключи карты — ссылки как переданы; undefined всей карты — регистр не
+ * опубликован (вызывающий откатится на коды).
  */
 export async function nomenclatureAccountsMany(
   conn: Connection,
   orgKey: string,
   nomRefs: readonly string[],
+  opts: { warehouseKey?: string | undefined } = {},
 ): Promise<Map<string, NomAccounts | undefined> | undefined> {
   const available = await conn.available();
   const reg = resolveEntity(NOM_ACCOUNTS_REG, available);
   if (!reg) return undefined;
   const refs = [...new Set(nomRefs)];
-
-  const rows = await readNomAccountRows(conn, reg, refs);
-
-  // Вид номенклатуры нужен для матчинга измерения ВидНоменклатуры в регистре — только если такие записи есть.
-  const kinds = new Map<string, string | undefined>();
-  const org = guidKey(orgKey);
-  const byKind = rows.some((r) => {
-    const og = norm(r["Организация_Key"]);
-    return !!norm(r["ВидНоменклатуры_Key"]) && (!og || guidKey(og) === org);
-  });
+  const meta = await conn.getMetadata();
+  const propsOf = (set: string | undefined) =>
+    new Set((set && meta.entities.get(set)?.properties.map((p) => p.name)) || []);
+  const regProps = propsOf(reg);
+  const select = [...NOM_ACCOUNTS_SELECT, ...["Склад_Key", "ТипСклада"].filter((f) => regProps.has(f))];
   const nomSet = resolveEntity(CATALOGS.nomenclature, available);
-  const kindPublished =
-    !!nomSet &&
-    !!(await conn.getMetadata()).entities
-      .get(nomSet)
-      ?.properties.some((p) => p.name === "ВидНоменклатуры_Key");
-  if (byKind && nomSet && kindPublished && refs.length) {
-    const keys = [...new Set(refs.map(guidKey))];
+  const nomProps = propsOf(nomSet);
+  const own = new Set(refs.map(guidKey));
+
+  // Сведения позиций документа: вид (если в регистре есть записи с видом) и родитель (если есть записи номенклатуры
+  // не из документа — они могут быть группами). Одним чтением пачками; верхние уровни групп — отдельно, их единицы.
+  const org = guidKey(orgKey);
+  const kinds = new Map<string, string | undefined>();
+  let parents: Map<string, string> | undefined;
+  const readFacts = async (wantKind: boolean, wantParent: boolean) => {
+    if (!nomSet || !own.size) return;
+    const fields = [
+      ...(wantKind && nomProps.has("ВидНоменклатуры_Key") ? ["ВидНоменклатуры_Key"] : []),
+      ...(wantParent && nomProps.has("Parent_Key") ? ["Parent_Key"] : []),
+    ];
+    if (wantParent) parents ??= new Map();
+    if (!fields.length) return;
+    const take = (k: string, item: ODataEntity) => {
+      if (fields.includes("ВидНоменклатуры_Key")) kinds.set(k, norm(item["ВидНоменклатуры_Key"]));
+      const p = fields.includes("Parent_Key") ? norm(item["Parent_Key"]) : undefined;
+      if (p) parents!.set(k, guidKey(p));
+    };
+    const keys = [...own].filter((k) => GUID.test(k));
     for (let i = 0; i < keys.length; i += KIND_CHUNK) {
       const chunk = keys.slice(i, i + KIND_CHUNK);
       try {
         const page = await conn.client.getCollection(
           `${nomSet}${buildQuery({
-            select: ["Ref_Key", "ВидНоменклатуры_Key"],
+            select: ["Ref_Key", ...fields],
             filter: or(...chunk.map((k) => cmp("Ref_Key", "eq", odataGuid(k)))),
           })}`,
         );
-        for (const item of page.value ?? [])
-          kinds.set(guidKey(String(item["Ref_Key"])), norm(item["ВидНоменклатуры_Key"]));
+        for (const item of page.value ?? []) take(guidKey(String(item["Ref_Key"])), item);
       } catch {
         // Пачка не прочиталась — по одной, как раньше: сбой одной позиции не лишает вида остальные.
         for (const k of chunk)
           try {
-            const item = await conn.client.getEntity(
-              `${nomSet}(guid'${k}')${buildQuery({ select: ["ВидНоменклатуры_Key"] })}`,
-            );
-            kinds.set(k, norm(item["ВидНоменклатуры_Key"]));
+            take(k, await conn.client.getEntity(`${nomSet}(guid'${k}')${buildQuery({ select: fields })}`));
           } catch {
-            // нет такого объекта — матчим без вида
+            // нет такого объекта — матчим без вида и групп
           }
       }
     }
+    if (parents && fields.includes("Parent_Key")) {
+      const upper = await readParents(conn, nomSet, [...new Set(parents.values())]);
+      for (const [k, p] of upper) if (!parents.has(k)) parents.set(k, p);
+    }
+  };
+  const ancestorsOf = (k: string): string[] => {
+    const out: string[] = [];
+    for (let p = parents?.get(k); p && out.length <= MAX_GROUP_DEPTH && !out.includes(p); p = parents?.get(p))
+      out.push(p);
+    return out;
+  };
+
+  let factsRead = false;
+  const rows = await readNomAccountRows(conn, reg, select, async () => {
+    // Большой регистр: сведения нужны до отбора (группы позиций входят в отбор).
+    await readFacts(true, true);
+    factsRead = true;
+    return [...own, ...[...own].flatMap(ancestorsOf)];
+  });
+  if (!factsRead) {
+    const wantKind = rows.some((r) => {
+      const og = norm(r["Организация_Key"]);
+      return !!norm(r["ВидНоменклатуры_Key"]) && (!og || guidKey(og) === org);
+    });
+    const wantParent = rows.some((r) => {
+      const nm = norm(r["Номенклатура_Key"]);
+      return !!nm && !own.has(guidKey(nm));
+    });
+    if (wantKind || wantParent) await readFacts(wantKind, wantParent);
   }
 
-  // Ссылки сравниваются без учёта регистра букв, скобок и пробелов по краям, как их сравнивает 1С: ссылка позиции
-  // в верхнем регистре или в фигурных скобках раньше не находила свою запись и получала счёт общей.
+  // Склад документа и его тип — только если в регистре есть записи склада или типа склада.
+  const wh = opts.warehouseKey ? guidKey(opts.warehouseKey) : undefined;
+  let whType: string | undefined;
+  const typeOf = (r: ODataEntity) => (typeof r["ТипСклада"] === "string" ? (r["ТипСклада"] as string) : "");
+  if (wh && GUID.test(wh) && rows.some((r) => typeOf(r))) {
+    const whSet = resolveEntity(CATALOGS.warehouses, available);
+    if (whSet)
+      try {
+        const w = await conn.client.getEntity(
+          `${whSet}(guid'${wh}')${buildQuery({ select: ["ТипСклада"] })}`,
+        );
+        whType =
+          typeof w["ТипСклада"] === "string" && w["ТипСклада"] ? (w["ТипСклада"] as string) : undefined;
+      } catch {
+        // тип склада не прочитался — записи типа склада не подходят
+      }
+  }
+
+  // Ссылки сравниваются без учёта регистра букв, скобок и пробелов по краям, как их сравнивает 1С.
   const out = new Map<string, NomAccounts | undefined>();
   for (const nomRef of refs) {
-    const own = guidKey(nomRef);
-    const vidRef = kinds.get(own);
+    const key = guidKey(nomRef);
+    const vidRef = kinds.get(key);
     const vid = vidRef && guidKey(vidRef);
+    const groups = ancestorsOf(key);
     let best: ODataEntity | undefined;
     let bestScore = -1;
     for (const r of rows) {
       const nm = norm(r["Номенклатура_Key"]);
       const og = norm(r["Организация_Key"]);
       const vd = norm(r["ВидНоменклатуры_Key"]);
-      if (nm && guidKey(nm) !== own) continue;
+      const sk = norm(r["Склад_Key"]);
+      const tp = typeOf(r);
+      // Уровень номенклатуры: сама позиция — выше любой группы, ближайшая группа — выше дальней.
+      let level = 0;
+      if (nm) {
+        const k = guidKey(nm);
+        const depth = groups.indexOf(k);
+        if (k === key) level = MAX_GROUP_DEPTH + 2;
+        else if (depth >= 0) level = MAX_GROUP_DEPTH + 1 - depth;
+        else continue;
+      }
       if (og && guidKey(og) !== org) continue;
       if (vd && guidKey(vd) !== vid) continue; // запись для другого вида номенклатуры
-      const score = (nm ? 4 : 0) + (vd ? 2 : 0) + (og ? 1 : 0);
+      if (sk && guidKey(sk) !== wh) continue; // запись другого склада
+      if (tp && tp !== whType) continue; // запись другого типа склада
+      const score = level * 16 + (vd ? 8 : 0) + (sk ? 4 : 0) + (tp ? 2 : 0) + (og ? 1 : 0);
       if (score > bestScore) {
         bestScore = score;
         best = r;

@@ -15,10 +15,14 @@ const K1 = g("0b0b0b0b", 1);
 const K2 = g("0b0b0b0b", 2);
 const item = (i: number) => g("0c0c0c0c", i);
 const acc = (i: number) => g("0d0d0d0d", i);
-const row = (o: { org?: string; nom?: string; kind?: string }, goods: number) => ({
+const row = (
+  o: { org?: string; nom?: string; kind?: string; wh?: string; whType?: string },
+  goods: number,
+) => ({
   Организация_Key: o.org ?? E,
   Номенклатура_Key: o.nom ?? E,
   ВидНоменклатуры_Key: o.kind ?? E,
+  ...(o.wh || o.whType ? { Склад_Key: o.wh ?? E, ТипСклада: o.whType ?? "" } : {}),
   СчетУчета_Key: acc(goods),
   СчетУчетаНДСПоПриобретеннымЦенностям_Key: E,
   СчетУчетаНДСПоРеализации_Key: E,
@@ -33,6 +37,9 @@ function conn(o: {
   failChunks?: boolean;
   /** ODATA_ANALYTICS_MAX_ROWS. */
   maxRows?: number;
+  /** Родитель позиции или группы; есть — в схеме опубликованы Parent_Key, склад и тип склада. */
+  parents?: Record<string, string>;
+  warehouseTypes?: Record<string, string>;
 }) {
   const log: string[] = [];
   const kindOf = (ref: string) => o.kinds[ref.toLowerCase()];
@@ -44,6 +51,7 @@ function conn(o: {
         new Set([
           ...(o.register ? ["InformationRegister_СчетаУчетаНоменклатуры"] : []),
           "Catalog_Номенклатура",
+          "Catalog_Склады",
         ]),
       getMetadata: async () => ({
         entities: new Map([
@@ -53,8 +61,13 @@ function conn(o: {
               properties: [
                 { name: "Ref_Key" },
                 ...(o.kindField === false ? [] : [{ name: "ВидНоменклатуры_Key" }]),
+                ...(o.parents ? [{ name: "Parent_Key" }] : []),
               ],
             },
+          ],
+          [
+            "InformationRegister_СчетаУчетаНоменклатуры",
+            { properties: o.parents ? [{ name: "Склад_Key" }, { name: "ТипСклада" }] : [] },
           ],
         ]),
       }),
@@ -77,14 +90,23 @@ function conn(o: {
           const refs = [...p.matchAll(/guid'([0-9a-fA-F-]{36})'/g)].map((m) => m[1]!);
           return {
             value: refs
-              .filter((r) => kindOf(r))
-              .map((r) => ({ Ref_Key: r.toLowerCase(), ВидНоменклатуры_Key: kindOf(r) })),
+              .filter((r) => kindOf(r) || o.parents?.[r.toLowerCase()] || o.parents)
+              .map((r) => ({
+                Ref_Key: r.toLowerCase(),
+                ВидНоменклатуры_Key: kindOf(r) ?? E,
+                ...(o.parents ? { Parent_Key: o.parents[r.toLowerCase()] ?? E } : {}),
+              })),
           };
         },
         getEntity: async (path: string) => {
           const p = decodeURIComponent(path);
           log.push(p);
           const ref = /guid'([^']+)'/.exec(p)![1]!;
+          if (p.startsWith("Catalog_Склады")) {
+            const t = o.warehouseTypes?.[ref];
+            if (t === undefined) throw new Error("404");
+            return { ТипСклада: t };
+          }
           if (ref === item(3)) throw new Error("сбой одной позиции");
           if (!kindOf(ref)) throw new Error("404");
           return { ВидНоменклатуры_Key: kindOf(ref) };
@@ -205,6 +227,47 @@ describe("nomenclatureAccountsMany", () => {
       for (const f of forms(item(1))) expect(m.get(f)?.goods, `${org} ${f}`).toBe(acc(5)); // номенклатура
       for (const f of forms(item(2))) expect(m.get(f)?.goods, `${org} ${f}`).toBe(acc(4)); // вид + организация
     }
+  });
+
+  it("группа номенклатуры: ближайшая группа — выше вида и дальней группы, своя запись позиции — выше группы", async () => {
+    const G1 = g("0e0e0e0e", 1); // группа позиций 1 и 5, внутри G2
+    const G2 = g("0e0e0e0e", 2); // группа позиции 2
+    const parents = { [item(1)]: G1, [item(5)]: G1, [G1]: G2, [item(2)]: G2 };
+    const reg = [
+      row({}, 1),
+      row({ kind: K1 }, 2),
+      row({ nom: G2 }, 20),
+      row({ nom: G1 }, 21),
+      row({ nom: item(5) }, 50),
+    ];
+    const c = conn({ register: reg, kinds, parents });
+    const m = (await nomenclatureAccountsMany(c.conn, ORG, [item(1), item(2), item(3), item(5)]))!;
+    expect(m.get(item(1))?.goods).toBe(acc(21)); // ближайшая группа, хотя есть запись вида
+    expect(m.get(item(2))?.goods).toBe(acc(20)); // группа выше вида
+    expect(m.get(item(3))?.goods).toBe(acc(2)); // без групп — вид
+    expect(m.get(item(5))?.goods).toBe(acc(50)); // своя запись выше группы
+    // Вид и родитель — одним запросом пачки; верхний уровень групп — ещё один.
+    expect(c.log.filter((l) => l.startsWith("Catalog_Номенклатура"))).toHaveLength(2);
+  });
+
+  it("запись склада или типа склада — только для склада документа", async () => {
+    const W1 = g("0f0f0f0f", 1);
+    const W2 = g("0f0f0f0f", 2);
+    const W3 = g("0f0f0f0f", 3);
+    const reg = [row({}, 1), row({ wh: W1 }, 30), row({ whType: "РозничныйМагазин" }, 31)];
+    const types = { [W1]: "ОптовыйСклад", [W2]: "РозничныйМагазин", [W3]: "ОптовыйСклад" };
+    const pick = async (warehouseKey?: string) =>
+      (await nomenclatureAccountsMany(
+        conn({ register: reg, kinds, parents: {}, warehouseTypes: types }).conn,
+        ORG,
+        [item(1)],
+        { warehouseKey },
+      ))!.get(item(1))?.goods;
+    expect(await pick(W1)).toBe(acc(30));
+    expect(await pick(W1.toUpperCase())).toBe(acc(30));
+    expect(await pick(W2)).toBe(acc(31));
+    expect(await pick(W3)).toBe(acc(1));
+    expect(await pick(undefined)).toBe(acc(1)); // без склада записи склада не подходят
   });
 
   it("регистр не опубликован — undefined (вызывающий берёт счета по кодам)", async () => {

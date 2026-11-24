@@ -550,9 +550,11 @@ async function resolveLineAccounts(
   orgKey: string,
   nomRefs: string[],
   defaults: NomAccounts,
+  /** Склад документа: записи регистра по складу и типу склада подходят только ему. */
+  warehouseKey?: string,
 ): Promise<Map<string, NomAccounts>> {
   const map = new Map<string, NomAccounts>();
-  const regs = await nomenclatureAccountsMany(conn, orgKey, nomRefs);
+  const regs = await nomenclatureAccountsMany(conn, orgKey, nomRefs, { warehouseKey });
   for (const ref of new Set(nomRefs)) {
     const reg = regs?.get(ref);
     map.set(ref, {
@@ -627,12 +629,14 @@ async function goodsAccounts(
   lines: GoodsLine[],
   kind: "purchase" | "shipment" | "service",
   docAccounts?: DocAccounts,
+  warehouseKey?: string,
 ): Promise<{ settlement?: string | undefined; lineAccountsFor: LineAccountsFor }> {
   const accMap = await resolveLineAccounts(
     conn,
     orgKey,
     lines.map((l) => l.nomenclatureRef),
     {},
+    warehouseKey,
   );
   const overrides =
     kind === "purchase"
@@ -692,12 +696,14 @@ async function goodsOnlyAccounts(
   conn: Connection,
   orgKey: string,
   lines: GoodsLine[],
+  warehouseKey?: string,
 ): Promise<(nomRef: string) => Record<string, string>> {
   const accMap = await resolveLineAccounts(
     conn,
     orgKey,
     lines.map((l) => l.nomenclatureRef),
     {},
+    warehouseKey,
   );
   const needsGoods = lines.some((l) => !accMap.get(l.nomenclatureRef)?.goods);
   const defaults = await resolveDefaultAccounts(conn, needsGoods ? ["goods"] : []);
@@ -777,6 +783,8 @@ async function getDocInfo(
   guid: string,
 ): Promise<{
   orgKey: string;
+  /** Склад шапки (у перемещения — отправитель): по нему подбираются записи регистра счетов по складу. */
+  warehouseKey: string | undefined;
   posted: boolean;
   lines: GoodsLine[];
   section: Section;
@@ -795,6 +803,7 @@ async function getDocInfo(
   );
   return {
     orgKey: String(doc["Организация_Key"] ?? ""),
+    warehouseKey: refOrUndefined(doc["Склад_Key"] ?? doc["СкладОтправитель_Key"]),
     posted: doc["Posted"] === true,
     lines: sectionRows(doc, section).map(lineFromRow),
     section,
@@ -918,6 +927,7 @@ async function buildSectionRows(
   orgKey: string,
   lines: GoodsLine[],
   section: Section,
+  warehouseKey?: string,
 ): Promise<{ rows: Array<Record<string, unknown>>; total: number } | undefined> {
   const inList = (arr: readonly string[]): boolean => arr.includes(entitySet);
   if (inList(WRITE_DOCUMENTS.customerInvoice)) {
@@ -939,7 +949,7 @@ async function buildSectionRows(
   ) {
     const sale = inList(WRITE_DOCUMENTS.sales) || inList(WRITE_DOCUMENTS.returnFromCustomer);
     const kind = sale ? (section === "Услуги" ? "service" : "shipment") : "purchase";
-    const { lineAccountsFor } = await goodsAccounts(conn, orgKey, lines, kind);
+    const { lineAccountsFor } = await goodsAccounts(conn, orgKey, lines, kind, undefined, warehouseKey);
     const rows = buildGoodsRows(lines, lineAccountsFor);
     return { rows, total: rowsTotal(rows) };
   }
@@ -948,7 +958,7 @@ async function buildSectionRows(
     inList(WRITE_DOCUMENTS.writeoff) ||
     inList(WRITE_DOCUMENTS.transfer)
   ) {
-    const lineAcc = await goodsOnlyAccounts(conn, orgKey, lines);
+    const lineAcc = await goodsOnlyAccounts(conn, orgKey, lines, warehouseKey);
     const withSum = !inList(WRITE_DOCUMENTS.transfer); // у перемещения в ТЧ нет суммы
     const rows = lines.map((l, i) =>
       clean({
@@ -3311,7 +3321,14 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         );
         const org = await resolveOrg(conn, organization);
         const warehouseKey = await resolveWarehouse(conn, warehouse);
-        const { settlement, lineAccountsFor } = await goodsAccounts(conn, org.key, lines, "purchase");
+        const { settlement, lineAccountsFor } = await goodsAccounts(
+          conn,
+          org.key,
+          lines,
+          "purchase",
+          undefined,
+          warehouseKey,
+        );
         return createGoodsDoc(
           conn,
           set,
@@ -3585,10 +3602,17 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const org = await resolveOrg(conn, organization);
         const warehouseKey = await resolveWarehouse(conn, warehouse);
         const bank = await resolveOrgBankAccount(conn, org.key, orgBankAccount);
-        const { settlement, lineAccountsFor } = await goodsAccounts(conn, org.key, lines, "shipment", {
-          income: incomeAccount,
-          expense: expenseAccount,
-        });
+        const { settlement, lineAccountsFor } = await goodsAccounts(
+          conn,
+          org.key,
+          lines,
+          "shipment",
+          {
+            income: incomeAccount,
+            expense: expenseAccount,
+          },
+          warehouseKey,
+        );
         return createGoodsDoc(
           conn,
           set,
@@ -3659,7 +3683,14 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
             "Документ проведён. Сначала отмените проведение (post_document с post=false), затем меняйте строки.",
           );
         }
-        const built = await buildSectionRows(conn, entitySet, info.orgKey, lines, info.section);
+        const built = await buildSectionRows(
+          conn,
+          entitySet,
+          info.orgKey,
+          lines,
+          info.section,
+          info.warehouseKey,
+        );
         if (!built) {
           return fail(
             "Поддерживаются: счёт покупателю, поступление/реализация товаров и услуг, акт об оказании " +
@@ -3800,10 +3831,17 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         );
         const org = await resolveOrg(conn, organization);
         const warehouseKey = await resolveWarehouse(conn, warehouse);
-        const { settlement, lineAccountsFor } = await goodsAccounts(conn, org.key, lines, "shipment", {
-          income: incomeAccount,
-          expense: expenseAccount,
-        });
+        const { settlement, lineAccountsFor } = await goodsAccounts(
+          conn,
+          org.key,
+          lines,
+          "shipment",
+          {
+            income: incomeAccount,
+            expense: expenseAccount,
+          },
+          warehouseKey,
+        );
         const rows = buildGoodsRows(lines, lineAccountsFor);
         const payload = clean({
           Date: await docDate(conn, date),
@@ -3853,7 +3891,14 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         );
         const org = await resolveOrg(conn, organization);
         const warehouseKey = await resolveWarehouse(conn, warehouse);
-        const { settlement, lineAccountsFor } = await goodsAccounts(conn, org.key, lines, "purchase");
+        const { settlement, lineAccountsFor } = await goodsAccounts(
+          conn,
+          org.key,
+          lines,
+          "purchase",
+          undefined,
+          warehouseKey,
+        );
         const rows = buildGoodsRows(lines, lineAccountsFor);
         const payload = clean({
           Date: await docDate(conn, date),
@@ -3919,7 +3964,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           resolveWarehouse(conn, fromWarehouse),
           resolveWarehouse(conn, toWarehouse),
         ]);
-        const lineAcc = await goodsOnlyAccounts(conn, org.key, toGoodsLines(lines));
+        const lineAcc = await goodsOnlyAccounts(conn, org.key, toGoodsLines(lines), fromKey);
         const rows = lines.map((l, i) =>
           clean({
             LineNumber: i + 1,
@@ -4026,7 +4071,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         noSeries(lines);
         const org = await resolveOrg(conn, organization);
         const warehouseKey = await resolveWarehouse(conn, warehouse);
-        const lineAcc = await goodsOnlyAccounts(conn, org.key, toGoodsLines(lines));
+        const lineAcc = await goodsOnlyAccounts(conn, org.key, toGoodsLines(lines), warehouseKey);
         const rows = lines.map((l, i) =>
           clean({
             LineNumber: i + 1,
@@ -4117,7 +4162,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         noSeries(lines);
         const org = await resolveOrg(conn, organization);
         const warehouseKey = await resolveWarehouse(conn, warehouse);
-        const lineAcc = await goodsOnlyAccounts(conn, org.key, toGoodsLines(lines));
+        const lineAcc = await goodsOnlyAccounts(conn, org.key, toGoodsLines(lines), warehouseKey);
         const rows = lines.map((l, i) =>
           clean({
             LineNumber: i + 1,
@@ -4271,6 +4316,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           info.orgKey,
           [...info.lines, line],
           info.section,
+          info.warehouseKey,
         );
         if (!built)
           return fail(
@@ -4469,7 +4515,14 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const kept = info.lines.filter((_, i) => i + 1 !== lineNumber);
         if (kept.length === 0)
           return fail("Нельзя удалить последнюю строку — в документе должна остаться хотя бы одна позиция.");
-        const built = await buildSectionRows(conn, entitySet, info.orgKey, kept, info.section);
+        const built = await buildSectionRows(
+          conn,
+          entitySet,
+          info.orgKey,
+          kept,
+          info.section,
+          info.warehouseKey,
+        );
         if (!built)
           return fail(
             "Поддерживаются: счёт, поступление/реализация, акт услуг, возвраты, перемещение, оприходование, списание.",
