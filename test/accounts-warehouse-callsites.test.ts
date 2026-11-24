@@ -65,8 +65,10 @@ const CASES: Array<[string, Record<string, unknown>]> = [
 describe("склад документа доходит до подбора счетов строк", () => {
   for (const order of ["общая первой", "склада первой"] as const)
     it.each(CASES)(`%s (${order})`, async (tool, args) => {
-      const register =
-        order === "общая первой" ? [row(E, GENERAL), row(id, OWN)] : [row(id, OWN), row(E, GENERAL)];
+      const register = [
+        ...(order === "общая первой" ? [row(E, GENERAL), row(id, OWN)] : [row(id, OWN), row(E, GENERAL)]),
+        row(TO, RECEIVER),
+      ];
       const fake = fake1C(
         { READ_ONLY: "false", ODATA_WRITABLE: "true" },
         { data: (q) => (q.base === "InformationRegister_СчетаУчетаНоменклатуры" ? register : undefined) },
@@ -77,6 +79,13 @@ describe("склад документа доходит до подбора сч�
       expect(r.isError, text.slice(0, 300)).not.toBe(true);
       expect(text, tool).toContain(OWN);
       expect(text, tool).not.toContain(GENERAL);
-      expect(text, tool).not.toContain(RECEIVER);
+      const first = ((
+        r.structuredContent?.["payload"] as Record<string, Record<string, unknown>[]> | undefined
+      )?.["Товары"] ?? [])[0];
+      if (tool === "write.warehouse.create_transfer") {
+        // Отправитель — СчетУчета, получатель — НовыйСчетУчета: без него БП не проводит («Не заполнен счёт дебета»).
+        expect(first?.["СчетУчета_Key"]).toBe(OWN);
+        expect(first?.["НовыйСчетУчета_Key"]).toBe(RECEIVER);
+      } else expect(text, tool).not.toContain(RECEIVER);
     });
 });

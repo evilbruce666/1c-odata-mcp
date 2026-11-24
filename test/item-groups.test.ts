@@ -512,7 +512,8 @@ describe("read.catalog.list_items", () => {
     const withDeleted = await all(ITEMS_TOOL, { includeDeleted: true, limit: 1000 });
     expect(withDeleted.first["count"]).toBe(N);
     expect(withDeleted.rows.filter((r) => r["deletionMark"] === true)).toHaveLength(N / 50);
-  });
+    // Около 2 с отдельно; при полном параллельном прогоне не укладывался в 5 с по умолчанию.
+  }, 30_000);
 
   it("одноимённые группы в разных ветках — по пути; список групп с matchedGroupRef", async () => {
     const { all, call } = await setup();

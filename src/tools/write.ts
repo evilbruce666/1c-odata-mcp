@@ -24,6 +24,7 @@ import { ensurePublished, requireEntity } from "../odata/publication.js";
 import {
   accountsByCode,
   accountsByRef,
+  nomenclatureAccountsByWarehouses,
   nomenclatureAccountsMany,
   resolveDefaultAccounts,
   type NomAccounts,
@@ -698,17 +699,48 @@ async function goodsOnlyAccounts(
   lines: GoodsLine[],
   warehouseKey?: string,
 ): Promise<(nomRef: string) => Record<string, string>> {
-  const accMap = await resolveLineAccounts(
-    conn,
-    orgKey,
-    lines.map((l) => l.nomenclatureRef),
-    {},
-    warehouseKey,
-  );
-  const needsGoods = lines.some((l) => !accMap.get(l.nomenclatureRef)?.goods);
+  return (await goodsOnlyAccountsFor(conn, orgKey, lines, [warehouseKey]))[0]!;
+}
+
+/** То же для нескольких складов одним чтением регистра (перемещение: отправитель и получатель). */
+async function goodsOnlyAccountsFor(
+  conn: Connection,
+  orgKey: string,
+  lines: GoodsLine[],
+  warehouses: ReadonlyArray<string | undefined>,
+): Promise<Array<(nomRef: string) => Record<string, string>>> {
+  const refs = lines.map((l) => l.nomenclatureRef);
+  const regs = await nomenclatureAccountsByWarehouses(conn, orgKey, refs, warehouses);
+  const goodsOf = (i: number, ref: string) => regs?.[i]?.get(ref)?.goods;
+  const needsGoods = warehouses.some((_, i) => refs.some((r) => !goodsOf(i, r)));
   const defaults = await resolveDefaultAccounts(conn, needsGoods ? ["goods"] : []);
-  return (nomRef) =>
-    clean({ СчетУчета_Key: accMap.get(nomRef)?.goods ?? defaults.get("goods") }) as Record<string, string>;
+  return warehouses.map(
+    (_, i) => (nomRef: string) =>
+      clean({ СчетУчета_Key: goodsOf(i, nomRef) ?? defaults.get("goods") }) as Record<string, string>,
+  );
+}
+
+/**
+ * Счета перемещения: СчетУчета_Key — по складу-отправителю, НовыйСчетУчета_Key — по складу-получателю, одним чтением
+ * регистра. Без НовыйСчетУчета_Key БП не проводит перемещение: «Не заполнен счёт дебета» (проверено на ip
+ * 24.11.2026). Поля нет в схеме или нет получателя — только счёт отправителя.
+ */
+async function transferAccounts(
+  conn: Connection,
+  entitySet: string,
+  orgKey: string,
+  lines: GoodsLine[],
+  fromKey: string | undefined,
+  toKey: string | undefined,
+): Promise<(nomRef: string) => Record<string, string>> {
+  const rowProps = (await conn.getMetadata()).entities.get(`${entitySet}_Товары`)?.properties ?? [];
+  if (!toKey || !rowProps.some((p) => p.name === "НовыйСчетУчета_Key"))
+    return goodsOnlyAccounts(conn, orgKey, lines, fromKey);
+  const [from, to] = await goodsOnlyAccountsFor(conn, orgKey, lines, [fromKey, toKey]);
+  return (nomRef) => {
+    const receiver = to!(nomRef)["СчетУчета_Key"];
+    return { ...from!(nomRef), ...(receiver ? { НовыйСчетУчета_Key: receiver } : {}) };
+  };
 }
 
 const EMPTY_GUID = "00000000-0000-0000-0000-000000000000";
@@ -785,6 +817,8 @@ async function getDocInfo(
   orgKey: string;
   /** Склад шапки (у перемещения — отправитель): по нему подбираются записи регистра счетов по складу. */
   warehouseKey: string | undefined;
+  /** Склад-получатель перемещения. */
+  receiverKey: string | undefined;
   posted: boolean;
   lines: GoodsLine[];
   section: Section;
@@ -804,6 +838,7 @@ async function getDocInfo(
   return {
     orgKey: String(doc["Организация_Key"] ?? ""),
     warehouseKey: refOrUndefined(doc["Склад_Key"] ?? doc["СкладОтправитель_Key"]),
+    receiverKey: refOrUndefined(doc["СкладПолучатель_Key"]),
     posted: doc["Posted"] === true,
     lines: sectionRows(doc, section).map(lineFromRow),
     section,
@@ -928,6 +963,8 @@ async function buildSectionRows(
   lines: GoodsLine[],
   section: Section,
   warehouseKey?: string,
+  /** Склад-получатель перемещения: по нему — НовыйСчетУчета_Key строк. */
+  receiverKey?: string,
 ): Promise<{ rows: Array<Record<string, unknown>>; total: number } | undefined> {
   const inList = (arr: readonly string[]): boolean => arr.includes(entitySet);
   if (inList(WRITE_DOCUMENTS.customerInvoice)) {
@@ -958,7 +995,9 @@ async function buildSectionRows(
     inList(WRITE_DOCUMENTS.writeoff) ||
     inList(WRITE_DOCUMENTS.transfer)
   ) {
-    const lineAcc = await goodsOnlyAccounts(conn, orgKey, lines, warehouseKey);
+    const lineAcc = inList(WRITE_DOCUMENTS.transfer)
+      ? await transferAccounts(conn, entitySet, orgKey, lines, warehouseKey, receiverKey)
+      : await goodsOnlyAccounts(conn, orgKey, lines, warehouseKey);
     const withSum = !inList(WRITE_DOCUMENTS.transfer); // у перемещения в ТЧ нет суммы
     const rows = lines.map((l, i) =>
       clean({
@@ -3690,6 +3729,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           lines,
           info.section,
           info.warehouseKey,
+          info.receiverKey,
         );
         if (!built) {
           return fail(
@@ -3964,7 +4004,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           resolveWarehouse(conn, fromWarehouse),
           resolveWarehouse(conn, toWarehouse),
         ]);
-        const lineAcc = await goodsOnlyAccounts(conn, org.key, toGoodsLines(lines), fromKey);
+        const lineAcc = await transferAccounts(conn, set, org.key, toGoodsLines(lines), fromKey, toKey);
         const rows = lines.map((l, i) =>
           clean({
             LineNumber: i + 1,
@@ -4318,6 +4358,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           [...info.lines, line],
           info.section,
           info.warehouseKey,
+          info.receiverKey,
         );
         if (!built)
           return fail(
@@ -4523,6 +4564,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           kept,
           info.section,
           info.warehouseKey,
+          info.receiverKey,
         );
         if (!built)
           return fail(

@@ -248,6 +248,19 @@ export async function nomenclatureAccountsMany(
   nomRefs: readonly string[],
   opts: { warehouseKey?: string | undefined } = {},
 ): Promise<Map<string, NomAccounts | undefined> | undefined> {
+  return (await nomenclatureAccountsByWarehouses(conn, orgKey, nomRefs, [opts.warehouseKey]))?.[0];
+}
+
+/**
+ * То же для нескольких складов одним чтением регистра и сведений позиций (перемещение: отправитель и получатель).
+ * Результат — карта на каждый склад, в том же порядке.
+ */
+export async function nomenclatureAccountsByWarehouses(
+  conn: Connection,
+  orgKey: string,
+  nomRefs: readonly string[],
+  warehouses: ReadonlyArray<string | undefined>,
+): Promise<Array<Map<string, NomAccounts | undefined>> | undefined> {
   const available = await conn.available();
   const reg = resolveEntity(NOM_ACCOUNTS_REG, available);
   if (!reg) return undefined;
@@ -332,12 +345,12 @@ export async function nomenclatureAccountsMany(
   }
 
   // Склад документа и его тип — только если в регистре есть записи склада или типа склада.
-  const wh = opts.warehouseKey ? guidKey(opts.warehouseKey) : undefined;
-  let whType: string | undefined;
   const typeOf = (r: ODataEntity) => (typeof r["ТипСклада"] === "string" ? (r["ТипСклада"] as string) : "");
-  if (wh && GUID.test(wh) && rows.some((r) => typeOf(r))) {
-    const whSet = resolveEntity(CATALOGS.warehouses, available);
-    if (whSet)
+  const whSet = resolveEntity(CATALOGS.warehouses, available);
+  const match = async (warehouseKey: string | undefined): Promise<Map<string, NomAccounts | undefined>> => {
+    const wh = warehouseKey ? guidKey(warehouseKey) : undefined;
+    let whType: string | undefined;
+    if (wh && GUID.test(wh) && whSet && rows.some((r) => typeOf(r)))
       try {
         const w = await conn.client.getEntity(
           `${whSet}(guid'${wh}')${buildQuery({ select: ["ТипСклада"] })}`,
@@ -347,54 +360,57 @@ export async function nomenclatureAccountsMany(
       } catch {
         // тип склада не прочитался — записи типа склада не подходят
       }
-  }
 
-  // Ссылки сравниваются без учёта регистра букв, скобок и пробелов по краям, как их сравнивает 1С.
-  const out = new Map<string, NomAccounts | undefined>();
-  for (const nomRef of refs) {
-    const key = guidKey(nomRef);
-    const vidRef = kinds.get(key);
-    const vid = vidRef && guidKey(vidRef);
-    const groups = ancestorsOf(key);
-    let best: ODataEntity | undefined;
-    let bestScore = -1;
-    for (const r of rows) {
-      const nm = norm(r["Номенклатура_Key"]);
-      const og = norm(r["Организация_Key"]);
-      const vd = norm(r["ВидНоменклатуры_Key"]);
-      const sk = norm(r["Склад_Key"]);
-      const tp = typeOf(r);
-      // Уровень номенклатуры: сама позиция — выше любой группы, ближайшая группа — выше дальней.
-      let level = 0;
-      if (nm) {
-        const k = guidKey(nm);
-        const depth = groups.indexOf(k);
-        if (k === key) level = MAX_GROUP_DEPTH + 2;
-        else if (depth >= 0) level = MAX_GROUP_DEPTH + 1 - depth;
-        else continue;
+    // Ссылки сравниваются без учёта регистра букв, скобок и пробелов по краям, как их сравнивает 1С.
+    const out = new Map<string, NomAccounts | undefined>();
+    for (const nomRef of refs) {
+      const key = guidKey(nomRef);
+      const vidRef = kinds.get(key);
+      const vid = vidRef && guidKey(vidRef);
+      const groups = ancestorsOf(key);
+      let best: ODataEntity | undefined;
+      let bestScore = -1;
+      for (const r of rows) {
+        const nm = norm(r["Номенклатура_Key"]);
+        const og = norm(r["Организация_Key"]);
+        const vd = norm(r["ВидНоменклатуры_Key"]);
+        const sk = norm(r["Склад_Key"]);
+        const tp = typeOf(r);
+        // Уровень номенклатуры: сама позиция — выше любой группы, ближайшая группа — выше дальней.
+        let level = 0;
+        if (nm) {
+          const k = guidKey(nm);
+          const depth = groups.indexOf(k);
+          if (k === key) level = MAX_GROUP_DEPTH + 2;
+          else if (depth >= 0) level = MAX_GROUP_DEPTH + 1 - depth;
+          else continue;
+        }
+        if (og && guidKey(og) !== org) continue;
+        if (vd && guidKey(vd) !== vid) continue; // запись для другого вида номенклатуры
+        if (sk && guidKey(sk) !== wh) continue; // запись другого склада
+        if (tp && tp !== whType) continue; // запись другого типа склада
+        const score = level * 16 + (vd ? 8 : 0) + (sk ? 4 : 0) + (tp ? 2 : 0) + (og ? 1 : 0);
+        if (score > bestScore) {
+          bestScore = score;
+          best = r;
+        }
       }
-      if (og && guidKey(og) !== org) continue;
-      if (vd && guidKey(vd) !== vid) continue; // запись для другого вида номенклатуры
-      if (sk && guidKey(sk) !== wh) continue; // запись другого склада
-      if (tp && tp !== whType) continue; // запись другого типа склада
-      const score = level * 16 + (vd ? 8 : 0) + (sk ? 4 : 0) + (tp ? 2 : 0) + (og ? 1 : 0);
-      if (score > bestScore) {
-        bestScore = score;
-        best = r;
-      }
+      out.set(
+        nomRef,
+        best && {
+          goods: norm(best["СчетУчета_Key"]),
+          incomingVat: norm(best["СчетУчетаНДСПоПриобретеннымЦенностям_Key"]),
+          outgoingVat: norm(best["СчетУчетаНДСПоРеализации_Key"]),
+          income: norm(best["СчетДоходовОтРеализации_Key"]),
+          expense: norm(best["СчетРасходовОтРеализации_Key"]),
+        },
+      );
     }
-    out.set(
-      nomRef,
-      best && {
-        goods: norm(best["СчетУчета_Key"]),
-        incomingVat: norm(best["СчетУчетаНДСПоПриобретеннымЦенностям_Key"]),
-        outgoingVat: norm(best["СчетУчетаНДСПоРеализации_Key"]),
-        income: norm(best["СчетДоходовОтРеализации_Key"]),
-        expense: norm(best["СчетРасходовОтРеализации_Key"]),
-      },
-    );
-  }
-  return out;
+    return out;
+  };
+  const maps: Array<Map<string, NomAccounts | undefined>> = [];
+  for (const w of warehouses) maps.push(await match(w));
+  return maps;
 }
 
 /**
