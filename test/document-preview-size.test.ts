@@ -450,6 +450,35 @@ describe("счета строк Бухгалтерии: регистр один 
   });
 });
 
+describe("сокращение предпросмотра делит место между таблицами", () => {
+  const SERIES = "e0e0e0e0-0000-4000-8000-000000000001";
+  it.each([
+    [300, 45_000],
+    [1000, 45_000],
+    [300, 10_000],
+    [1000, 10_000],
+  ])("реализация УТ с сериями, %i строк, предел %i: и Товары, и Серии показаны долей", async (n, limit) => {
+    const s = setup({ schema: "ut11", n, nameLen: 150, limit });
+    const args = CASES[12]!.args(n);
+    const r = await s.call("write.sales.create_shipment", {
+      ...args,
+      lines: (args["lines"] as Record<string, unknown>[]).map((l) => ({ ...l, seriesRef: SERIES })),
+    });
+    expect(r.isError, r.text.slice(0, 300)).toBe(false);
+    expect(r.text.length).toBeLessThanOrEqual(limit);
+    const shown = r.sc["linesShown"] as Record<string, number>;
+    if (process.env["DOC_SHOW"])
+      console.log(n, limit, JSON.stringify(shown), viewRows(r).length, viewRows(r, "Серии").length);
+    const goods = viewRows(r).length;
+    const series = viewRows(r, "Серии").length;
+    expect(goods, JSON.stringify(shown)).toBeGreaterThan(1);
+    expect(goods).toBeGreaterThanOrEqual(series * 0.2);
+    expect(series).toBeGreaterThanOrEqual(goods * 0.2);
+    const sum = r.sc["summary"] as Record<string, Record<string, number>>;
+    expect(sum["Товары"]!["lines"]).toBe(n);
+  });
+});
+
 describe("предпросмотр документа: уровень 1 и соседи на 1000 строк", () => {
   it("строки машинной части, повторённые в view, не повторяются — все строки видны", async () => {
     // 80 строк с длинными названиями: вдвоём (payload и view) не помещаются, по одному разу — да.

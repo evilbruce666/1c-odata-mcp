@@ -106,7 +106,9 @@ export function fitDocumentPreview(
   let out = build();
   if (size(out) <= budget) return out;
 
-  // Показываемые списки: читаемые таблицы view и оставшиеся машинные. Режем самый большой, пока не уложится.
+  // Показываемые списки: читаемые таблицы view и оставшиеся машинные. Место делится поровну: списки короче доли —
+  // целиком, остальные — до равной доли остатка. Раньше резался самый большой список до места, оставшегося после
+  // всех прочих целиком, и при больших «Сериях» «Товарам» доставалась одна строка. С одним длинным списком — как раньше.
   const keyOf = new Map(tables.map((k) => [fieldLabel(k), k]));
   const shown: Record<string, number> = {};
   const lists = (): Array<{ name: string; list: Row[]; set: (l: Row[]) => void }> => [
@@ -123,13 +125,26 @@ export function fitDocumentPreview(
     out = build({ linesComplete: false, linesShown: { ...shown } });
     const total = size(out);
     if (total <= budget) break;
-    const biggest = lists().sort((a, b) => size(b.list) - size(a.list))[0];
-    if (!biggest || biggest.list.length <= 1) break;
-    const room = budget - (total - size(biggest.list));
-    const kept = fitToChars(biggest.list, 0, Math.max(room, 0));
-    if (kept.length >= biggest.list.length) break;
-    biggest.set(kept);
-    shown[biggest.name] = Math.min(shown[biggest.name] ?? kept.length, kept.length);
+    const all = lists()
+      .map((l) => ({ ...l, chars: size(l.list) }))
+      .sort((a, b) => a.chars - b.chars);
+    let room = budget - (total - all.reduce((t, l) => t + l.chars, 0));
+    let cut = false;
+    for (let i = 0; i < all.length; i++) {
+      const l = all[i]!;
+      const share = Math.max(room, 0) / (all.length - i);
+      if (l.chars <= share) {
+        room -= l.chars;
+        continue;
+      }
+      const kept = fitToChars(l.list, 0, share);
+      room -= size(kept);
+      if (kept.length >= l.list.length) continue;
+      l.set(kept);
+      shown[l.name] = Math.min(shown[l.name] ?? kept.length, kept.length);
+      cut = true;
+    }
+    if (!cut) break;
   }
   return Object.keys(shown).length ? build({ linesComplete: false, linesShown: shown }) : out;
 }
