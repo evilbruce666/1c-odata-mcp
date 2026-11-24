@@ -31,13 +31,15 @@ function conn(o: {
   kinds: Record<string, string>;
   kindField?: boolean;
   failChunks?: boolean;
+  /** ODATA_ANALYTICS_MAX_ROWS. */
+  maxRows?: number;
 }) {
   const log: string[] = [];
   const kindOf = (ref: string) => o.kinds[ref.toLowerCase()];
   return {
     log,
     conn: {
-      behavior: { pageSize: 1000 },
+      behavior: { pageSize: 1000, analyticsMaxRows: o.maxRows ?? 200_000 },
       available: async () =>
         new Set([
           ...(o.register ? ["InformationRegister_СчетаУчетаНоменклатуры"] : []),
@@ -60,7 +62,17 @@ function conn(o: {
         getCollection: async (path: string) => {
           const p = decodeURIComponent(path);
           log.push(p);
-          if (p.startsWith("InformationRegister_")) return { value: o.register ?? [] };
+          if (p.startsWith("InformationRegister_")) {
+            // Как 1С: $top режет, отбор по Номенклатура_Key — без учёта регистра букв.
+            const top = Number(/\$top=(\d+)/.exec(p)?.[1] ?? Infinity);
+            const f = /\$filter=([^&]*)/.exec(p)?.[1];
+            const wanted =
+              f && new Set([...f.matchAll(/guid'([0-9a-fA-F-]{36})'/g)].map((m) => m[1]!.toLowerCase()));
+            const rows = (o.register ?? []).filter(
+              (r) => !wanted || wanted.has(String(r["Номенклатура_Key"]).toLowerCase()),
+            );
+            return { value: rows.slice(0, top) };
+          }
           if (o.failChunks) throw new Error("сбой");
           const refs = [...p.matchAll(/guid'([0-9a-fA-F-]{36})'/g)].map((m) => m[1]!);
           return {
@@ -139,6 +151,45 @@ describe("nomenclatureAccountsMany", () => {
     const m = (await nomenclatureAccountsMany(c.conn, ORG, [item(2)]))!;
     expect(m.get(item(2))?.goods).toBe(acc(3));
     expect(c.log.filter((l) => l.startsWith("Catalog_"))).toHaveLength(0);
+  });
+
+  it("регистр больше 500 строк — подбор по всем записям, а не по первым 500", async () => {
+    // Запись для позиции — 550-я из 600: раньше её отрезал предел 500, и позиция получала счёт общей записи.
+    const big = [
+      row({}, 1),
+      ...Array.from({ length: 548 }, (_, i) => row({ nom: g("0f0f0f0f", i + 1) }, 100 + i)),
+      row({ nom: item(1) }, 5),
+      ...Array.from({ length: 50 }, (_, i) => row({ nom: g("0f0f0f0f", 1000 + i) }, 900 + i)),
+    ];
+    const c = conn({ register: big, kinds });
+    const m = (await nomenclatureAccountsMany(c.conn, ORG, [item(1), item(2)]))!;
+    expect(m.get(item(1))?.goods).toBe(acc(5));
+    expect(m.get(item(2))?.goods).toBe(acc(1));
+    expect(c.log.filter((l) => l.startsWith("InformationRegister_"))).toHaveLength(1);
+  });
+
+  it("регистр больше предела выборки — записи без номенклатуры и по позициям документа, подбор тот же", async () => {
+    const big = [
+      ...register,
+      ...Array.from({ length: 30 }, (_, i) => row({ nom: g("0f0f0f0f", i + 1) }, 100 + i)),
+    ];
+    const refs = [item(1), item(2), item(4), item(5), item(2).toUpperCase(), "не GUID"];
+    const full = (await nomenclatureAccountsMany(conn({ register: big, kinds }).conn, ORG, refs))!;
+    const c = conn({ register: big, kinds, maxRows: 10 });
+    const m = (await nomenclatureAccountsMany(c.conn, ORG, refs))!;
+    expect([...m]).toEqual([...full]);
+    expect(m.get(item(1))?.goods).toBe(acc(5));
+    expect(m.get(item(2))?.goods).toBe(acc(4));
+    // Весь регистр (переполнение), без номенклатуры, одна пачка позиций.
+    expect(c.log.filter((l) => l.startsWith("InformationRegister_"))).toHaveLength(3);
+  });
+
+  it("не помещается и отбор по позициям — понятный отказ, а не неточные счета", async () => {
+    const big = Array.from({ length: 30 }, (_, i) => row({ kind: i % 2 ? K1 : K2 }, 100 + i));
+    const c = conn({ register: big, kinds, maxRows: 10 });
+    await expect(nomenclatureAccountsMany(c.conn, ORG, [item(1)])).rejects.toThrow(
+      /Счета учёта номенклатуры.*ODATA_ANALYTICS_MAX_ROWS = 10/,
+    );
   });
 
   it("регистр не опубликован — undefined (вызывающий берёт счета по кодам)", async () => {

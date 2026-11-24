@@ -144,6 +144,56 @@ const NOM_ACCOUNTS_SELECT = [
 const KIND_CHUNK = 20;
 const guidKey = (g: string) => g.replace(/[{}']/g, "").trim().toLowerCase();
 
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * Записи регистра для подбора. Весь регистр одним запросом (регистры не листаются: $skip теряет строки), как раньше,
+ * но до предела выборки ODATA_ANALYTICS_MAX_ROWS, а не до 500 строк: обрезка молча отбрасывала записи после 500-й, и
+ * позиция получала счёт общей записи вместо своей. Порядок строк тот же — среди равных по специфичности побеждает
+ * та же запись. Регистр больше предела — только записи, которые могут подойти: без номенклатуры и по позициям
+ * документа (пачками по KIND_CHUNK); подбор по ним тот же, что по всему регистру.
+ */
+async function readNomAccountRows(
+  conn: Connection,
+  reg: string,
+  refs: readonly string[],
+): Promise<ODataEntity[]> {
+  try {
+    return (
+      await fetchAllForAggregation(conn, reg, { select: NOM_ACCOUNTS_SELECT }, "счета учёта номенклатуры")
+    ).rows;
+  } catch (e) {
+    if (!(e instanceof AggregateOverflowError)) throw e;
+  }
+  const read = async (filter: string) => {
+    try {
+      return (
+        await fetchAllForAggregation(
+          conn,
+          reg,
+          { select: NOM_ACCOUNTS_SELECT, filter },
+          "счета учёта номенклатуры",
+        )
+      ).rows;
+    } catch (e) {
+      if (!(e instanceof AggregateOverflowError)) throw e;
+      throw new InputError(
+        `Регистр «Счета учёта номенклатуры» не помещается в предел выборки (ODATA_ANALYTICS_MAX_ROWS = ${conn.behavior.analyticsMaxRows}) даже в отборе по позициям документа — счета строк не подобрать точно. Увеличьте ODATA_ANALYTICS_MAX_ROWS.`,
+      );
+    }
+  };
+  const rows = await read(cmp("Номенклатура_Key", "eq", odataGuid(EMPTY_GUID)));
+  // Не-GUID ни с одной записью не совпадёт: в отбор не идёт.
+  const keys = [...new Set(refs.map(guidKey))].filter((k) => GUID.test(k));
+  for (let i = 0; i < keys.length; i += KIND_CHUNK)
+    rows.push(
+      ...(await read(
+        or(...keys.slice(i, i + KIND_CHUNK).map((k) => cmp("Номенклатура_Key", "eq", odataGuid(k)))),
+      )),
+    );
+  return rows;
+}
+
 /**
  * Счета учёта позиций из регистра «Счета учёта номенклатуры»: для каждой — самая специфичная подходящая запись
  * (пустые измерения — «джокер»). Регистр читается один раз на вызов (раньше — заново на каждую позицию, 2 запроса на
@@ -161,14 +211,7 @@ export async function nomenclatureAccountsMany(
   if (!reg) return undefined;
   const refs = [...new Set(nomRefs)];
 
-  // Предел и способ чтения — прежние: от них зависит, какая из равных по специфичности записей победит.
-  const { rows } = await fetchAll(
-    conn.client,
-    reg,
-    { select: NOM_ACCOUNTS_SELECT },
-    conn.behavior.pageSize,
-    500,
-  );
+  const rows = await readNomAccountRows(conn, reg, refs);
 
   // Вид номенклатуры нужен для матчинга измерения ВидНоменклатуры в регистре — только если такие записи есть.
   const kinds = new Map<string, string | undefined>();
