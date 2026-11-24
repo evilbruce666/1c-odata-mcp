@@ -24,7 +24,7 @@ import { ensurePublished, requireEntity } from "../odata/publication.js";
 import {
   accountsByCode,
   accountsByRef,
-  nomenclatureAccounts,
+  nomenclatureAccountsMany,
   resolveDefaultAccounts,
   type NomAccounts,
 } from "../odata/accounting.js";
@@ -552,8 +552,9 @@ async function resolveLineAccounts(
   defaults: NomAccounts,
 ): Promise<Map<string, NomAccounts>> {
   const map = new Map<string, NomAccounts>();
+  const regs = await nomenclatureAccountsMany(conn, orgKey, nomRefs);
   for (const ref of new Set(nomRefs)) {
-    const reg = await nomenclatureAccounts(conn, orgKey, ref);
+    const reg = regs?.get(ref);
     map.set(ref, {
       goods: reg?.goods ?? defaults.goods,
       incomingVat: reg?.incomingVat ?? defaults.incomingVat,

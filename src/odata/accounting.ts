@@ -130,75 +130,116 @@ const norm = (g: unknown): string | undefined => {
   return s && s !== EMPTY_GUID ? s : undefined;
 };
 
+const NOM_ACCOUNTS_SELECT = [
+  "Организация_Key",
+  "Номенклатура_Key",
+  "ВидНоменклатуры_Key",
+  "СчетУчета_Key",
+  "СчетУчетаНДСПоПриобретеннымЦенностям_Key",
+  "СчетУчетаНДСПоРеализации_Key",
+  "СчетДоходовОтРеализации_Key",
+  "СчетРасходовОтРеализации_Key",
+];
+/** Ссылок в одном отборе «or» при чтении вида позиций: длинный отбор 1С не примет (как у цен и серий). */
+const KIND_CHUNK = 20;
+const guidKey = (g: string) => g.replace(/[{}']/g, "").trim().toLowerCase();
+
 /**
- * Берёт счета учёта для номенклатуры из регистра «Счета учёта номенклатуры»,
- * выбирая самую специфичную подходящую запись (пустые измерения — «джокер»).
- * Возвращает undefined, если регистр не опубликован (вызывающий откатится на коды).
+ * Счета учёта позиций из регистра «Счета учёта номенклатуры»: для каждой — самая специфичная подходящая запись
+ * (пустые измерения — «джокер»). Регистр читается один раз на вызов (раньше — заново на каждую позицию, 2 запроса на
+ * строку документа), вид позиций — пачками и только если в регистре есть записи с видом. Регистр не кэшируется
+ * между вызовами: подтверждение должно взять счета, действующие сейчас. Ключи карты — ссылки как переданы;
+ * undefined всей карты — регистр не опубликован (вызывающий откатится на коды).
  */
-export async function nomenclatureAccounts(
+export async function nomenclatureAccountsMany(
   conn: Connection,
   orgKey: string,
-  nomRef: string,
-): Promise<NomAccounts | undefined> {
+  nomRefs: readonly string[],
+): Promise<Map<string, NomAccounts | undefined> | undefined> {
   const available = await conn.available();
   const reg = resolveEntity(NOM_ACCOUNTS_REG, available);
   if (!reg) return undefined;
+  const refs = [...new Set(nomRefs)];
 
-  // Вид номенклатуры нужен для матчинга измерения ВидНоменклатуры в регистре.
-  let vidRef: string | undefined;
-  const nomSet = resolveEntity(CATALOGS.nomenclature, available);
-  if (nomSet) {
-    try {
-      const item = await conn.client.getEntity(
-        `${nomSet}(guid'${nomRef.replace(/[{}']/g, "")}')${buildQuery({ select: ["ВидНоменклатуры_Key"] })}`,
-      );
-      vidRef = norm(item["ВидНоменклатуры_Key"]);
-    } catch {
-      // нет такого поля/объекта — матчим без вида
-    }
-  }
-
+  // Предел и способ чтения — прежние: от них зависит, какая из равных по специфичности записей победит.
   const { rows } = await fetchAll(
     conn.client,
     reg,
-    {
-      select: [
-        "Организация_Key",
-        "Номенклатура_Key",
-        "ВидНоменклатуры_Key",
-        "СчетУчета_Key",
-        "СчетУчетаНДСПоПриобретеннымЦенностям_Key",
-        "СчетУчетаНДСПоРеализации_Key",
-        "СчетДоходовОтРеализации_Key",
-        "СчетРасходовОтРеализации_Key",
-      ],
-    },
+    { select: NOM_ACCOUNTS_SELECT },
     conn.behavior.pageSize,
     500,
   );
-  let best: ODataEntity | undefined;
-  let bestScore = -1;
-  for (const r of rows) {
-    const nm = norm(r["Номенклатура_Key"]);
+
+  // Вид номенклатуры нужен для матчинга измерения ВидНоменклатуры в регистре — только если такие записи есть.
+  const kinds = new Map<string, string | undefined>();
+  const byKind = rows.some((r) => {
     const og = norm(r["Организация_Key"]);
-    const vd = norm(r["ВидНоменклатуры_Key"]);
-    if (nm && nm !== nomRef) continue;
-    if (og && og !== orgKey) continue;
-    if (vd && vd !== vidRef) continue; // запись для другого вида номенклатуры
-    const score = (nm ? 4 : 0) + (vd ? 2 : 0) + (og ? 1 : 0);
-    if (score > bestScore) {
-      bestScore = score;
-      best = r;
+    return !!norm(r["ВидНоменклатуры_Key"]) && (!og || og === orgKey);
+  });
+  const nomSet = resolveEntity(CATALOGS.nomenclature, available);
+  const kindPublished =
+    !!nomSet &&
+    !!(await conn.getMetadata()).entities
+      .get(nomSet)
+      ?.properties.some((p) => p.name === "ВидНоменклатуры_Key");
+  if (byKind && nomSet && kindPublished && refs.length) {
+    const keys = [...new Set(refs.map(guidKey))];
+    for (let i = 0; i < keys.length; i += KIND_CHUNK) {
+      const chunk = keys.slice(i, i + KIND_CHUNK);
+      try {
+        const page = await conn.client.getCollection(
+          `${nomSet}${buildQuery({
+            select: ["Ref_Key", "ВидНоменклатуры_Key"],
+            filter: or(...chunk.map((k) => cmp("Ref_Key", "eq", odataGuid(k)))),
+          })}`,
+        );
+        for (const item of page.value ?? [])
+          kinds.set(guidKey(String(item["Ref_Key"])), norm(item["ВидНоменклатуры_Key"]));
+      } catch {
+        // Пачка не прочиталась — по одной, как раньше: сбой одной позиции не лишает вида остальные.
+        for (const k of chunk)
+          try {
+            const item = await conn.client.getEntity(
+              `${nomSet}(guid'${k}')${buildQuery({ select: ["ВидНоменклатуры_Key"] })}`,
+            );
+            kinds.set(k, norm(item["ВидНоменклатуры_Key"]));
+          } catch {
+            // нет такого объекта — матчим без вида
+          }
+      }
     }
   }
-  if (!best) return undefined;
-  return {
-    goods: norm(best["СчетУчета_Key"]),
-    incomingVat: norm(best["СчетУчетаНДСПоПриобретеннымЦенностям_Key"]),
-    outgoingVat: norm(best["СчетУчетаНДСПоРеализации_Key"]),
-    income: norm(best["СчетДоходовОтРеализации_Key"]),
-    expense: norm(best["СчетРасходовОтРеализации_Key"]),
-  };
+
+  const out = new Map<string, NomAccounts | undefined>();
+  for (const nomRef of refs) {
+    const vidRef = kinds.get(guidKey(nomRef));
+    let best: ODataEntity | undefined;
+    let bestScore = -1;
+    for (const r of rows) {
+      const nm = norm(r["Номенклатура_Key"]);
+      const og = norm(r["Организация_Key"]);
+      const vd = norm(r["ВидНоменклатуры_Key"]);
+      if (nm && nm !== nomRef) continue;
+      if (og && og !== orgKey) continue;
+      if (vd && vd !== vidRef) continue; // запись для другого вида номенклатуры
+      const score = (nm ? 4 : 0) + (vd ? 2 : 0) + (og ? 1 : 0);
+      if (score > bestScore) {
+        bestScore = score;
+        best = r;
+      }
+    }
+    out.set(
+      nomRef,
+      best && {
+        goods: norm(best["СчетУчета_Key"]),
+        incomingVat: norm(best["СчетУчетаНДСПоПриобретеннымЦенностям_Key"]),
+        outgoingVat: norm(best["СчетУчетаНДСПоРеализации_Key"]),
+        income: norm(best["СчетДоходовОтРеализации_Key"]),
+        expense: norm(best["СчетРасходовОтРеализации_Key"]),
+      },
+    );
+  }
+  return out;
 }
 
 /**

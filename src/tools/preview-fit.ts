@@ -34,15 +34,26 @@ const TOTALS: Array<[string, number]> = [
 
 type Row = Record<string, unknown>;
 
-export function linesSummary(rows: Row, tables: readonly string[]): Record<string, Record<string, number>> {
+/**
+ * Итоги таблицы: lines — число строк, поле итога — сумма по строкам, где оно числом. Если поле есть не во всех строках,
+ * withValue называет, по скольким строкам сложено, — иначе неполный итог выглядел бы полным.
+ */
+export function linesSummary(
+  rows: Row,
+  tables: readonly string[],
+): Record<string, Record<string, number | Record<string, number>>> {
   return Object.fromEntries(
     tables.map((k) => {
       const list = rows[k] as Row[];
-      const out: Record<string, number> = { lines: list.length };
+      const out: Record<string, number | Record<string, number>> = { lines: list.length };
+      const withValue: Record<string, number> = {};
       for (const [field, scale] of TOTALS) {
         const values = list.map((r) => r[field]).filter((v): v is number => typeof v === "number");
-        if (values.length) out[field] = values.reduce((t, v) => t + Math.round(v * scale), 0) / scale;
+        if (!values.length) continue;
+        out[field] = values.reduce((t, v) => t + Math.round(v * scale), 0) / scale;
+        if (values.length < list.length) withValue[field] = values.length;
       }
+      if (Object.keys(withValue).length) out["withValue"] = withValue;
       return [k, out];
     }),
   );

@@ -116,6 +116,12 @@ const REF_CHUNK = 20;
 /** С этого числа ссылок справочник читается целиком, страницами по WHOLE_SET_PAGE (строки короткие: 3 поля). */
 const WHOLE_SET_FROM = 200;
 const WHOLE_SET_PAGE = 5000;
+/**
+ * Справочник, который не поместился в предел выборки (ODATA_ANALYTICS_MAX_ROWS): 10 минут читаем сразу по ссылкам,
+ * а не пробуем целиком на каждом предпросмотре (каждая неудачная попытка — страницы до предела, как у readPageAttributes).
+ */
+const wholeSetTooBig = new WeakMap<object, Map<string, number>>();
+const TOO_BIG_TTL_MS = 10 * 60_000;
 /** Сколько позиций назвать в заметке о сериях. */
 const NOTE_NAMES = 10;
 const guidOf = (s: string) => s.replace(/[{}']/g, "").trim();
@@ -141,14 +147,18 @@ async function seriesNotes(
   // По ссылкам — частями: длинный отбор «or» 1С не примет (как у цен). Много ссылок — справочник целиком: документ на
   // 1000 позиций читал номенклатуру 50 запросами (около минуты в облачной 1С), справочник на 15 тыс. — 3 запроса.
   const byRefs = async (set: string, refs: readonly string[], select: string[]) => {
-    if (refs.length >= WHOLE_SET_FROM)
+    const tooBig = wholeSetTooBig.get(conn)?.get(set);
+    if (refs.length >= WHOLE_SET_FROM && !(tooBig !== undefined && Date.now() - tooBig < TOO_BIG_TTL_MS))
       try {
         const wanted = new Set(refs.map((r) => r.toLowerCase()));
         const { rows } = await fetchAllForAggregation(conn, set, { select }, undefined, WHOLE_SET_PAGE);
         return rows.filter((r) => wanted.has(String(r["Ref_Key"]).toLowerCase()));
       } catch (e) {
-        // Справочник больше предела выборки — по ссылкам, как раньше.
+        // Справочник больше предела выборки — по ссылкам, как раньше; следующие предпросмотры сразу по ссылкам.
         if (!(e instanceof AggregateOverflowError)) throw e;
+        const marks = wholeSetTooBig.get(conn) ?? new Map<string, number>();
+        marks.set(set, Date.now());
+        wholeSetTooBig.set(conn, marks);
       }
     const out: ODataEntity[] = [];
     for (let i = 0; i < refs.length; i += REF_CHUNK)

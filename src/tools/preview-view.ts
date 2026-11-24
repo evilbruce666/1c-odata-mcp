@@ -1,7 +1,7 @@
 import type { Connection } from "../context.js";
 import { CATALOGS } from "../config/mapping.js";
 import { documentTitle, printNumber } from "../odata/names.js";
-import { readPageAttributes } from "../odata/inventory.js";
+import { readPageAttributes, WHOLE_CATALOG_FIRST_PAGE_FROM } from "../odata/inventory.js";
 import { listOrganizations } from "../odata/orgs.js";
 import { buildQuery, cmp, odataGuid, or } from "../odata/query.js";
 import type { EntityMeta, ODataEntity } from "../types/odata.js";
@@ -13,8 +13,8 @@ import type { EntityMeta, ODataEntity } from "../types/odata.js";
  * fields) не меняется: подтверждение отправляет именно её. Идея — из форка 1c-odata-mcp-kz (#34).
  *
  * Цель ссылки берётся из связей $metadata (Association), у составных полей — из соседнего *_Type.
- * Названия читаются одним запросом на справочник до MAX_REFS ссылок, больше — пачками по MAX_REFS, номенклатура от
- * WHOLE_CATALOG_FROM позиций — справочником целиком (не больше MAX_SETS справочников); сбой чтения вид не роняет —
+ * Названия читаются одним запросом на справочник до MAX_REFS ссылок, больше — пачками по MAX_REFS, номенклатура
+ * больше WHOLE_CATALOG_FROM позиций — справочником целиком (не больше MAX_SETS справочников); сбой чтения вид не роняет —
  * остаётся GUID.
  */
 
@@ -28,10 +28,11 @@ export interface PreviewView {
 /** Ссылок в одном запросе названий: «or» по 50 ссылкам справочника проходит в Scloud и на копии УТ (23.11.2026). */
 const MAX_REFS = 50;
 /**
- * С этого числа позиций номенклатура читается справочником целиком (страницы по 5000, с откатом на чтение по ссылкам,
- * если справочник не помещается в предел выборки): документ на 1000 позиций — 3–4 запроса вместо 20.
+ * Больше стольких позиций номенклатура читается справочником целиком (страницы по 5000, с откатом на чтение по
+ * ссылкам, если справочник не помещается в предел выборки): документ на 1000 позиций — 3–4 запроса вместо 20. Порог —
+ * тот же, что у readPageAttributes: на ровно 200 позициях она читает по ссылкам пачками по 20 (10 запросов вместо 4).
  */
-const WHOLE_CATALOG_FROM = 200;
+const WHOLE_CATALOG_FROM = WHOLE_CATALOG_FIRST_PAGE_FROM;
 /**
  * Названия читаются одним запросом на справочник, а на облачной 1С каждый запрос — около секунды.
  * Поэтому — не больше MAX_SETS справочников, в порядке важности для того, кто подтверждает:
@@ -132,7 +133,7 @@ async function readNames(conn: Connection, wanted: Map<string, Set<string>>): Pr
     const props = new Set((meta.entities.get(set)?.properties ?? []).map((p) => p.name));
     const select = ["Ref_Key", "Description", "Code", "Number", "Date"].filter((f) => props.has(f));
     const list = [...refs];
-    if (set === CATALOGS.nomenclature[0] && list.length >= WHOLE_CATALOG_FROM) {
+    if (set === CATALOGS.nomenclature[0] && list.length > WHOLE_CATALOG_FROM) {
       try {
         for (const [ref, a] of await readPageAttributes(conn, set, list)) {
           const text = a.name || a.code;

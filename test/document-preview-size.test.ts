@@ -26,6 +26,8 @@ interface Opts {
   catalog?: number;
   /** Вид всех позиций ведёт серии (а серии в строках не указаны). */
   series?: boolean;
+  /** Дополнительные переменные окружения сервера. */
+  env?: Record<string, string>;
 }
 
 const KIND = "b0b0b0b0-0000-4000-8000-000000000001";
@@ -47,6 +49,7 @@ function setup(o: Opts) {
       ODATA_WRITABLE: "true",
       ODATA_WRITE_JOURNAL_DIR: mkdtempSync(join(tmpdir(), "1c-odata-dps-")),
       ...(o.limit ? { ODATA_MAX_RESPONSE_CHARS: String(o.limit) } : {}),
+      ...o.env,
     },
     {
       schema: o.schema,
@@ -367,6 +370,83 @@ describe("проверка серий: номенклатура документ
     const kinds = s.log.filter((l) => /Catalog_Номенклатура\?.*ВидНоменклатуры_Key/.test(l));
     expect(kinds).toHaveLength(10);
     for (const l of kinds) expect(l).toContain(" or ");
+  });
+});
+
+describe("мелочи пачки А/Б", () => {
+  it("ровно 200 позиций — названия пачками по 50, как на 199; справочник целиком — с 201", async () => {
+    for (const [n, chunks] of [
+      [199, 4],
+      [200, 4],
+      [201, 0],
+    ] as const) {
+      const s = setup({ schema: "ut11", n, nameLen: 10, catalog: 1500 });
+      const r = await s.call("write.sales.create_shipment", CASES[12]!.args(n));
+      expect(r.isError, r.text.slice(0, 300)).toBe(false);
+      for (const row of viewRows(r)) expect(String(row["Номенклатура"])).not.toMatch(GUID_TEXT);
+      const names = s.log.filter((l) => /Catalog_Номенклатура\?.*\$select=Ref_Key,Description,Code&/.test(l));
+      expect(
+        names.filter((l) => l.includes(" or ")),
+        `${n} позиций`,
+      ).toHaveLength(chunks);
+      // Сведения позиций по ссылкам (пачки по 20) — только у справочника целиком с откатом, не на 200.
+      const attrs = s.log.filter((l) => /Catalog_Номенклатура\?.*Артикул.*Ref_Key eq/.test(l));
+      expect(attrs, `${n} позиций`).toHaveLength(0);
+    }
+  });
+
+  it("справочник больше предела выборки в проверке серий: второй предпросмотр сразу по ссылкам", async () => {
+    const c = CASES.find((x) => x.schema === "ut11" && x.tool === "write.warehouse.create_transfer")!;
+    const s = setup({
+      schema: "ut11",
+      n: 300,
+      nameLen: 10,
+      catalog: 1500,
+      env: { ODATA_ANALYTICS_MAX_ROWS: "1000" },
+    });
+    const whole = () =>
+      s.log.filter((l) => /Catalog_Номенклатура\?.*ВидНоменклатуры_Key/.test(l) && !l.includes(" or "))
+        .length;
+    const r1 = await s.call(c.tool, c.args(300));
+    expect(r1.isError, r1.text.slice(0, 300)).toBe(false);
+    const first = whole();
+    expect(first).toBeGreaterThan(0); // попытка целиком была и не удалась
+    s.log.length = 0;
+    const r2 = await s.call(c.tool, c.args(300));
+    expect(r2.isError, r2.text.slice(0, 300)).toBe(false);
+    expect(whole()).toBe(0);
+    expect(r2.sc["notes"]).toEqual(r1.sc["notes"]);
+  });
+
+  it("summary: поле есть не во всех строках — withValue называет, по скольким сложено", async () => {
+    const { linesSummary } = await import("../src/tools/preview-fit.js");
+    const rows = {
+      Товары: [{ Сумма: 1.1, Количество: 1 }, { Количество: 2 }, { Сумма: 2.2, Количество: 3 }],
+    };
+    expect(linesSummary(rows, ["Товары"])).toEqual({
+      Товары: { lines: 3, Количество: 6, Сумма: 3.3, withValue: { Сумма: 2 } },
+    });
+    expect(linesSummary({ Товары: [{ Сумма: 1 }, { Сумма: 2 }] }, ["Товары"])).toEqual({
+      Товары: { lines: 2, Сумма: 3 },
+    });
+  });
+});
+
+describe("счета строк Бухгалтерии: регистр один раз, вид позиций пачками", () => {
+  it.each(
+    CASES.filter((c) => c.schema === "bp30" && c.tool !== "write.document.add_document_line").map((c) => [
+      c.tool,
+      c,
+    ]),
+  )("%s на 80 строк", async (_tool, c) => {
+    const s = setup({ schema: "bp30", n: 80, nameLen: 10 });
+    const r = await s.call(c.tool, c.args(80));
+    expect(r.isError, r.text.slice(0, 300)).toBe(false);
+    expect(s.log.filter((l) => /^GET Catalog_Номенклатура\(guid/.test(l))).toHaveLength(0);
+    expect(
+      s.log.filter((l) => l.includes("InformationRegister_СчетаУчетаНоменклатуры")).length,
+    ).toBeLessThanOrEqual(1);
+    expect(s.log.filter((l) => l.startsWith("GET")).length).toBeLessThanOrEqual(20);
   });
 });
 
