@@ -1996,6 +1996,24 @@ function bankSettlementPatchRefusal(entitySet: string, fields: Record<string, un
   );
 }
 
+/**
+ * Служебные поля общим update_entity не меняются: проведение и пометка удаления — отдельными инструментами с их
+ * проверками (версия документа и журнал у проведения, запрет пометить проведённую установку цен), а ссылка и версия
+ * объекта — не реквизиты. Иначе {"DeletionMark": true} обходил бы отказ mark_for_deletion (аудит 25.11).
+ */
+const SERVICE_FIELDS: Record<string, string> = {
+  Posted: "проведение и его отмена — write.document.post_document",
+  DeletionMark: "пометка удаления и её снятие — write.entity.mark_for_deletion",
+  Ref_Key: "ссылка объекта не меняется",
+  DataVersion: "версию объекта 1С меняет сама при записи",
+};
+
+export function serviceFieldRefusal(fields: Record<string, unknown>): string | undefined {
+  const hit = Object.keys(fields).filter((k) => k in SERVICE_FIELDS);
+  if (!hit.length) return undefined;
+  return `Изменение не отправлено: ${hit.map((k) => `${k} — ${SERVICE_FIELDS[k]}`).join("; ")}.`;
+}
+
 /** Общий путь изменения (PATCH): dry-run при confirm=false, иначе применяет. */
 /**
  * Управление торговлей 11.5 (копия рабочей базы, 20.11.2026): любое изменение существующей номенклатуры через OData —
@@ -2994,9 +3012,9 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
       title: "Провести / отменить проведение документа",
       description:
         "Проводит документ (влияет на учёт) или отменяет проведение. По умолчанию предпросмотр (dry-run); " +
-        "Для повторного проведения Posted=true задайте repost=true, post=true и expectedDataVersion. " +
-        "Версионный Post использует PostingModeOperational=false без Unpost; проверяет состояние документа, не проводки. " +
-        "применение — при confirm=true. ВНИМАНИЕ: проведение меняет учётные данные — используйте осознанно.",
+        "применение — при confirm=true. Для повторного проведения Posted=true задайте repost=true, post=true и " +
+        "expectedDataVersion. Версионный Post использует PostingModeOperational=false без Unpost; проверяет состояние " +
+        "документа, не проводки. ВНИМАНИЕ: проведение меняет учётные данные — используйте осознанно.",
       inputSchema: z.object({
         database: databaseField,
         entitySet: z.string().describe("Имя документа, напр. Document_СчетНаОплатуПокупателю"),
@@ -3004,7 +3022,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         expectedDataVersion: expectedDocumentVersion
           .optional()
           .describe(
-            "Точная текущая версия включает durable preview/action/readback. Post/Unpost выполняются отдельно; атомарная CAS действия не подтверждена.",
+            "DataVersion документа сейчас — из read.audit.get_document_history (dataVersion) или read.document.get_document. С ней предпросмотр, проведение и проверка после него идут через журнал; если версия документа уже другая — отказ. Post и Unpost — отдельные действия 1С, атомарность не гарантирована.",
           ),
         post: z.boolean().default(true).describe("true — провести, false — отменить проведение"),
         repost: z
@@ -3141,7 +3159,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         '(узнать через describe_entity), напр. {"ИНН":"7701234567"}. По умолчанию предпросмотр (dry-run); ' +
         "применение — при confirm=true. Мощный инструмент: меняйте только те поля, что указали. " +
         "После записи поля перечитываются: успех — только если 1С сохранила всё. Договор и счета расчётов " +
-        "банковских документов этим инструментом не меняются — write.document.apply_bank_settlement_settings.",
+        "банковских документов этим инструментом не меняются — write.document.apply_bank_settlement_settings; проведение — " +
+        "write.document.post_document, пометка удаления — write.entity.mark_for_deletion.",
       inputSchema: z.object({
         database: databaseField,
         entitySet: z.string().describe("Имя объекта, напр. Catalog_Контрагенты"),
@@ -3158,6 +3177,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
         if (Object.keys(fields).length === 0) return fail("Не заданы поля для изменения.");
+        const service = serviceFieldRefusal(fields);
+        if (service) return fail(service);
         const ka = await stockInAccountingBaseRefusal(conn, entitySet);
         if (ka) return fail(ka);
         const trade = await tradeEditKind(conn, entitySet);

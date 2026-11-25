@@ -122,3 +122,34 @@ describe("sameStoredValue — как 1С возвращает сохранённ
     expect(sameStoredValue(sent, stored, type)).toBe(same),
   );
 });
+
+describe("update_entity: служебные поля — отдельными инструментами (аудит 25.11)", () => {
+  // Пометка удаления общим инструментом обходила отказ mark_for_deletion (проведённая установка цен), проведение —
+  // версию документа и журнал post_document.
+  it.each([
+    ["DeletionMark", { DeletionMark: true }, "mark_for_deletion"],
+    ["Posted", { Posted: true }, "post_document"],
+    ["Posted вместе с комментарием", { Posted: false, Комментарий: "x" }, "post_document"],
+    ["Ref_Key", { Ref_Key: CONTRACT_NEW }, "не меняется"],
+    ["DataVersion", { DataVersion: "AAAA" }, "меняет сама"],
+  ])("%s — отказ без PATCH и в предпросмотре", async (_l, fields, hint) => {
+    for (const entitySet of [BANK_IN, "Document_УстановкаЦенНоменклатуры", "Catalog_Контрагенты"]) {
+      const f = writable();
+      const patch = vi.spyOn(f.conn.client, "patch");
+      const tools = (
+        createServer(f.ctx) as unknown as {
+          _registeredTools: Record<string, { handler: (a: object, e: object) => Promise<CallToolResult> }>;
+        }
+      )._registeredTools;
+      for (const confirm of [false, true]) {
+        const r = await tools["write.entity.update_entity"]!.handler(
+          { entitySet, ref: REF, fields, confirm },
+          {},
+        );
+        expect(r.isError).toBe(true);
+        expect(text(r)).toContain(hint);
+      }
+      expect(patch).not.toHaveBeenCalled();
+    }
+  });
+});
