@@ -1,5 +1,6 @@
+import { chmodSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import pino from "pino";
 
 /**
@@ -22,16 +23,34 @@ function makeDestination(): pino.DestinationStream {
     try {
       // sync: файл открывается сразу. Асинхронный пишет только после открытия — ошибка старта,
       // записанная перед process.exit(1), терялась, а pino падал с «sonic boom is not ready yet».
-      return pino.destination({
-        dest: join(tmpdir(), "1c-odata-mcp", "server.log"),
-        mkdir: true,
-        sync: true,
-      });
+      return logFile(join(tmpdir(), "1c-odata-mcp", "server.log"));
     } catch {
       // Не удалось открыть файл — падать из-за логов нельзя, откатываемся на stderr.
     }
   }
   return pino.destination(2);
+}
+
+/**
+ * Файл лога только для владельца: каталог 0700, файл 0600. В логе — тексты ошибок 1С (названия, ИНН), а на Linux
+ * с общим /tmp путь предсказуем, и с правами по umask (обычно 0644) его читали другие пользователи. Права
+ * выставляются и уже существующим каталогу и файлу; на Windows chmod ничего не делает — там tmpdir у каждого свой.
+ */
+export function logFile(path: string): pino.DestinationStream {
+  const dir = dirname(path);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try {
+    chmodSync(dir, 0o700);
+  } catch {
+    // Каталог чужой (другой пользователь создал его раньше) — открыть файл всё равно попробуем.
+  }
+  const dest = pino.destination({ dest: path, sync: true, mode: 0o600 });
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    // Права не сменить — пишем как есть, падать из-за лога нельзя.
+  }
+  return dest;
 }
 
 /**
