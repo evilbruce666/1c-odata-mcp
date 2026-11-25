@@ -181,8 +181,13 @@ async function main(): Promise<number> {
     const gRef = String(goods["ref"]);
     const L = [{ nomenclatureRef: gRef, quantity: 1, price: 100, vatRate: "БезНДС" }];
     const W = [{ nomenclatureRef: gRef, quantity: 1, price: 100 }];
-    const wh = await first("Catalog_Склады", "&$filter=IsFolder%20eq%20false").catch(() => undefined);
-    const grp = await first("Catalog_НоменклатурныеГруппы").catch(() => undefined);
+    const wh = await first(
+      "Catalog_Склады",
+      "&$filter=IsFolder%20eq%20false%20and%20DeletionMark%20eq%20false",
+    ).catch(() => undefined);
+    const grp = await first("Catalog_НоменклатурныеГруппы", "&$filter=DeletionMark%20eq%20false").catch(
+      () => undefined,
+    );
 
     ctrCustomer = await flow("write.catalog.create_contract", {
       counterpartyRef: cpRef,
