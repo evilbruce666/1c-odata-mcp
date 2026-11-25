@@ -105,12 +105,39 @@ const JOURNALED_UPDATE_TOOLS = new Set([
   "write.document.remove_document_line",
 ]);
 
+/** Перезаписывают или удаляют имеющееся в 1С: клиент должен спрашивать подтверждение. */
+const DESTRUCTIVE_TOOLS = new Set([
+  "write.accounting.set_contract_settlement_settings",
+  "write.accounting.set_settlement_settings",
+  "write.catalog.update_nomenclature",
+  "write.counterparty.set_group",
+  "write.counterparty.update_counterparty",
+  "write.document.align_bank_payment_amounts",
+  "write.document.apply_bank_settlement_settings",
+  "write.document.post_document",
+  "write.document.remove_document_line",
+  "write.document.update_document_lines",
+  "write.entity.mark_for_deletion",
+  "write.entity.move_to_folder",
+  "write.entity.update_entity",
+]);
+/** Правки, где повтор тех же аргументов даёт то же состояние (значения пишутся целиком). */
+const IDEMPOTENT_TOOLS = new Set([
+  "write.catalog.update_nomenclature",
+  "write.counterparty.update_counterparty",
+  "write.document.update_document_lines",
+  "write.entity.mark_for_deletion",
+  "write.entity.move_to_folder",
+  "write.entity.update_entity",
+]);
+
 /** Подсказки клиенту о характере инструмента — по имени (одна точка вместо правок 55 конфигов). */
 function annotationsFor(name: string) {
-  if (name === "write.document.post_document" || name === "write.entity.mark_for_deletion")
-    return DESTRUCTIVE_HINTS;
   if (name.startsWith("read.")) return READ_HINTS;
-  return WRITE_HINTS;
+  return {
+    ...(DESTRUCTIVE_TOOLS.has(name) ? DESTRUCTIVE_HINTS : WRITE_HINTS),
+    ...(IDEMPOTENT_TOOLS.has(name) ? { idempotentHint: true } : {}),
+  };
 }
 
 /**
