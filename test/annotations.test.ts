@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 const manifest = JSON.parse(readFileSync("manifest.json", "utf8")) as {
   tools: Array<{ name: string; annotations: Record<string, boolean>; inputSchema: { properties?: object } }>;
 };
-/** makeMain заменяет у владельца прежний основной счёт или контакт — это перезапись (ревью 26.11). */
+/** makeMain заменяет у владельца прежний основной счёт или контакт — это перезапись (ревью 25.11). */
 const REPLACES_MAIN = manifest.tools
   .filter((t) => "makeMain" in (t.inputSchema.properties ?? {}))
   .map((t) => t.name);
