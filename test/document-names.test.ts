@@ -101,6 +101,44 @@ describe("search_documents: названия контрагента и орга�
     expect(t.resources.filter((x) => x === COUNTERPARTIES)).toHaveLength(1);
   });
 
+  // При limit=500 названия читались всем 500 кандидатам, хотя помещалась часть (ревью: 25 пачек ради 87 строк).
+  it("большой limit: названия читаются порциями, пока страница не заполнится, а не всем кандидатам", async () => {
+    const t = setup({
+      env: { ODATA_MAX_RESPONSE_CHARS: "10000" },
+      docs: Array.from({ length: 500 }, (_, i) => doc(i + 1)),
+    });
+    const { s, text } = await t.call("read.document.search_documents", { ...search, limit: 500 });
+    const rows = rowsOf(s);
+    expect(text.length).toBeLessThanOrEqual(10_000);
+    expect(rows.length).toBeGreaterThan(5);
+    expect(rows.length).toBeLessThan(50);
+    expect(rows.every((r) => r["counterparty"])).toBe(true);
+    // Одна порция в 50 строк — три пачки по 20 ссылок.
+    expect(t.resources.filter((x) => x === COUNTERPARTIES)).toHaveLength(3);
+  });
+
+  it("страница длиннее порции: названия у всех строк, страница та же, что при чтении всех сразу", async () => {
+    const t = setup({ docs: Array.from({ length: 500 }, (_, i) => doc(i + 1)) });
+    const { s } = await t.call("read.document.search_documents", { ...search, limit: 500 });
+    const rows = rowsOf(s);
+    expect(rows.length).toBeGreaterThan(100);
+    expect(rows.every((r) => r["counterparty"] && r["organization"])).toBe(true);
+    // Прочитано не больше, чем страница плюс одна порция.
+    const batches = t.resources.filter((x) => x === COUNTERPARTIES).length;
+    expect(batches).toBeLessThanOrEqual(Math.ceil((Math.ceil((rows.length + 1) / 50) * 50) / 20) + 3);
+    expect(batches).toBeLessThan(25);
+    // Продолжение начинается ровно за страницей и тоже с названиями.
+    const next = await t.call("read.document.search_documents", {
+      ...search,
+      limit: 500,
+      offset: s["nextOffset"],
+    });
+    expect(rowsOf(next.s).every((r) => r["counterparty"])).toBe(true);
+    expect(new Set([...rows, ...rowsOf(next.s)].map((r) => r["number"])).size).toBe(
+      rows.length + rowsOf(next.s).length,
+    );
+  });
+
   it("справочник не читается — поиск отвечает без названий", async () => {
     const t = setup({ docs: [doc(1)], failNames: true });
     const { r, s } = await t.call("read.document.search_documents", search);

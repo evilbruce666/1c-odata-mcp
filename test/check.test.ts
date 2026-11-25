@@ -99,6 +99,30 @@ describe("--check по переменным окружения", () => {
     expect(calls).toEqual([]);
   });
 
+  // С опечаткой в TOOLS_ALLOW сервер не стартует, а --check отвечал успехом (ревью 25.11).
+  it("неизвестное имя в TOOLS_ALLOW — код 1 и то же сообщение, что у сервера", async () => {
+    stub(BP30_METADATA_XML);
+    const r = await run(["--check"], {
+      ...ENV,
+      TOOLS_ALLOW: "read.system.health_check,read.analytics.get_debtor",
+    });
+    expect(r.code).toBe(1);
+    expect(r.text).toContain("Сервер с этими настройками не запустится");
+    expect(r.text).toContain("read.analytics.get_debtor");
+    // Базы всё равно проверены.
+    expect(r.text).toContain("подключение: есть");
+  });
+
+  it("верный TOOLS_ALLOW — код 0", async () => {
+    stub(BP30_METADATA_XML);
+    const r = await run(["--check"], {
+      ...ENV,
+      TOOLS_ALLOW: "read.system.health_check,read.analytics.get_debtors",
+    });
+    expect(r.code).toBe(0);
+    expect(r.text).not.toContain("не запустится");
+  });
+
   it("несколько баз: одна не отвечает — код 1, но проверены все", async () => {
     vi.stubGlobal("fetch", async (url: string) =>
       String(url).includes("bad")

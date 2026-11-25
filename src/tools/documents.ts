@@ -30,7 +30,7 @@ import {
   type PolyMode,
 } from "../odata/poly-counterparty.js";
 import { searchDocumentsResultSchema, odataEntitySchema } from "../schemas/output.js";
-import { addDocumentNames, compactDocument, documentRefs, type DocumentRefs } from "./document-names.js";
+import { addPageNames, compactDocument, documentRefs, type DocumentRefs } from "./document-names.js";
 
 /** Входящий номер — номер документа контрагента (накладной поставщика, платёжки покупателя). */
 const INCOMING_NUMBER = "НомерВходящегоДокумента";
@@ -386,8 +386,8 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
             );
           const head = { ...(r.counterpartyNote ? { counterpartyFilter: r.counterpartyNote } : {}) };
           const sorted = r.rows.sort(byNumberMatchThenDate);
-          // Названия — до расчёта размера страницы, и только строкам, которые в неё могут войти.
-          await addDocumentNames(conn, sorted.slice(offset, offset + limit), searchRefs);
+          // Названия — до расчёта размера страницы, порциями, пока она не заполнится.
+          await addPageNames(conn, sorted, { offset, limit, head }, searchRefs);
           const { items, page, note } = pageOf(sorted, {
             offset,
             limit,
@@ -454,7 +454,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
             "Просмотрены основные виды документов (searched). Прочие типы — кассовые чеки, начисления, " +
             "операции, уведомления — ищутся через entitySet.",
         };
-        await addDocumentNames(conn, merged.slice(offset, offset + limit), searchRefs);
+        await addPageNames(conn, merged, { offset, limit, head }, searchRefs);
         const { items, page, note } = pageOf(merged, {
           offset,
           limit,

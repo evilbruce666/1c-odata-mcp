@@ -8,6 +8,7 @@ import { CATALOGS } from "../config/mapping.js";
 import { GUID_RE, resolveNames } from "../odata/accounting.js";
 import { listOrganizations } from "../odata/orgs.js";
 import { readCatalogBrief, wholeCatalogCheaper } from "../odata/catalog-whole.js";
+import { fitToChars, renderJson } from "./_shared.js";
 
 const EMPTY_REF = "00000000-0000-0000-0000-000000000000";
 const COUNTERPARTIES = CATALOGS.counterparties[0];
@@ -69,8 +70,8 @@ export function documentRefs(row: Record<string, unknown>): DocumentRefs {
   };
 }
 
-/** Дописывает counterparty и organization строкам (на месте): нужны до расчёта размера страницы. */
-export async function addDocumentNames<T extends object>(
+/** Дописывает counterparty и organization строкам (на месте). */
+async function addDocumentNames<T extends object>(
   conn: Connection,
   rows: readonly T[],
   refsOf: WeakMap<object, DocumentRefs>,
@@ -90,6 +91,29 @@ export async function addDocumentNames<T extends object>(
     const counterparty = nameOf(names, COUNTERPARTIES, refs?.counterparty);
     const organization = nameOf(names, ORGANIZATIONS, refs?.organization);
     Object.assign(r, counterparty ? { counterparty } : {}, organization ? { organization } : {});
+  }
+}
+
+/** Строк в порции названий: страница по умолчанию (limit 50) — одной порцией. */
+const NAME_PORTION = 50;
+
+/**
+ * Названия строкам будущей страницы — порциями, пока страница не заполнится. Названия нужны до расчёта размера, но
+ * не всем кандидатам: при limit=500 в ответ помещается часть. pageOf берёт начало списка до первой непомещающейся
+ * строки (fitToChars), поэтому непрочитанный хвост в страницу не попал бы и с названиями: они строку только удлиняют.
+ */
+export async function addPageNames<T extends object>(
+  conn: Connection,
+  rows: readonly T[],
+  page: { offset: number; limit: number; head: unknown },
+  refsOf: WeakMap<object, DocumentRefs>,
+): Promise<void> {
+  const candidates = rows.slice(page.offset, page.offset + page.limit);
+  const used = renderJson(page.head).length;
+  for (let from = 0; from < candidates.length; from += NAME_PORTION) {
+    await addDocumentNames(conn, candidates.slice(from, from + NAME_PORTION), refsOf);
+    const named = candidates.slice(0, from + NAME_PORTION);
+    if (fitToChars(named, used).length < named.length) return;
   }
 }
 

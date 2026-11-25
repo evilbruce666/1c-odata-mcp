@@ -12,6 +12,7 @@ import { accountingChart, accountingRegister } from "../config/accounting.js";
 import { CATALOGS, REGISTERS } from "../config/mapping.js";
 import { ServerContext, type Connection } from "../context.js";
 import { ODataError } from "../odata/errors.js";
+import { createServer } from "../mcp/server.js";
 
 type Env = Record<string, string | undefined>;
 type Print = (line: string) => void;
@@ -145,7 +146,7 @@ export function readClientConfig(given: string): Array<{ name: string; env: Env 
   return found;
 }
 
-/** Проверить настройки из одного источника; true — все базы отвечают. */
+/** Проверить настройки из одного источника; true — все базы отвечают и сервер собирается. */
 async function checkEnv(env: Env, print: Print): Promise<boolean> {
   const substitution = Object.entries(env).find(([k, v]) => k.startsWith("ODATA_") && v?.includes("${"));
   if (substitution) {
@@ -162,6 +163,13 @@ async function checkEnv(env: Env, print: Print): Promise<boolean> {
   const ctx = new ServerContext(cfg);
   let ok = true;
   for (const c of cfg.connections) ok = (await checkBase(ctx, c.name, print)) && ok;
+  // Настройки, с которыми не соберётся сам сервер (опечатка в TOOLS_ALLOW), базы не покажут — собираем его.
+  try {
+    createServer(ctx);
+  } catch (e) {
+    print(`Сервер с этими настройками не запустится: ${e instanceof Error ? e.message : String(e)}`);
+    ok = false;
+  }
   print(
     cfg.behavior.readOnly
       ? "Режим: только чтение."
@@ -175,7 +183,7 @@ async function checkEnv(env: Env, print: Print): Promise<boolean> {
   return ok;
 }
 
-/** 0 — все базы отвечают и состав не пуст; 1 — хотя бы одна нет или настройки не читаются. */
+/** 0 — все базы отвечают, состав не пуст и сервер собирается; 1 — иначе или настройки не читаются. */
 export async function runCheck(args: readonly string[], env: Env, print: Print): Promise<number> {
   const at = args.indexOf("--config");
   try {
