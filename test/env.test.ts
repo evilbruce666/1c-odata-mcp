@@ -129,3 +129,24 @@ describe("ошибки конфигурации понятны и не раск�
     expect(message({})).not.toContain("(.env)");
   });
 });
+
+describe("некорректный адрес базы — прежнее понятное сообщение и полный список ошибок", () => {
+  // Проверка логина в адресе разбирала URL и на невалидной строке: parseConfig падал с голым «Invalid URL» (ревью 25.11).
+  it.each(["not a url", "server/base/odata/standard.odata", ""])("адрес %j", (url) => {
+    let m = "";
+    try {
+      parseConfig({
+        ODATA_BASE_URL: "https://h/a/odata/standard.odata/",
+        ODATA_DB_B_BASE_URL: url,
+        ODATA_DB_B_USERNAME: "u",
+        READ_ONLY: "maybe",
+      });
+    } catch (e) {
+      m = (e as Error).message;
+    }
+    expect(m).toMatch(/Некорректная конфигурация/);
+    expect(m).toMatch(/база "b": baseUrl должен быть валидным URL/);
+    expect(m).toContain("не задан ODATA_DB_B_PASSWORD");
+    expect(m).toContain("READ_ONLY");
+  });
+});

@@ -38,7 +38,7 @@
         },
         {
           "name": "TOOLS_PROFILE",
-          "description": "read — only the read tools; all — every tool (writing also needs READ_ONLY=false)",
+          "description": "read — only the read tools; all — every tool (writing also needs READ_ONLY=false and ODATA_WRITABLE=true)",
           "isRequired": false,
           "format": "string"
         }

@@ -2009,7 +2009,7 @@ const SERVICE_FIELDS: Record<string, string> = {
 };
 
 export function serviceFieldRefusal(fields: Record<string, unknown>): string | undefined {
-  const hit = Object.keys(fields).filter((k) => k in SERVICE_FIELDS);
+  const hit = Object.keys(fields).filter((k) => Object.hasOwn(SERVICE_FIELDS, k));
   if (!hit.length) return undefined;
   return `Изменение не отправлено: ${hit.map((k) => `${k} — ${SERVICE_FIELDS[k]}`).join("; ")}.`;
 }

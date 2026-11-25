@@ -176,6 +176,8 @@ const ConnSchema = z.object({
     .url("должен быть валидным URL")
     // Логин и пароль в самом адресе fetch не принимает, а его ошибка с адресом целиком уходила модели и в лог.
     .refine((u) => {
+      // .url() разбор не останавливает: невалидную строку уже описала она, здесь — только разобранный адрес.
+      if (!URL.canParse(u)) return true;
       const parsed = new URL(u);
       return !parsed.username && !parsed.password;
     }, "должен быть без логина и пароля: задайте их в ODATA_USERNAME и ODATA_PASSWORD (ODATA_DB_<ИМЯ>_USERNAME и _PASSWORD для нескольких баз)")
