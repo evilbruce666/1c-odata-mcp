@@ -1,5 +1,7 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -266,4 +268,52 @@ describe.skipIf(!existsSync(entry))("точка входа", () => {
     expect(r.stdout).toContain("не задана ни одна база");
     expect(r.stderr).toBe("");
   });
+
+  // LOG_LEVEL=info стоит в .env.example: служебные строки лога попадали между строками отчёта (после 1.2.0).
+  it("--check при LOG_LEVEL=info: отчёт без строк лога", async () => {
+    const server = createHttpServer((_, res) => {
+      res.writeHead(200, { "Content-Type": "application/xml" });
+      res.end(BP30_METADATA_XML);
+    });
+    await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+    const { port } = server.address() as AddressInfo;
+    try {
+      for (const level of ["info", "debug"]) {
+        const r = await check({
+          ...clean,
+          ...ENV,
+          ODATA_BASE_URL: `http://127.0.0.1:${port}/db/odata/standard.odata/`,
+          LOG_LEVEL: level,
+        });
+        expect(r.code, level).toBe(0);
+        expect(r.stdout, level).toContain("работают инструменты Бухгалтерии");
+        expect(r.stdout + r.stderr, level).not.toContain('"level"');
+        expect(r.stderr, level).toBe("");
+      }
+    } finally {
+      server.close();
+    }
+  });
+
+  // Выключить лог подменой LOG_LEVEL нельзя: проверка перестала бы видеть значение, с которым сервер не запустится.
+  it("--check при неверном LOG_LEVEL: код 1 и название переменной, без стека", async () => {
+    const r = await check({ ...clean, ...ENV, LOG_LEVEL: "verbose" });
+    expect(r.code).toBe(1);
+    expect(r.stdout).toContain("LOG_LEVEL");
+    expect(r.stdout + r.stderr).not.toMatch(/node_modules|\n\s+at /);
+  });
 });
+
+/** Асинхронный запуск: заглушка 1С живёт в этом же процессе, синхронный запуск её бы заблокировал. */
+function check(
+  env: Record<string, string>,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((done) => {
+    const child = spawn("node", [entry, "--check"], { env });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => (stdout += String(d)));
+    child.stderr.on("data", (d) => (stderr += String(d)));
+    child.on("close", (code) => done({ code, stdout, stderr }));
+  });
+}

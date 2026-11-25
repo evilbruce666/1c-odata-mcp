@@ -24,11 +24,13 @@ if (args.includes("--version")) {
 } else if (args.includes("--help")) {
   process.stdout.write(HELP);
 } else if (args.includes("--check")) {
-  // Журнал диагностике не нужен: она сама печатает всё, что человеку нужно знать.
-  process.env.LOG_LEVEL ??= "fatal";
-  process.env.MCP_LOG_STDERR ??= "1";
+  // Журнал диагностике не нужен: она сама печатает всё, что человеку нужно знать. Проверяются настройки как есть
+  // (копия до подмены): с неверным LOG_LEVEL сервер не запустится, и проверка должна это сказать.
+  const env = { ...process.env };
+  process.env.LOG_LEVEL = "fatal";
+  process.env.MCP_LOG_STDERR = "1";
   const { runCheck } = await import("./cli/check.js");
-  process.exitCode = await runCheck(args, process.env, (line) => process.stdout.write(`${line}\n`));
+  process.exitCode = await runCheck(args, env, (line) => process.stdout.write(`${line}\n`));
 } else {
   await import("./serve.js");
 }
