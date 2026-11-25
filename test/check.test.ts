@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -222,8 +222,10 @@ describe("объекты, которые называет --check", () => {
   });
 });
 
-describe("точка входа", () => {
-  const entry = join(process.cwd(), "dist", "index.js");
+const entry = join(process.cwd(), "dist", "index.js");
+
+// Запускает собранный сервер. publish.yml гоняет тесты без сборки: без dist — пропуск (как в startup.test.ts).
+describe.skipIf(!existsSync(entry))("точка входа", () => {
   const clean = { PATH: process.env.PATH ?? "" };
   const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { version: string };
 
