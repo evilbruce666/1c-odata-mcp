@@ -1,13 +1,15 @@
 {
   "name": "1c-odata-mcp",
   "version": "1.1.0",
-  "description": "MCP server for 1C:Enterprise (1С) over OData — 1C:Accounting 3.0 and 1C:Trade Management 11 (read and write: prices, catalogs, warehouse, cash and bank, sales and purchases). Ask in natural language: debtors and creditors by due date, unpaid invoices, cash, month-close checks, account cards, reconciliation statements, sales, taxes, postings; stock by warehouse, unit sales with retail, customer and supplier balances. Any MCP client (Claude, Cursor, VS Code, local models…). 91 tools, run with npx, nothing installed inside 1C; read-only by default with opt-in (gated) write.",
+  "description": "MCP server for 1C:Enterprise (1С) over standard OData: connect Claude, ChatGPT (Codex), Cursor and other AI clients to 1C:Accounting 3.0 and 1C:Trade Management 11 without changing the configuration. 91 tools, read-only by default, write with preview.",
   "type": "module",
   "bin": {
     "1c-odata-mcp": "dist/index.js"
   },
   "files": [
     "dist",
+    "!dist/**/*.map",
+    "!dist/scripts",
     "apps",
     "README.md",
     "CHANGELOG.md",
@@ -48,6 +50,9 @@
   "keywords": [
     "mcp",
     "model-context-protocol",
+    "chatgpt",
+    "1c-mcp",
+    "mcp-server",
     "claude",
     "anthropic",
     "ai",
