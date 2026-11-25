@@ -5,6 +5,8 @@
 
 ## [Не выпущено]
 
+## [1.2.0] — 2026-11-25
+
 **Главное.** Установка цен — до 1000 строк в одном документе вместо 80; предпросмотр любого документа укладывается в предел ответа; проверка подключения из терминала (`--check`).
 
 ### Что изменится при обновлении
@@ -1064,7 +1066,8 @@ POST-тестом (create → read → mark) на реальной базе — 
   коды плана счетов); вежливый фоллбэк при отсутствии объекта в «Составе OData».
 - npm-пакет с запуском через `npx 1c-odata-mcp`.
 
-[Не выпущено]: https://github.com/evilbruce666/1c-odata-mcp/compare/v1.1.0...HEAD
+[Не выпущено]: https://github.com/evilbruce666/1c-odata-mcp/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.17.0...v1.0.0
 [0.17.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.16.0...v0.17.0
