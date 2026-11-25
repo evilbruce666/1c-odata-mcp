@@ -171,9 +171,17 @@ const ConnSchema = z.object({
   regulatedCurrencyCode: CurrencyCodeSchema,
   name: z.string().min(1),
   label: z.string().min(1).optional(),
-  baseUrl: z.string().url("должен быть валидным URL").transform(normalizeUrl),
-  username: z.string().min(1, "обязателен"),
-  password: z.string().min(1, "обязателен"),
+  baseUrl: z
+    .string()
+    .url("должен быть валидным URL")
+    // Логин и пароль в самом адресе fetch не принимает, а его ошибка с адресом целиком уходила модели и в лог.
+    .refine((u) => {
+      const parsed = new URL(u);
+      return !parsed.username && !parsed.password;
+    }, "должен быть без логина и пароля: задайте их в ODATA_USERNAME и ODATA_PASSWORD (ODATA_DB_<ИМЯ>_USERNAME и _PASSWORD для нескольких баз)")
+    .transform(normalizeUrl),
+  username: z.string({ error: "обязателен" }).min(1, "обязателен"),
+  password: z.string({ error: "обязателен" }).min(1, "обязателен"),
   writable: z.preprocess((v) => v === true || v === "true", z.boolean()).default(false),
   writableEnv: z.string().optional(),
 });
@@ -347,7 +355,15 @@ export function parseConfig(env: Env): RuntimeConfig {
     const parsed = ConnSchema.safeParse(r);
     if (!parsed.success) {
       const who = typeof r.name === "string" ? r.name : "?";
-      for (const i of parsed.error.issues) issues.push(`база "${who}": ${i.path.join(".")} ${i.message}`);
+      for (const i of parsed.error.issues) {
+        const field = i.path.join(".");
+        // Пустой логин или пароль — именем переменной, которую задать: «password обязателен» не говорит, где.
+        const envName =
+          (field === "username" || field === "password") && typeof r.writableEnv === "string"
+            ? r.writableEnv.replace(/WRITABLE$/, field.toUpperCase())
+            : undefined;
+        issues.push(envName ? `база "${who}": не задан ${envName}` : `база "${who}": ${field} ${i.message}`);
+      }
       continue;
     }
     if (seen.has(parsed.data.name)) {
@@ -371,7 +387,9 @@ export function parseConfig(env: Env): RuntimeConfig {
     );
 
   if (issues.length > 0) {
-    throw new Error(`Некорректная конфигурация (.env):\n${issues.map((s) => `  • ${s}`).join("\n")}`);
+    throw new Error(
+      `Некорректная конфигурация (переменные окружения или блок env MCP-клиента):\n${issues.map((s) => `  • ${s}`).join("\n")}`,
+    );
   }
 
   const b = behaviorParsed.success ? behaviorParsed.data : BehaviorSchema.parse({});

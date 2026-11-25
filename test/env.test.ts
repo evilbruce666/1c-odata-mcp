@@ -81,3 +81,51 @@ describe("адрес 1С без шифрования", () => {
     ).toEqual(["office"]);
   });
 });
+
+describe("ошибки конфигурации понятны и не раскрывают пароль", () => {
+  const base = { ODATA_USERNAME: "u", ODATA_PASSWORD: "p" };
+  const message = (env: Record<string, string>) => {
+    try {
+      parseConfig(env);
+    } catch (e) {
+      return (e as Error).message;
+    }
+    return "";
+  };
+
+  // Логин и пароль в самом адресе 1С fetch не принимает: ошибка с адресом целиком уходила модели и в лог (аудит 25.11).
+  it.each([
+    "https://user:secret-pw@host/db/odata/standard.odata/",
+    "https://user@host/db/odata/standard.odata/",
+  ])("адрес с логином или паролем — отказ при старте без адреса в тексте: %s", (url) => {
+    const m = message({ ...base, ODATA_BASE_URL: url });
+    expect(m).toMatch(/без логина и пароля/);
+    expect(m).toContain("ODATA_USERNAME");
+    expect(m).not.toContain("secret-pw");
+    expect(m).not.toContain("user@");
+  });
+
+  it("адрес с логином у одной из нескольких баз — отказ с именем базы", () => {
+    const m = message({
+      ODATA_DB_IP_BASE_URL: "https://a:b@host/ip/odata/standard.odata/",
+      ODATA_DB_IP_USERNAME: "u",
+      ODATA_DB_IP_PASSWORD: "p",
+    });
+    expect(m).toMatch(/база "ip".*без логина и пароля/);
+  });
+
+  // Без пароля zod писал «Invalid input: expected string, received undefined».
+  it.each([
+    ["ODATA_PASSWORD", { ODATA_BASE_URL: "https://host/db/odata/standard.odata/", ODATA_USERNAME: "u" }],
+    ["ODATA_USERNAME", { ODATA_BASE_URL: "https://host/db/odata/standard.odata/", ODATA_PASSWORD: "p" }],
+  ])("не задан %s — по-русски, с именем переменной", (name, env) => {
+    const m = message(env);
+    expect(m).toContain(name);
+    expect(m).toContain("не задан");
+    expect(m).not.toMatch(/Invalid input|expected string/);
+  });
+
+  it("сообщение не отсылает к .env: конфиг часто задан в блоке env клиента", () => {
+    expect(message({})).not.toContain("(.env)");
+  });
+});
