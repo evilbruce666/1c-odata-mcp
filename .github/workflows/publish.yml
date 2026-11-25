@@ -47,3 +47,48 @@ jobs:
           ' CHANGELOG.md)
           [ -z "$notes" ] && notes="Релиз $GITHUB_REF_NAME. См. CHANGELOG.md и npm."
           gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "$notes"
+
+  # Официальный реестр MCP. Отдельной задачей: если она упадёт, npm и релиз уже вышли, а повторить можно только её
+  # («Re-run failed jobs») — в общей задаче повтор упёрся бы в уже опубликованную версию npm.
+  registry:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # вход в реестр по GitHub OIDC, без токенов и секретов
+    env:
+      # mcp-publisher закреплён версией и контрольной суммой: у задачи есть OIDC-токен. Обновляя версию, возьмите
+      # sha256 архива из релиза github.com/modelcontextprotocol/registry.
+      MCP_PUBLISHER_VERSION: v1.8.16
+      MCP_PUBLISHER_SHA256: 6e2f799550cf843c6fd3350498d56cc49be3dc0af1e6237eb0e6435c7a9d5c05
+    steps:
+      - uses: actions/checkout@v7
+
+      # Реестр проверяет пакет в npm, а новая версия доезжает не сразу (в 1.2.0 архив несколько минут отвечал 404).
+      - name: Дождаться пакета в npm
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for attempt in $(seq 1 60); do
+            curl --fail --silent --head "https://registry.npmjs.org/1c-odata-mcp/-/1c-odata-mcp-$version.tgz" >/dev/null && exit 0
+            sleep 10
+          done
+          echo "Пакет 1c-odata-mcp@$version так и не появился в npm"
+          exit 1
+
+      - name: Скачать и проверить mcp-publisher
+        run: |
+          set -euo pipefail
+          archive=mcp-publisher_linux_amd64.tar.gz
+          curl --fail --location --silent --show-error --output "$archive" \
+            "https://github.com/modelcontextprotocol/registry/releases/download/$MCP_PUBLISHER_VERSION/$archive"
+          echo "$MCP_PUBLISHER_SHA256  $archive" | sha256sum --check
+          tar xzf "$archive" mcp-publisher
+
+      - name: Опубликовать в реестре MCP
+        run: |
+          ./mcp-publisher login github-oidc
+          for attempt in 1 2 3 4 5; do
+            ./mcp-publisher publish && exit 0
+            sleep 30
+          done
+          exit 1
