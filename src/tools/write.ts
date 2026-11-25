@@ -1997,7 +1997,7 @@ function bankSettlementPatchRefusal(entitySet: string, fields: Record<string, un
 }
 
 /**
- * Служебные поля общим update_entity не меняются: проведение и пометка удаления — отдельными инструментами с их
+ * Служебные поля свободными fields (update_entity, copy_document) не меняются: проведение и пометка удаления — отдельными инструментами с их
  * проверками (версия документа и журнал у проведения, запрет пометить проведённую установку цен), а ссылка и версия
  * объекта — не реквизиты. Иначе {"DeletionMark": true} обходил бы отказ mark_for_deletion (аудит 25.11).
  */
@@ -2011,7 +2011,7 @@ const SERVICE_FIELDS: Record<string, string> = {
 export function serviceFieldRefusal(fields: Record<string, unknown>): string | undefined {
   const hit = Object.keys(fields).filter((k) => Object.hasOwn(SERVICE_FIELDS, k));
   if (!hit.length) return undefined;
-  return `Изменение не отправлено: ${hit.map((k) => `${k} — ${SERVICE_FIELDS[k]}`).join("; ")}.`;
+  return `Не отправлено: ${hit.map((k) => `${k} — ${SERVICE_FIELDS[k]}`).join("; ")}.`;
 }
 
 /** Общий путь изменения (PATCH): dry-run при confirm=false, иначе применяет. */
@@ -4409,7 +4409,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Копия создаётся НЕПРОВЕДЁННОЙ, с новым номером (1С нумерует сама) и датой (по умолчанию — момент предпросмотра). " +
         "Правки: date — дата; fields — реквизиты шапки техническими именами (как в update_entity); " +
         "lines — правки строк по номеру (напр. количество и содержание). Сумма документа " +
-        "пересчитывается по строкам, если не задана явно в fields. Счета расчётов — как в исходном документе; если в fields сменён договор — по настройке нового договора. По умолчанию dry-run; запись — при confirm=true.",
+        "пересчитывается по строкам, если не задана явно в fields. Счета расчётов — как в исходном документе; если в fields сменён договор — по настройке нового договора. Posted, DeletionMark, Ref_Key и DataVersion в fields не задаются: копия всегда непроведённая, со своей ссылкой. По умолчанию dry-run; запись — при confirm=true.",
       inputSchema: z.object({
         database: databaseField,
         entitySet: z.string().describe("Имя документа, напр. Document_СчетНаОплатуПокупателю"),
@@ -4441,6 +4441,12 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, entitySet, ref, date, fields, lines, confirm }) =>
       guard("write.document.copy_document", async () => {
         const conn = ctx.db(database);
+        // Копия создаётся непроведённой и со ссылкой из журнала предпросмотра: служебные поля из fields перекрыли бы и то,
+        // и другое (поля шапки применяются последними).
+        const service =
+          serviceFieldRefusal(fields ?? {}) ??
+          (lines ?? []).map((l) => serviceFieldRefusal(l.fields)).find((m) => m !== undefined);
+        if (service) return fail(service);
         ensurePublished(await conn.available(), entitySet);
         const ka = await stockInAccountingBaseRefusal(conn, entitySet);
         if (ka) return fail(ka);
