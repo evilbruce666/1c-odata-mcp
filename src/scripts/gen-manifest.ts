@@ -49,6 +49,14 @@ async function main(): Promise<void> {
   }));
   manifest["prompts_generated"] = false;
   writeFileSync("manifest.json", `${JSON.stringify(manifest, null, 2)}\n`);
+  // Карточка официального реестра MCP (server.json): версия — та же, что у пакета npm.
+  const registry = JSON.parse(readFileSync("server.json", "utf8")) as {
+    version: string;
+    packages: Array<{ version: string }>;
+  };
+  registry.version = pkg.version;
+  for (const p of registry.packages) p.version = pkg.version;
+  writeFileSync("server.json", `${JSON.stringify(registry, null, 2)}\n`);
   writeFileSync("docs/TOOLS-REFERENCE.md", renderToolsReference(manifest["tools"] as never));
   process.stdout.write(
     `manifest.json: ${tools.length} инструментов, ${PROMPTS.length} сценария, версия ${pkg.version}\n`,

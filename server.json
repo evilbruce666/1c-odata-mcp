@@ -1,0 +1,48 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.evilbruce666/1c-odata-mcp",
+  "title": "1C OData MCP",
+  "description": "1C:Enterprise over OData: Accounting 3.0 and Trade Management 11, read-only by default",
+  "repository": {
+    "url": "https://github.com/evilbruce666/1c-odata-mcp",
+    "source": "github"
+  },
+  "version": "1.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "1c-odata-mcp",
+      "version": "1.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "ODATA_BASE_URL",
+          "description": "1C OData address, e.g. https://<server>/<base>/odata/standard.odata/",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "name": "ODATA_USERNAME",
+          "description": "1C user for OData",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "name": "ODATA_PASSWORD",
+          "description": "Password of the 1C user",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "TOOLS_PROFILE",
+          "description": "read — only the read tools; all — every tool (writing also needs READ_ONLY=false)",
+          "isRequired": false,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

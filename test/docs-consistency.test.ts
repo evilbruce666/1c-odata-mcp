@@ -106,6 +106,23 @@ describe("документация совпадает с кодом", () => {
     expect(registered[name]!.inputSchema?.shape).toHaveProperty("counterpartyRef");
   });
 
+  it("server.json (официальный реестр MCP): имя — mcpName пакета, версия — пакета, переменные — из .env.example", () => {
+    const registry = JSON.parse(read("server.json")) as {
+      name: string;
+      description: string;
+      version: string;
+      packages: Array<{ identifier: string; version: string; environmentVariables: Array<{ name: string }> }>;
+    };
+    expect(registry.name).toBe((pkg as { mcpName?: string }).mcpName);
+    expect(registry.description.length).toBeLessThanOrEqual(100);
+    expect(registry.version).toBe(pkg.version);
+    for (const p of registry.packages) {
+      expect(p.identifier).toBe(pkg.name);
+      expect(p.version, "npm run manifest обновит версию").toBe(pkg.version);
+      for (const v of p.environmentVariables) expect(read(".env.example")).toContain(v.name);
+    }
+  });
+
   it("версия одна в package.json и manifest.json, в CHANGELOG есть её раздел", () => {
     expect(manifest.version).toBe(pkg.version);
     expect(changelog).toContain(`## [${pkg.version}]`);
