@@ -132,7 +132,10 @@ describe("search_documents: номер, вид и поиск по основны
     );
     expect(sets.length).toBeGreaterThan(10);
     expect(sc.scope).toContain("entitySet");
-    expect(urls(spy).every((u) => u.includes("Date ge datetime'2026-09-10T00:00:00'"))).toBe(true);
+    // Только запросы к документам: названия контрагентов и организаций — из справочников, без периода.
+    const documents = urls(spy).filter((u) => u.startsWith("Document_"));
+    expect(documents.length).toBeGreaterThan(10);
+    expect(documents.every((u) => u.includes("Date ge datetime'2026-09-10T00:00:00'"))).toBe(true);
     expect(f.violations).toEqual([]);
   });
 

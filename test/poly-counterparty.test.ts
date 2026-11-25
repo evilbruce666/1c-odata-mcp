@@ -605,7 +605,7 @@ describe("живая проверка live-read на корпусе (src/scripts
 
 describe("крупные страницы при серверном отборе (живой замер: 139 запросов вместо 45)", () => {
   it("контрагент с 300 документами в одном виде, limit 500 — один запрос к 1С, как при отборе у себя", async () => {
-    const { call, counters } = await setup();
+    const { call } = await setup();
     // Документы корпуса — по 40 на вид; добавляем крупного контрагента через тот же отбор.
     const set = "Document_ПоступлениеНаРасчетныйСчет";
     const extra = Array.from({ length: 300 }, (_, i) => ({
@@ -620,9 +620,11 @@ describe("крупные страницы при серверном отборе
       Контрагент_Type: "StandardODATA.Catalog_Контрагенты",
     }));
     const inner = globalThis.fetch;
+    let documentRequests = 0;
     vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       const decoded = decodeURIComponent(url);
+      if (decoded.includes(`${set}?`)) documentRequests++;
       if (!decoded.includes(`${set}?`) || !decoded.includes("cast(")) return inner(input, init);
       const res = await inner(input, init);
       const body = (await res.json()) as { value: Record<string, unknown>[] };
@@ -635,7 +637,6 @@ describe("крупные страницы при серверном отборе
         headers: { "Content-Type": "application/json" },
       });
     });
-    const before = counters.requests;
     const s = await call("read.document.search_documents", {
       entitySet: set,
       counterpartyRef: CP(4),
@@ -643,7 +644,8 @@ describe("крупные страницы при серверном отборе
     });
     // Страница короче limit — предел размера ответа; читается одна выборка из 1С.
     expect((s["rows"] as unknown[]).length).toBeGreaterThan(100);
-    expect(counters.requests - before).toBe(1);
+    // К документам — один запрос (названия контрагента и организации читаются отдельно, из справочников).
+    expect(documentRequests).toBe(1);
   });
 });
 

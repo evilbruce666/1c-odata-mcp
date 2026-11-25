@@ -34,7 +34,7 @@
   "read.counterparty.get_reconciliation": 6,
   "read.counterparty.get_supplier_history": 1,
   "read.document.get_document": 1,
-  "read.document.search_documents": 1,
+  "read.document.search_documents": 3,
   "read.organization.get_organization_card": 6,
   "read.schema.describe_entity": 0,
   "read.schema.list_entities": 0,

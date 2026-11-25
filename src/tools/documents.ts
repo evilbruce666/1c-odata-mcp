@@ -30,6 +30,7 @@ import {
   type PolyMode,
 } from "../odata/poly-counterparty.js";
 import { searchDocumentsResultSchema, odataEntitySchema } from "../schemas/output.js";
+import { addDocumentNames, compactDocument, documentRefs, type DocumentRefs } from "./document-names.js";
 
 /** Входящий номер — номер документа контрагента (накладной поставщика, платёжки покупателя). */
 const INCOMING_NUMBER = "НомерВходящегоДокумента";
@@ -100,6 +101,9 @@ interface SearchParams {
   /** Почему отбор по полиморфному полю на стороне коннектора — в counterpartyNote. */
   polyNote?: string;
 }
+
+/** Ссылки контрагента и организации строки поиска — для названий; в ответ не выходят. */
+const searchRefs = new WeakMap<object, DocumentRefs>();
 
 /** Итог по одному типу: строки или причина, по которой фильтр к типу неприменим. */
 type SetResult =
@@ -185,7 +189,10 @@ async function searchSet(conn: Connection, set: string, p: SearchParams): Promis
     DOC_FIELDS.posted,
     DOC_FIELDS.deletionMark,
     DOC_FIELDS.amount,
-    ...(cpClientRef ? [POLY_COUNTERPARTY] : []),
+    // Контрагент и организация — чтобы назвать их в строках (читаются названия только строк страницы).
+    DOC_FIELDS.counterparty,
+    DOC_FIELDS.organization,
+    ...(cpClientRef || props.has(POLY_COUNTERPARTY) ? [POLY_COUNTERPARTY, `${POLY_COUNTERPARTY}_Type`] : []),
     INCOMING_NUMBER,
     // Ответственный документа — по схеме: «Ответственный», иначе «Менеджер» (1.1, имя — одним запросом на страницу).
     ...RESPONSIBLE_FIELDS.filter((f) => props.has(f)).slice(0, 1),
@@ -223,9 +230,10 @@ async function searchSet(conn: Connection, set: string, p: SearchParams): Promis
   );
   const summaries = matched.map((r) => {
     const s = toSummary(r, set);
-    if (!q) return s;
-    const by = matchesOwnNumber(r[DOC_FIELDS.number], q) ? "number" : "incomingNumber";
-    return { ...s, matchedBy: by };
+    const by = q ? (matchesOwnNumber(r[DOC_FIELDS.number], q) ? "number" : "incomingNumber") : undefined;
+    const row = by ? { ...s, matchedBy: by } : s;
+    searchRefs.set(row, documentRefs(r));
+    return row;
   });
   return {
     set,
@@ -377,7 +385,10 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
               `В документе ${entitySet} ${r.skipped}. Уберите фильтр; поля документа — в read.schema.describe_entity.`,
             );
           const head = { ...(r.counterpartyNote ? { counterpartyFilter: r.counterpartyNote } : {}) };
-          const { items, page, note } = pageOf(r.rows.sort(byNumberMatchThenDate), {
+          const sorted = r.rows.sort(byNumberMatchThenDate);
+          // Названия — до расчёта размера страницы, и только строкам, которые в неё могут войти.
+          await addDocumentNames(conn, sorted.slice(offset, offset + limit), searchRefs);
+          const { items, page, note } = pageOf(sorted, {
             offset,
             limit,
             head,
@@ -443,6 +454,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
             "Просмотрены основные виды документов (searched). Прочие типы — кассовые чеки, начисления, " +
             "операции, уведомления — ищутся через entitySet.",
         };
+        await addDocumentNames(conn, merged.slice(offset, offset + limit), searchRefs);
         const { items, page, note } = pageOf(merged, {
           offset,
           limit,
@@ -468,21 +480,29 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
       title: "Документ целиком",
       description:
         "Возвращает документ по типу и Ref_Key со всеми полями, включая табличные части. " +
-        "Ref_Key берётся из search_documents или истории взаиморасчётов.",
+        "Ref_Key берётся из search_documents или истории взаиморасчётов. compact=true — без пустых значений и " +
+        "служебных ключей, с названиями рядом со ссылками (Контрагент_Название, Номенклатура_Название…): так короче " +
+        "и понятнее; без него — сущность 1С как есть.",
       inputSchema: z.object({
         database: databaseField,
         entitySet: z.string().describe("Имя документа, напр. Document_РеализацияТоваровУслуг"),
         ref: z.string().describe("Ref_Key документа (GUID)"),
+        compact: z
+          .boolean()
+          .optional()
+          .describe(
+            "true — без пустых значений, с названиями рядом со ссылками; по умолчанию — сущность 1С как есть",
+          ),
       }),
       outputSchema: odataEntitySchema,
     },
-    ({ database, entitySet, ref }) =>
+    ({ database, entitySet, ref, compact }) =>
       guard("read.document.get_document", async () => {
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
         const path = `${entitySet}(guid'${ref.replace(/[{}']/g, "")}')${buildQuery({})}`;
         const entity = await conn.client.getEntity(path);
-        return ok(entity);
+        return ok(compact ? await compactDocument(conn, entity) : entity);
       }),
   );
 }
