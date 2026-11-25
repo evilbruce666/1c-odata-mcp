@@ -94,13 +94,10 @@ async function addDocumentNames<T extends object>(
   }
 }
 
-/** Строк в порции названий: страница по умолчанию (limit 50) — одной порцией. */
-const NAME_PORTION = 50;
-
 /**
- * Названия строкам будущей страницы — порциями, пока страница не заполнится. Названия нужны до расчёта размера, но
- * не всем кандидатам: при limit=500 в ответ помещается часть. pageOf берёт начало списка до первой непомещающейся
- * строки (fitToChars), поэтому непрочитанный хвост в страницу не попал бы и с названиями: они строку только удлиняют.
+ * Названия строкам будущей страницы — одним чтением. Названия только удлиняют строку, а pageOf берёт начало списка до
+ * первой непомещающейся (fitToChars), поэтому дальше строк, помещающихся без названий, страница не уйдёт. Их ссылки —
+ * начало списка ссылок всех limit строк: запросов не больше, чем при чтении всем, повторы и сбой справочника — общие.
  */
 export async function addPageNames<T extends object>(
   conn: Connection,
@@ -109,12 +106,7 @@ export async function addPageNames<T extends object>(
   refsOf: WeakMap<object, DocumentRefs>,
 ): Promise<void> {
   const candidates = rows.slice(page.offset, page.offset + page.limit);
-  const used = renderJson(page.head).length;
-  for (let from = 0; from < candidates.length; from += NAME_PORTION) {
-    await addDocumentNames(conn, candidates.slice(from, from + NAME_PORTION), refsOf);
-    const named = candidates.slice(0, from + NAME_PORTION);
-    if (fitToChars(named, used).length < named.length) return;
-  }
+  await addDocumentNames(conn, fitToChars(candidates, renderJson(page.head).length), refsOf);
 }
 
 /** Поле-ссылка компактного документа → справочник названия. */

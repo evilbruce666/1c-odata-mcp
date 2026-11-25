@@ -386,7 +386,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
             );
           const head = { ...(r.counterpartyNote ? { counterpartyFilter: r.counterpartyNote } : {}) };
           const sorted = r.rows.sort(byNumberMatchThenDate);
-          // Названия — до расчёта размера страницы, порциями, пока она не заполнится.
+          // Названия — до расчёта размера страницы, только строкам, которые могут в неё войти.
           await addPageNames(conn, sorted, { offset, limit, head }, searchRefs);
           const { items, page, note } = pageOf(sorted, {
             offset,

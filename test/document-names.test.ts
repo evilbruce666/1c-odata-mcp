@@ -102,7 +102,7 @@ describe("search_documents: названия контрагента и орга�
   });
 
   // При limit=500 названия читались всем 500 кандидатам, хотя помещалась часть (ревью: 25 пачек ради 87 строк).
-  it("большой limit: названия читаются порциями, пока страница не заполнится, а не всем кандидатам", async () => {
+  it("большой limit: названия читаются только строкам, помещающимся без названий", async () => {
     const t = setup({
       env: { ODATA_MAX_RESPONSE_CHARS: "10000" },
       docs: Array.from({ length: 500 }, (_, i) => doc(i + 1)),
@@ -113,20 +113,42 @@ describe("search_documents: названия контрагента и орга�
     expect(rows.length).toBeGreaterThan(5);
     expect(rows.length).toBeLessThan(50);
     expect(rows.every((r) => r["counterparty"])).toBe(true);
-    // Одна порция в 50 строк — три пачки по 20 ссылок.
-    expect(t.resources.filter((x) => x === COUNTERPARTIES)).toHaveLength(3);
+    expect(t.resources.filter((x) => x === COUNTERPARTIES).length).toBeLessThanOrEqual(3);
   });
 
-  it("страница длиннее порции: названия у всех строк, страница та же, что при чтении всех сразу", async () => {
+  // Порции по 50 строк читали справочник чаще одного общего чтения: 6 запросов вместо 5, 3 вместо 1 (ревью).
+  it.each([
+    ["100 разных на 100 строк", 100, 100, 5],
+    ["150 разных на 150 строк", 150, 150, 8],
+    ["20 разных на 150 строк", 150, 20, 1],
+  ])("запросов не больше, чем при одном чтении: %s", async (_, count, distinct, expected) => {
+    const t = setup({
+      docs: Array.from({ length: count }, (_, i) =>
+        doc(i + 1, { Контрагент_Key: guid(100 + (i % distinct)) }),
+      ),
+    });
+    const { s } = await t.call("read.document.search_documents", { ...search, limit: count });
+    expect(rowsOf(s)).toHaveLength(count);
+    expect(rowsOf(s).every((r) => r["counterparty"])).toBe(true);
+    expect(t.resources.filter((x) => x === COUNTERPARTIES)).toHaveLength(expected);
+  });
+
+  it("нечитаемый справочник запрашивается один раз за поиск и при большом limit", async () => {
+    const t = setup({ docs: Array.from({ length: 500 }, (_, i) => doc(i + 1)), failNames: true });
+    const { r, s } = await t.call("read.document.search_documents", { ...search, limit: 500 });
+    expect(r.isError).toBeFalsy();
+    expect(rowsOf(s).some((x) => x["counterparty"])).toBe(false);
+    expect(rowsOf(s).every((x) => x["organization"])).toBe(true);
+    expect(t.resources.filter((x) => x === COUNTERPARTIES)).toHaveLength(1);
+  });
+
+  it("длинная выдача: названия у всех строк, следующая страница тоже с названиями", async () => {
     const t = setup({ docs: Array.from({ length: 500 }, (_, i) => doc(i + 1)) });
     const { s } = await t.call("read.document.search_documents", { ...search, limit: 500 });
     const rows = rowsOf(s);
     expect(rows.length).toBeGreaterThan(100);
     expect(rows.every((r) => r["counterparty"] && r["organization"])).toBe(true);
-    // Прочитано не больше, чем страница плюс одна порция.
-    const batches = t.resources.filter((x) => x === COUNTERPARTIES).length;
-    expect(batches).toBeLessThanOrEqual(Math.ceil((Math.ceil((rows.length + 1) / 50) * 50) / 20) + 3);
-    expect(batches).toBeLessThan(25);
+    expect(t.resources.filter((x) => x === COUNTERPARTIES).length).toBeLessThan(25);
     // Продолжение начинается ровно за страницей и тоже с названиями.
     const next = await t.call("read.document.search_documents", {
       ...search,
