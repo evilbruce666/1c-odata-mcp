@@ -281,8 +281,9 @@ claude mcp add 1c-odata -s user -- /opt/homebrew/bin/node \
 npx -y 1c-odata-mcp --check --config "<путь к claude_desktop_config.json или mcp.json>"
 ```
 
-Путь к конфигу Claude Desktop: на macOS `~/Library/Application Support/Claude/claude_desktop_config.json`, на Windows
-`%APPDATA%\Claude\claude_desktop_config.json`. Без `--config` берутся переменные окружения. На каждую базу уходит
+Путь к конфигу Claude Desktop: на macOS `~/Library/Application Support/Claude/claude_desktop_config.json` (путь берите
+в кавычки — в нём пробел), на Windows `%APPDATA%\Claude\claude_desktop_config.json` в cmd или
+`$env:APPDATA\Claude\claude_desktop_config.json` в PowerShell. Без `--config` берутся переменные окружения. На каждую базу уходит
 один запрос `$metadata` (только чтение). В ответе — доступна ли база, версия OData, число объектов, что это за
 конфигурация и каких объектов для основных вопросов нет в «Составе OData». Пароль не печатается; код возврата 0 — все
 базы отвечают, 1 — нет. Конфиг Codex (TOML) `--config` не читает: для него задайте переменные в терминале.

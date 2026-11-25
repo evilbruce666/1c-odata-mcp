@@ -144,6 +144,18 @@ describe("--check --config: блок env из конфига приложени�
     expect(calls).toHaveLength(1);
   });
 
+  // Путь из документации — «~/Library/Application Support/…» в кавычках из-за пробела: оболочка «~» не раскрывает.
+  it("«~/…» в пути раскрывается в домашний каталог", async () => {
+    stub(BP30_METADATA_XML);
+    file("tilde.json", JSON.stringify({ mcpServers: { "1c-odata": entry(ENV) } }));
+    vi.stubEnv("HOME", dir);
+    vi.stubEnv("USERPROFILE", dir);
+    const r = await run(["--check", "--config", "~/tilde.json"], {});
+    vi.unstubAllEnvs();
+    expect(r.code).toBe(0);
+    expect(calls).toHaveLength(1);
+  });
+
   it("переменные терминала не подмешиваются к конфигу", async () => {
     stub(BP30_METADATA_XML);
     const p = file(

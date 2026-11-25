@@ -5,6 +5,8 @@
  * Настройки у новичка лежат не в терминале, а в блоке env конфига приложения — его читает --config.
  */
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { parseConfig, unencryptedDatabases } from "../config/env.js";
 import { accountingChart, accountingRegister } from "../config/accounting.js";
 import { CATALOGS, REGISTERS } from "../config/mapping.js";
@@ -103,7 +105,9 @@ async function checkBase(ctx: ServerContext, name: string, print: Print): Promis
  * env из конфига приложения (claude_desktop_config.json, mcp.json Cursor/VS Code): записи mcpServers или servers,
  * которые запускают этот коннектор. Текст ошибки разбора файла не печатается: в нём фрагмент с паролем.
  */
-export function readClientConfig(path: string): Array<{ name: string; env: Env }> {
+export function readClientConfig(given: string): Array<{ name: string; env: Env }> {
+  // В кавычках (в пути есть пробел) оболочка «~» не раскрывает — раскрываем здесь.
+  const path = /^~(?=$|[/\\])/.test(given) ? join(homedir(), given.slice(1)) : given;
   let text: string;
   try {
     text = readFileSync(path, "utf8");

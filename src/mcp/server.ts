@@ -110,6 +110,9 @@ const DESTRUCTIVE_TOOLS = new Set([
   "write.accounting.set_contract_settlement_settings",
   "write.accounting.set_settlement_settings",
   "write.catalog.update_nomenclature",
+  // С makeMain заменяют у контрагента прежний основной счёт или контактное лицо.
+  "write.counterparty.create_bank_account",
+  "write.counterparty.create_contact_person",
   "write.counterparty.set_group",
   "write.counterparty.update_counterparty",
   "write.document.align_bank_payment_amounts",
