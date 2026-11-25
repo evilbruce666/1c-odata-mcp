@@ -2,14 +2,14 @@
 
 [Русская версия](README.md) · [Documentation (in Russian)](docs/README.md)
 
-**Connect AI to your 1C database without changing its configuration.** An MCP (Model Context Protocol) server that
-connects 1C:Enterprise databases to any MCP client — Claude Desktop and Claude Code, ChatGPT desktop (via Codex),
-Cursor, VS Code, JetBrains, local models (through LM Studio and other MCP clients) — over the standard OData
-interface. Ask your 1C database in plain language; nothing is installed or modified inside 1C: no extensions, no COM
-connection, no SQL access — only a published OData endpoint.
+**Connect AI to your 1C database without changing its configuration.** This is an MCP server that runs on your own
+computer and lets Claude, ChatGPT desktop (via Codex), Cursor or a local model work with a 1C:Enterprise database
+through the standard OData interface. You ask in plain language — who owes us, stock by store, is August ready to
+close — and get the numbers from your own base.
 
-The detailed documentation is in Russian (the main audience is 1C users in Russia, Belarus, Kazakhstan and
-Kyrgyzstan); an AI assistant can read it for you.
+Nothing goes into 1C itself: no extensions, no COM connection, no SQL access, just a published OData endpoint. Most of
+the documentation is in Russian, because most users are 1C people in Russia, Belarus, Kazakhstan and Kyrgyzstan; if
+you don't read Russian, your assistant can read it for you.
 
 ## What it covers
 
