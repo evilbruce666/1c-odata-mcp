@@ -1,62 +1,34 @@
 #!/usr/bin/env node
-import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
-import { loadConfig, unencryptedDatabases, type HttpTransport } from "./config/env.js";
-import { ServerContext } from "./context.js";
-import { createServer } from "./mcp/server.js";
-import { logger } from "./logger.js";
+/**
+ * Точка входа. Флаги разбираются до импорта сервера: журнал открывает файл при импорте, а --help и --version не должны
+ * ни читать настройки, ни что-то создавать. Без этих флагов — прежний сервер (serve.ts), прочие аргументы не мешают.
+ */
+import { readFileSync } from "node:fs";
 
-const SHUTDOWN_TIMEOUT_MS = 8_000;
+const HELP = `1c-odata-mcp — MCP-сервер для 1С:Предприятие через OData.
 
-async function main(): Promise<void> {
-  const cfg = loadConfig();
-  const unencrypted = unencryptedDatabases(cfg.connections);
-  if (unencrypted.length) {
-    logger.warn(
-      { databases: unencrypted },
-      "Адрес 1С без HTTPS: логин и пароль идут открытым текстом. Если сеть не защищена, используйте https://",
-    );
-  }
-  const ctx = new ServerContext(cfg);
-  if (cfg.http) return runHttp(ctx, cfg.http);
-  const server = createServer(ctx);
+Без аргументов запускается сервер (так его запускает MCP-клиент). Настройки — переменные окружения, см. README.
 
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  --check                    проверить подключение к 1С по переменным окружения
+  --check --config <файл>    то же по блоку env из конфига приложения (claude_desktop_config.json, mcp.json)
+  --version                  версия
+  --help                     эта справка
+`;
 
-  // Логи только в stderr — stdout занят JSON-RPC.
-  logger.info(
-    {
-      databases: cfg.connections.map((c) => c.name),
-      default: cfg.defaultName,
-      readOnly: cfg.behavior.readOnly,
-    },
-    "1c-odata-mcp запущен (stdio)",
-  );
+const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
+    version: string;
+  };
+  process.stdout.write(`${pkg.version}\n`);
+} else if (args.includes("--help")) {
+  process.stdout.write(HELP);
+} else if (args.includes("--check")) {
+  // Журнал диагностике не нужен: она сама печатает всё, что человеку нужно знать.
+  process.env.LOG_LEVEL ??= "fatal";
+  process.env.MCP_LOG_STDERR ??= "1";
+  const { runCheck } = await import("./cli/check.js");
+  process.exitCode = await runCheck(args, process.env, (line) => process.stdout.write(`${line}\n`));
+} else {
+  await import("./serve.js");
 }
-
-async function runHttp(ctx: ServerContext, http: HttpTransport): Promise<void> {
-  const { startHttpServer } = await import("./http.js");
-  const { port, close } = await startHttpServer(ctx, http);
-  logger.info(
-    { host: http.host, port, readOnly: ctx.behavior.readOnly },
-    ctx.behavior.readOnly
-      ? "1c-odata-mcp запущен (http, только чтение)"
-      : "1c-odata-mcp запущен (http, запись включена)",
-  );
-  for (const signal of ["SIGTERM", "SIGINT"] as const) {
-    process.once(signal, () => {
-      // Запрос к 1С может идти минуты: контейнер не должен ждать его дольше обычного срока остановки.
-      setTimeout(() => process.exit(0), SHUTDOWN_TIMEOUT_MS).unref();
-      void close().then(() => process.exit(0));
-    });
-  }
-}
-
-main().catch((err) => {
-  const message = err instanceof Error ? err.message : String(err);
-  logger.error({ err: message }, "Фатальная ошибка старта");
-  // Под MCP-клиентом лог идёт в файл — причину отказа дублируем в stderr: клиент показывает её
-  // пользователю (процесс всё равно завершается, «чистый stderr» здесь уже не нужен).
-  process.stderr.write(`1c-odata-mcp: ${message}\n`);
-  process.exit(1);
-});

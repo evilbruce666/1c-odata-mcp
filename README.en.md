@@ -64,6 +64,11 @@ this line to enable writing. On Windows, if the client cannot start `npx`, use
 4. **Restart the client** and ask "check the connection to 1C" — a healthy answer names the OData version and the
    number of published objects.
 
+If it does not work, check from a terminal: `npx -y 1c-odata-mcp --check --config "<path to the client config>"` reads
+the `env` block of that file (no need to retype the password), makes one `$metadata` request per database and tells you
+whether 1C answers, which configuration it is and what is missing from the OData content. Without `--config` it uses
+the environment variables. JSON configs only.
+
 The same entry works in Cursor, LM Studio, Cline and JetBrains AI Assistant (`mcpServers`). VS Code uses
 `.vscode/mcp.json` with a `servers` section and `"type": "stdio"`; Codex uses `~/.codex/config.toml` with
 `[mcp_servers.1c-odata]` or `codex mcp add`; Claude Code — `claude mcp add`. Exact snippets —
