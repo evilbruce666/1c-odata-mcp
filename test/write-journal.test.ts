@@ -276,7 +276,8 @@ describe("WriteOperationJournal", () => {
       sends += 1;
       return { Ref_Key: "duplicate" };
     });
-    await expect(second).rejects.toThrow(/неизвестен/i);
+    // Раньше тест требовал «исход неизвестен» — это закрепляло дефект: пока запрос идёт, он не неизвестен, а идущий.
+    await expect(second).rejects.toMatchObject({ kind: "in_progress" });
     releaseSend?.();
     const created = await first;
 

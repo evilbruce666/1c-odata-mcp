@@ -142,6 +142,23 @@ describe("перемещение в иерархии: move_to_folder и update_e
     }
   });
 
+  // Ревью: при неверном родителе чтение самого объекта (для «родитель не меняется») не должно прятать причину отказа.
+  it("в помеченную группу, а чтение объекта не удалось, — отказ с причиной, не ошибка чтения", async () => {
+    for (const i of [0, 1]) {
+      const t = setup();
+      const read = vi.mocked(t.conn.client.getEntity).getMockImplementation()!;
+      vi.spyOn(t.conn.client, "getEntity").mockImplementation(async (path: string) => {
+        if (decodeURIComponent(path).toLowerCase().includes(ITEM.toLowerCase()))
+          throw new ODataError({ kind: "network", message: "обрыв" });
+        return read(path, undefined as never);
+      });
+      const r = await t.movers[i]!(ITEM, MARKED, true);
+      expect(r.error).toBe(true);
+      expect(r.text).toMatch(/помечен/);
+      expect(t.patch).not.toHaveBeenCalled();
+    }
+  });
+
   it("цикл, уже лежащий в данных, не зацикливает проверку: отказ", async () => {
     const t = setup("bp30", { [A]: folder(B), [B]: folder(A), [AA]: folder(EMPTY) });
     const r = await t.movers[0]!(AA, A, true);

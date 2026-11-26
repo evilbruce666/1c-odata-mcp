@@ -36,6 +36,15 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
 
+      # Ветка с именем на «v» не должна выглядеть релизом: публикуем, только если запуск — тег vX.Y.Z этой версии.
+      - name: Проверить, что запуск — тег этой версии
+        env:
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          version="$(jq -r .version package.json)"
+          [ "$HEAD_BRANCH" = "v$version" ] || { echo "Запуск $HEAD_BRANCH не совпадает с версией v$version"; exit 1; }
+          git ls-remote --exit-code --tags "https://github.com/$GITHUB_REPOSITORY.git" "refs/tags/v$version" >/dev/null
+
       # Реестр проверяет пакет в npm, а новая версия доезжает не сразу (в 1.2.0 архив несколько минут отвечал 404).
       - name: Дождаться пакета в npm
         run: |

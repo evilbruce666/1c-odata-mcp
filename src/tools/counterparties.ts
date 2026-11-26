@@ -258,6 +258,10 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
           number: r[DOC_FIELDS.number] ? String(r[DOC_FIELDS.number]) : undefined,
           date: r[DOC_FIELDS.date] ? String(r[DOC_FIELDS.date]) : undefined,
           posted: typeof r[DOC_FIELDS.posted] === "boolean" ? (r[DOC_FIELDS.posted] as boolean) : undefined,
+          deletionMark:
+            typeof r[DOC_FIELDS.deletionMark] === "boolean"
+              ? (r[DOC_FIELDS.deletionMark] as boolean)
+              : undefined,
           amount: typeof r[DOC_FIELDS.amount] === "number" ? (r[DOC_FIELDS.amount] as number) : undefined,
         });
       }
@@ -278,7 +282,7 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
         "Документы реализации и счета по контрагенту-покупателю за период. " +
         "Показывает, что и на какие суммы продавали клиенту. Ref_Key — из find_counterparty." +
         " " +
-        "Без from/to — за всё время, новые первыми, по всем организациям, если organization не задан; в списке есть и непроведённые (posted), и помеченные на удаление. Это список документов; суммы по клиентам и месяцам — get_sales_breakdown, по товарам и марже — get_sales_report.",
+        "Без from/to — за всё время, новые первыми, по всем организациям, если organization не задан; в списке есть и непроведённые (posted=false), и помеченные на удаление (deletionMark=true): в суммы их включать нельзя. Это список документов; суммы по клиентам и месяцам — get_sales_breakdown, по товарам и марже — get_sales_report.",
       inputSchema: z.object(historyInput),
       outputSchema: counterpartyHistoryResultSchema,
     },
@@ -314,7 +318,7 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
         "Документы поступления по контрагенту-поставщику за период. " +
         "Показывает закупки у поставщика. Ref_Key — из find_counterparty." +
         " " +
-        "Без from/to — за всё время, новые первыми, по всем организациям, если organization не задан; в списке есть и непроведённые (posted), и помеченные на удаление. Суммы и рейтинг поставщиков — get_purchases_breakdown, в УТ по товарам — get_purchases_report.",
+        "Без from/to — за всё время, новые первыми, по всем организациям, если organization не задан; в списке есть и непроведённые (posted=false), и помеченные на удаление (deletionMark=true): в суммы их включать нельзя. Суммы и рейтинг поставщиков — get_purchases_breakdown, в УТ по товарам — get_purchases_report.",
       inputSchema: z.object(historyInput),
       outputSchema: counterpartyHistoryResultSchema,
     },

@@ -150,3 +150,51 @@ describe("одновременные подтверждения, пока пер
     expect(j.isLive(OP)).toBe(false);
   });
 });
+
+// Правка и создание без ссылки: второе подтверждение приходило после записи «executing» и читало её с диска раньше,
+// чем доходило до отметки «запрос идёт». Тесты брали только окно до записи (fs.hold) и создание со ссылкой.
+describe("подтверждение, пока первый запрос уже идёт (запись «executing» на диске)", () => {
+  /** Первый POST держится на воротах; withCheck — правка строк с проверкой, иначе создание без ссылки. */
+  const inFlight = async (withCheck: boolean) => {
+    const j = journal();
+    await j.prepare(OP, SET, { ref: REF }, "h");
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let started!: () => void;
+    const began = new Promise<void>((r) => (started = r));
+    const send = vi.fn(async () => {
+      started();
+      await gate;
+      return { Ref_Key: REF };
+    });
+    const confirm = () => j.execute(OP, SET, { ref: REF }, "h", send, withCheck ? check : undefined);
+    const first = confirm();
+    await began;
+    expect((await j.lookup(OP))?.state).toBe("executing");
+    return { j, send, first, release, confirm };
+  };
+
+  it.each([
+    ["правка строк с проверкой", true],
+    ["создание без ссылки", false],
+  ])("%s: второе подтверждение — in_progress, а не «исход неизвестен»", async (_, withCheck) => {
+    const t = await inFlight(withCheck);
+    await expect(t.confirm()).rejects.toMatchObject({ kind: "in_progress" });
+    // Вход инструментов: чтение состояния операции перед чтением 1С.
+    await expect(t.j.settled(OP, "h")).rejects.toMatchObject({ kind: "in_progress" });
+    t.release();
+    await expect(t.first).resolves.toMatchObject({ Ref_Key: REF });
+    expect(t.send).toHaveBeenCalledTimes(1);
+    expect(t.j.isLive(OP)).toBe(false);
+  });
+
+  it("запроса в этом процессе нет (упал или перезапущен) — исход по-прежнему неизвестен", async () => {
+    const j = journal();
+    await j.prepare(OP, SET, { ref: REF }, "h");
+    const lost = () => Promise.reject(new ODataError({ kind: "network", message: "x" }));
+    await expect(j.execute(OP, SET, { ref: REF }, "h", lost, check)).rejects.toMatchObject({
+      kind: "unknown",
+    });
+    await expect(j.settled(OP, "h")).rejects.toMatchObject({ kind: "unknown" });
+  });
+});

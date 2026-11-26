@@ -27,6 +27,10 @@ describe("publish-registry.yml: реестр MCP", () => {
       expect(job).toContain(guard);
     expect(job).toContain("ref: ${{ github.event.workflow_run.head_sha }}");
     expect(job).toContain("persist-credentials: false");
+    // Имя ветки на «v» не делает запуск релизом: версия из package.json должна равняться тегу и тег — существовать.
+    expect(job).toContain('[ "$HEAD_BRANCH" = "v$version" ]');
+    expect(job).toContain("refs/tags/v$version");
+    expect(job.indexOf('[ "$HEAD_BRANCH"')).toBeLessThan(job.indexOf("mcp-publisher publish"));
     expect(job).not.toMatch(/\bnpm (ci|install|test|run)\b|\bnpx\b/);
   });
 

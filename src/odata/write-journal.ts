@@ -174,6 +174,7 @@ export class WriteOperationJournal {
     )
       return this.resultForExisting<T>(entry)!;
     this.assertMatches(entry, entitySet, payload, requestHash);
+    this.assertNotInFlight(entry);
     const existingResult = this.resultForExisting<T>(entry);
     if (existingResult !== undefined) return existingResult;
 
@@ -510,8 +511,19 @@ export class WriteOperationJournal {
         `Данные, объект или база не совпадают с dry-run для operationId ${operationId}. Выполните новый предпросмотр.`,
       );
     }
+    this.assertNotInFlight(entry);
     this.resultForExisting(entry); // неизвестный/отклонённый исход — ошибкой
     return { entitySet: entry.entitySet, result: entry.result ?? {} };
+  }
+
+  /**
+   * Запись на диске говорит «выполняется», и этот процесс сам ждёт ответа 1С: это идущий запрос, а не неизвестный
+   * исход. Без проверки второе подтверждение правки или создания без ссылки отвечало «исход неизвестен» и отправляло
+   * человека сверять базу, пока первый запрос ещё шёл.
+   */
+  private assertNotInFlight(entry: JournalEntry): void {
+    if ((entry.state === "executing" || entry.state === "outcome_unknown") && this.isLive(entry.operationId))
+      throw inProgressError(entry.operationId);
   }
 
   private resultForExisting<T extends ODataEntity>(entry: JournalEntry): T | undefined {

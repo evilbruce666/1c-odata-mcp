@@ -105,6 +105,13 @@ describe("update_counterparty с ogrn: остальные дополнитель
     expect(t.sent().map((x) => x["LineNumber"])).toEqual([1, 2, 3]);
   });
 
+  it("у строки ОГРН нет типа значения («Неопределено») — ставится строковый", async () => {
+    const t = setup([row("1", OGRN, "", { Значение_Type: "Undefined" })]);
+    await t.call(true);
+    expect(t.sent()).toHaveLength(1);
+    expect(t.sent()[0]).toMatchObject({ Значение: "1027700000000", Значение_Type: "Edm.String" });
+  });
+
   it("предпросмотр показывает все строки и ничего не пишет", async () => {
     const t = setup(others);
     const r = await t.call(false);

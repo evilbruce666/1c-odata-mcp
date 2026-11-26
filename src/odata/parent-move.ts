@@ -54,7 +54,14 @@ export async function parentMoveRefusal(
         ? "Новый родитель помечен на удаление. Ничего не записано."
         : undefined;
   // Родитель не меняется (update_entity с прежним Parent_Key рядом с другими полями) — это не перемещение.
-  if (wrong || !destination) return clean((await current())?.["Parent_Key"]) === target ? undefined : wrong;
+  if (wrong || !destination) {
+    // Не прочиталось — это не повод скрыть отказ: отвечаем причиной, как до проверки «родитель не меняется».
+    const unchanged = await current().then(
+      (subjectRow) => clean(subjectRow?.["Parent_Key"]) === target,
+      () => false,
+    );
+    return unchanged ? undefined : wrong;
+  }
 
   // Цикл возможен, только если перемещаемый объект сам может быть родителем.
   if (folders && (await current())?.["IsFolder"] === false) return undefined;

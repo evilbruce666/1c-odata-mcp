@@ -1859,7 +1859,17 @@ function withAdditionalValue(rows: Array<Record<string, unknown>>, property: str
     String(r["Свойство_Key"]).toLowerCase() === property.toLowerCase();
   const next = rows.some(same)
     ? rows.map((r) =>
-        same(r) ? { ...r, Значение: value, ...(r["ТекстоваяСтрока"] ? { ТекстоваяСтрока: value } : {}) } : r,
+        same(r)
+          ? {
+              ...r,
+              Значение: value,
+              // Строка без типа значения («Неопределено») не принимает строку: тип нужен, как у новой строки.
+              ...(!r["Значение_Type"] || r["Значение_Type"] === "Undefined"
+                ? { Значение_Type: ADDITIONAL_STRING }
+                : {}),
+              ...(r["ТекстоваяСтрока"] ? { ТекстоваяСтрока: value } : {}),
+            }
+          : r,
       )
     : [...rows, { Свойство_Key: property, Значение: value, Значение_Type: ADDITIONAL_STRING }];
   return next.map((r, i) => ({ ...r, LineNumber: i + 1 }));
