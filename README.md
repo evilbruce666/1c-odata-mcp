@@ -122,7 +122,7 @@ Claude: (вызывает read.analytics.get_sales_report: по складам, 
 | Claude Code | `claude mcp add` |
 | Cursor, LM Studio, Cline, JetBrains AI Assistant | `mcpServers`, как выше |
 | VS Code (Copilot, режим агента) | `.vscode/mcp.json`, раздел `servers` |
-| Локальные модели (Ollama, LM Studio) | через клиент с поддержкой MCP; данные не покидают вашу сеть. Малый контекст — [готовые наборы по 18 инструментов](docs/CONNECTING.md#меньше-инструментов-для-модели-опционально) |
+| Локальные модели (Ollama, LM Studio) | через клиент с поддержкой MCP; данные не покидают вашу сеть. Малый контекст — [готовые наборы по 18 инструментов](docs/CONNECTING.md#меньше-инструментов-для-модели-опционально). Это медленнее облачных — [замер и настройка](docs/LOCAL-MODELS.md) |
 
 ### Готовые сценарии
 

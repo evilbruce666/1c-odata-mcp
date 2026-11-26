@@ -7,3 +7,4 @@ dist/
 .metadata-cache.json
 coverage/
 *.mcpb
+scripts/bench/out/
