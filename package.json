@@ -15,7 +15,8 @@
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
-    ".env.example"
+    ".env.example",
+    "personal-data.json"
   ],
   "repository": {
     "type": "git",

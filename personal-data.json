@@ -1,0 +1,301 @@
+{
+  "description": "Поля ответов коннектора с персональными данными (152-ФЗ) — чтобы бот или шлюз мог их маскировать, не угадывая. Пути — в structuredContent ответа инструмента; [] — каждый элемент массива. Подробно — docs/PERSONAL-DATA.md.",
+  "when": {
+    "always": "всегда персональные данные",
+    "individual": "персональные, если контрагент, партнёр или организация — физлицо или ИП",
+    "maybe": "свободный текст: может содержать что угодно"
+  },
+  "categories": {
+    "employee": "ФИО сотрудника или пользователя 1С",
+    "counterparty": "наименование и ИНН контрагента или партнёра",
+    "organization": "реквизиты своей организации (у ИП — персональные)",
+    "free_text": "комментарий или назначение, набранные человеком"
+  },
+  "fields": [
+    {
+      "tool": "read.organization.get_organization_card",
+      "path": "director.fullName",
+      "category": "employee",
+      "when": "always"
+    },
+    {
+      "tool": "read.organization.get_organization_card",
+      "path": "accountant.fullName",
+      "category": "employee",
+      "when": "always"
+    },
+    {
+      "tool": "read.counterparty.get_customer_history",
+      "path": "rows[].responsible",
+      "category": "employee",
+      "when": "always"
+    },
+    {
+      "tool": "read.counterparty.get_supplier_history",
+      "path": "rows[].responsible",
+      "category": "employee",
+      "when": "always"
+    },
+    {
+      "tool": "read.document.search_documents",
+      "path": "rows[].responsible",
+      "category": "employee",
+      "when": "always"
+    },
+    {
+      "tool": "read.audit.get_document_history",
+      "path": "responsible.name",
+      "category": "employee",
+      "when": "always"
+    },
+    {
+      "tool": "read.catalog.list_users",
+      "path": "items[].name",
+      "category": "employee",
+      "when": "always"
+    },
+    {
+      "tool": "read.analytics.get_sales_register",
+      "path": "byManager[].manager",
+      "category": "employee",
+      "when": "always"
+    },
+    {
+      "tool": "read.analytics.get_sales_register",
+      "path": "managerFilter[].name",
+      "category": "employee",
+      "when": "always"
+    },
+    {
+      "tool": "read.analytics.get_partner_settlements",
+      "path": "byManager[].manager",
+      "category": "employee",
+      "when": "always"
+    },
+    {
+      "tool": "read.analytics.get_partner_settlements",
+      "path": "managerFilter[].name",
+      "category": "employee",
+      "when": "always"
+    },
+    {
+      "tool": "read.counterparty.find_counterparty",
+      "path": "rows[].name",
+      "category": "counterparty",
+      "when": "individual"
+    },
+    {
+      "tool": "read.counterparty.find_counterparty",
+      "path": "rows[].fullName",
+      "category": "counterparty",
+      "when": "individual"
+    },
+    {
+      "tool": "read.counterparty.find_counterparty",
+      "path": "rows[].inn",
+      "category": "counterparty",
+      "when": "individual"
+    },
+    {
+      "tool": "read.counterparty.get_counterparty",
+      "path": "name",
+      "category": "counterparty",
+      "when": "individual"
+    },
+    {
+      "tool": "read.counterparty.get_counterparty",
+      "path": "fullName",
+      "category": "counterparty",
+      "when": "individual"
+    },
+    {
+      "tool": "read.counterparty.get_counterparty",
+      "path": "inn",
+      "category": "counterparty",
+      "when": "individual"
+    },
+    {
+      "tool": "read.counterparty.get_customer_history",
+      "path": "counterparty",
+      "category": "counterparty",
+      "when": "individual"
+    },
+    {
+      "tool": "read.counterparty.get_customer_history",
+      "path": "rows[].counterparty",
+      "category": "counterparty",
+      "when": "individual"
+    },
+    {
+      "tool": "read.counterparty.get_supplier_history",
+      "path": "counterparty",
+      "category": "counterparty",
+      "when": "individual"
+    },
+    {
+      "tool": "read.counterparty.get_supplier_history",
+      "path": "rows[].counterparty",
+      "category": "counterparty",
+      "when": "individual"
+    },
+    {
+      "tool": "read.counterparty.get_reconciliation",
+      "path": "counterparty",
+      "category": "counterparty",
+      "when": "individual"
+    },
+    {
+      "tool": "read.document.search_documents",
+      "path": "rows[].counterparty",
+      "category": "counterparty",
+      "when": "individual"
+    },
+    {
+      "tool": "read.analytics.get_debtors",
+      "path": "debtors[].counterparty",
+      "category": "counterparty",
+      "when": "individual"
+    },
+    {
+      "tool": "read.analytics.get_creditors",
+      "path": "creditors[].counterparty",
+      "category": "counterparty",
+      "when": "individual"
+    },
+    {
+      "tool": "read.analytics.get_unpaid_invoices",
+      "path": "invoices[].counterparty",
+      "category": "counterparty",
+      "when": "individual"
+    },
+    {
+      "tool": "read.analytics.get_deal_history",
+      "path": "items[].counterparty",
+      "category": "counterparty",
+      "when": "individual"
+    },
+    {
+      "tool": "read.analytics.get_partner_settlements",
+      "path": "partners[].partner",
+      "category": "counterparty",
+      "when": "individual"
+    },
+    {
+      "tool": "read.analytics.get_sales_register",
+      "path": "excludedOwnOrganizations.counterparties[].name",
+      "category": "counterparty",
+      "when": "individual"
+    },
+    {
+      "tool": "read.analytics.get_sales_register",
+      "path": "excludedOwnOrganizations.counterparties[].inn",
+      "category": "counterparty",
+      "when": "individual"
+    },
+    {
+      "tool": "read.system.list_organizations",
+      "path": "organizations[].name",
+      "category": "organization",
+      "when": "individual"
+    },
+    {
+      "tool": "read.system.list_organizations",
+      "path": "organizations[].inn",
+      "category": "organization",
+      "when": "individual"
+    },
+    {
+      "tool": "read.organization.get_organization_card",
+      "path": "name",
+      "category": "organization",
+      "when": "individual"
+    },
+    {
+      "tool": "read.organization.get_organization_card",
+      "path": "fullName",
+      "category": "organization",
+      "when": "individual"
+    },
+    {
+      "tool": "read.organization.get_organization_card",
+      "path": "shortName",
+      "category": "organization",
+      "when": "individual"
+    },
+    {
+      "tool": "read.organization.get_organization_card",
+      "path": "inn",
+      "category": "organization",
+      "when": "individual"
+    },
+    {
+      "tool": "read.organization.get_organization_card",
+      "path": "ogrn",
+      "category": "organization",
+      "when": "individual"
+    },
+    {
+      "tool": "read.organization.get_organization_card",
+      "path": "contacts[].value",
+      "category": "organization",
+      "when": "individual"
+    },
+    {
+      "tool": "read.organization.get_organization_card",
+      "path": "bankAccount.accountNumber",
+      "category": "organization",
+      "when": "individual"
+    },
+    {
+      "tool": "read.accounting.get_document_postings",
+      "path": "document.comment",
+      "category": "free_text",
+      "when": "maybe"
+    },
+    {
+      "tool": "read.analytics.get_deal_history",
+      "path": "items[].purpose",
+      "category": "free_text",
+      "when": "maybe"
+    }
+  ],
+  "rawTools": {
+    "description": "Инструменты, которые отдают реквизиты, аналитику или субконто 1С как есть: их состав зависит от базы, и путей заранее нет. Персональные данные в них — по именам реквизитов 1С из rawAttributes и в названиях аналитики (субконто «Работники», «Физические лица», «Контрагенты»).",
+    "tools": [
+      "read.document.get_document",
+      "read.document.search_documents",
+      "read.accounting.get_document_postings",
+      "read.accounting.get_account_card",
+      "read.accounting.get_account_turnover",
+      "read.accounting.get_balance_origin",
+      "read.counterparty.get_reconciliation",
+      "read.counterparty.get_counterparty",
+      "read.accounting.check_month_close",
+      "read.analytics.get_payments_breakdown",
+      "read.analytics.get_purchases_breakdown",
+      "read.analytics.get_sales_breakdown",
+      "read.analytics.get_taxes_paid",
+      "read.audit.get_document_history"
+    ]
+  },
+  "rawAttributes": [
+    "ИНН",
+    "ФИО",
+    "Фамилия",
+    "Имя",
+    "Отчество",
+    "ДатаРождения",
+    "СтраховойНомерПФР",
+    "ДокументУдостоверяющийЛичность",
+    "КонтактнаяИнформация",
+    "Представление",
+    "НомерТелефона",
+    "АдресЭП",
+    "НомерСчета",
+    "Комментарий",
+    "НазначениеПлатежа",
+    "Содержание",
+    "ФизическоеЛицо_Key",
+    "Сотрудник_Key"
+  ]
+}
