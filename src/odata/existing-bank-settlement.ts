@@ -212,7 +212,17 @@ export async function applyBankSettlementSettings(
     { orgKey: org, contractRef: p.contractRef, side: p.side },
     { contract },
   );
-  const accountRef = exactRef.parse(resolution.choice?.settle);
+  // Без счёта расчётов применять нечего: раньше здесь падала проверка типа, и человек видел «Неверные аргументы:
+  // expected string» вместо причины (нашла проверка совместимости на схеме базы без этого регистра).
+  if (!resolution.choice?.settle)
+    throw new InputError(
+      resolution.published
+        ? "Для этого договора, организации и стороны расчётов в регистре «Счета учёта расчётов с контрагентами» не " +
+            "найден счёт расчётов: настройте его в 1С (write.accounting.set_settlement_settings). Ничего не записано."
+        : "Регистр «Счета учёта расчётов с контрагентами» (InformationRegister_СчетаУчетаРасчетовСКонтрагентами) не " +
+            "опубликован в OData: счета расчётов подобрать не из чего. Добавьте его в «Состав OData». Ничего не записано.",
+    );
+  const accountRef = exactRef.parse(resolution.choice.settle);
   const advanceRef = resolution.choice?.advance ? exactRef.parse(resolution.choice.advance) : undefined;
   const chart = resolveEntity(accountingChart(conn.cfg), available);
   if (!chart) throw new InputError("План счетов не опубликован.");

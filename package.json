@@ -46,7 +46,8 @@
     "budget:update": "UPDATE_REQUEST_BUDGET=1 vitest run test/fake-1c.test.ts",
     "snapshot:metadata": "npm run build && node --env-file=.env dist/scripts/snapshot-metadata.js",
     "test:live:http": "npm run build && node --env-file=.env dist/scripts/live-http-write.js",
-    "test:live:ut": "npm run build && node --env-file=.env dist/scripts/live-trade-write.js"
+    "test:live:ut": "npm run build && node --env-file=.env dist/scripts/live-trade-write.js",
+    "compat": "node scripts/compat.mjs"
   },
   "keywords": [
     "mcp",

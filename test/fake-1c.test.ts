@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "../src/mcp/server.js";
 import { fake1C, type FakeSchema, FAKE_FOLDER_REF } from "./helpers/fake-1c.js";
-import { SNAPSHOT_REF as id, bp30Metadata } from "./helpers/metadata-snapshot.js";
+import { COMPAT_RUN, SNAPSHOT_REF as id, bp30Metadata } from "./helpers/metadata-snapshot.js";
 import { DOCUMENTS } from "../src/config/mapping.js";
 
 /**
@@ -297,14 +297,14 @@ describe("все инструменты против поддельной 1С н
 
     const count = fake.requests.length;
     measured[name] = count;
-    if (process.env.UPDATE_REQUEST_BUDGET !== "1" && budget[name] !== undefined)
+    if (process.env.UPDATE_REQUEST_BUDGET !== "1" && !COMPAT_RUN && budget[name] !== undefined)
       expect(
         count,
         `${name} делает ${count} запросов к 1С вместо ${budget[name]}. Если так задумано — обновите норму (см. шапку теста).`,
       ).toBeLessThanOrEqual(budget[name]!);
   });
 
-  it("у каждого инструмента есть норма запросов", () => {
+  it.skipIf(COMPAT_RUN)("у каждого инструмента есть норма запросов", () => {
     if (process.env.UPDATE_REQUEST_BUDGET === "1") {
       writeFileSync(BUDGET_FILE, `${JSON.stringify(measured, Object.keys(measured).sort(), 2)}\n`);
       return;

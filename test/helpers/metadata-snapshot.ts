@@ -12,7 +12,7 @@ import type { MetadataMap } from "../../src/types/odata.js";
  * Обновить: снять $metadata с базы и отфильтровать по именам объектов из src (см. CONTRIBUTING).
  */
 export const BP30_METADATA_XML = readFileSync(
-  new URL("../fixtures/metadata/bp30.xml", import.meta.url),
+  process.env["ODATA_COMPAT_BP30"] ?? new URL("../fixtures/metadata/bp30.xml", import.meta.url),
   "utf8",
 );
 
@@ -21,9 +21,16 @@ export const BP30_METADATA_XML = readFileSync(
  * (Б_*, Операции0, …ДляЗП) убраны: в снимке только типовая схема, данных базы нет.
  */
 export const UT11_METADATA_XML = readFileSync(
-  new URL("../fixtures/metadata/ut11.xml", import.meta.url),
+  process.env["ODATA_COMPAT_UT11"] ?? new URL("../fixtures/metadata/ut11.xml", import.meta.url),
   "utf8",
 );
+
+/**
+ * Проверка совместимости с другим релизом (npm run compat): ODATA_COMPAT_BP30 / ODATA_COMPAT_UT11 — путь к $metadata
+ * этого релиза вместо снимка из репозитория. Тесты на нём проверяют схему, а не число запросов: норма запросов снята
+ * на снимке репозитория.
+ */
+export const COMPAT_RUN = !!(process.env["ODATA_COMPAT_BP30"] ?? process.env["ODATA_COMPAT_UT11"]);
 
 let parsedUt: MetadataMap | undefined;
 export function ut11Metadata(): MetadataMap {
