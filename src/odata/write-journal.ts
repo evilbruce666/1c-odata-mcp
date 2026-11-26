@@ -178,36 +178,48 @@ export class WriteOperationJournal {
     if (existingResult !== undefined) return existingResult;
 
     const lockPath = this.lockPath(operationId);
+    // «Запрос идёт» ставится до захвата lock, без await между проверкой и отметкой: одновременные подтверждения в этом
+    // процессе разводит отметка, а не lock-файл. Пока она стояла после open, второе подтверждение успевало получить
+    // EEXIST раньше, чем первое её поставит, считало lock брошенным и отправляло второй POST. Раньше, с отметкой после
+    // захвата, закрывалось окно до записи «executing» (живая проверка 1.1, два одновременных подтверждения по HTTP).
+    const live = this.liveKey(operationId);
+    if (LIVE.has(live)) throw inProgressError(operationId);
+    const token = markLive(live);
     let lock: Awaited<ReturnType<typeof open>>;
     try {
       lock = await open(lockPath, "wx", 0o600);
     } catch (error) {
-      if (!isNodeError(error, "EEXIST")) throw error;
-      entry = await this.read(operationId);
-      if (findExisting && isRetryableCreate(entry))
-        return this.retryCreate(entry, entitySet, payload, requestHash, send, findExisting);
-      this.assertMatches(entry, entitySet, payload, requestHash);
-      if (this.isLive(operationId)) throw inProgressError(operationId);
-      // «Подготовлено» и чужой lock без живого запроса: процесс упал между захватом lock и записью «executing», POST
-      // не уходил. Раньше операция висела сутки до чистки; создание с назначенной ссылкой повторяем — дубль исключает
-      // уникальная ссылка (ревью 1.1). Правки — как раньше: там повторная отправка небезопасна.
-      if (findExisting && entry.state === "prepared" && entry.refKey)
-        return this.retryCreate(
-          entry as JournalEntry & { refKey: string },
-          entitySet,
-          payload,
-          requestHash,
-          send,
-          findExisting,
-        );
-      const racedResult = this.resultForExisting<T>(entry);
-      if (racedResult !== undefined) return racedResult;
-      throw this.unknownResult(operationId);
+      // Отметка наша, поэтому занятый lock — не от идущего здесь запроса: упавший или перезапущенный процесс.
+      try {
+        if (!isNodeError(error, "EEXIST")) throw error;
+        entry = await this.read(operationId);
+        if (findExisting && isRetryableCreate(entry)) {
+          // retryCreate проверяет и ставит отметку сам: снять и вызвать без await между ними.
+          unmarkLive(live, token);
+          return await this.retryCreate(entry, entitySet, payload, requestHash, send, findExisting);
+        }
+        this.assertMatches(entry, entitySet, payload, requestHash);
+        // «Подготовлено» и брошенный lock: процесс упал между захватом lock и записью «executing», POST не уходил.
+        // Раньше операция висела сутки до чистки; создание с назначенной ссылкой повторяем — дубль исключает
+        // уникальная ссылка (ревью 1.1). Правки — как раньше: там повторная отправка небезопасна.
+        if (findExisting && entry.state === "prepared" && entry.refKey) {
+          unmarkLive(live, token);
+          return await this.retryCreate(
+            entry as JournalEntry & { refKey: string },
+            entitySet,
+            payload,
+            requestHash,
+            send,
+            findExisting,
+          );
+        }
+        const racedResult = this.resultForExisting<T>(entry);
+        if (racedResult !== undefined) return racedResult;
+        throw this.unknownResult(operationId);
+      } finally {
+        unmarkLive(live, token);
+      }
     }
-    // «Запрос идёт» — сразу при захвате lock, до записи «executing»: второе подтверждение в этом окне получает
-    // in_progress, а не «исход неизвестен» (живая проверка 1.1, два одновременных подтверждения по HTTP).
-    const live = this.liveKey(operationId);
-    const token = markLive(live);
 
     let requestStarted = false;
     try {
