@@ -74,7 +74,7 @@ the environment variables. JSON configs only.
 The same entry works in Cursor, LM Studio, Cline and JetBrains AI Assistant (`mcpServers`). VS Code uses
 `.vscode/mcp.json` with a `servers` section and `"type": "stdio"`; Codex uses `~/.codex/config.toml` with
 `[mcp_servers.1c-odata]` or `codex mcp add`; Claude Code — `claude mcp add`. For local models with a small context there is a
-ready 18-tool `TOOLS_ALLOW` line in [docs/CONNECTING.md](docs/CONNECTING.md#меньше-инструментов-для-модели-опционально). Exact snippets —
+ready 18-tool `TOOLS_ALLOW` lines (one for Accounting, one for Trade Management) in [docs/CONNECTING.md](docs/CONNECTING.md#меньше-инструментов-для-модели-опционально). Exact snippets —
 [docs/INSTALL-WITH-AI.md](docs/INSTALL-WITH-AI.md#шаг-4-подключить-сервер-к-приложению). A browser-only chat cannot
 start a local server: use a desktop app or the HTTP mode below.
 

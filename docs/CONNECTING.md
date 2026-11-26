@@ -589,13 +589,25 @@ networks:
 - `TOOLS_ALLOW=имя,имя` оставляет точный список. Неизвестное имя останавливает запуск, вместе с
   `TOOLS_PROFILE` не задаётся. Сценарии (prompts), ведущие к скрытым инструментам, не показываются.
 
-**Готовый набор для маленького контекста** — 18 инструментов чтения: деньги, долги, неоплаченные счета, продажи,
-остатки, проверка закрытия месяца, карточка и ОСВ счёта, акт сверки, поиск контрагента и документов. Все четыре
-сценария остаются. Описания и схемы этого набора — около 38 тыс. символов. Это переменная в блоке `env`, вместо
-`TOOLS_PROFILE` (вместе они не задаются); как поведёт себя конкретная локальная модель, зависит от неё:
+**Готовые наборы для маленького контекста** — по 18 инструментов чтения, свой для каждой конфигурации: у Бухгалтерии и
+Управления торговлей долги, остатки и разбор учёта берутся разными инструментами. Строка ставится в блок `env` вместо
+`TOOLS_PROFILE` (вместе они не задаются); как поведёт себя конкретная локальная модель, зависит от неё. Если подключены
+базы обеих конфигураций, объедините строки.
+
+**Набор для Бухгалтерии 3.0:** деньги, долги, неоплаченные счета, продажи, остатки, проверка закрытия месяца,
+карточка и ОСВ счёта, акт сверки, поиск контрагента и документов. Все четыре сценария остаются. Описания и схемы —
+около 37 тыс. символов.
 
 ```text
-TOOLS_ALLOW=read.system.health_check,read.system.list_databases,read.system.list_organizations,read.counterparty.find_counterparty,read.counterparty.get_reconciliation,read.analytics.get_cash_balance,read.analytics.get_debtors,read.analytics.get_creditors,read.analytics.get_unpaid_invoices,read.analytics.get_sales_report,read.analytics.get_warehouse_stock,read.analytics.get_inventory,read.accounting.check_month_close,read.accounting.get_account_card,read.document.search_documents,read.document.get_document,read.accounting.get_account_turnover,read.accounting.get_balance_origin
+TOOLS_ALLOW=read.system.health_check,read.system.list_databases,read.system.list_organizations,read.counterparty.find_counterparty,read.counterparty.get_reconciliation,read.analytics.get_cash_balance,read.analytics.get_debtors,read.analytics.get_creditors,read.analytics.get_unpaid_invoices,read.analytics.get_sales_report,read.analytics.get_sales_breakdown,read.analytics.get_inventory,read.accounting.check_month_close,read.accounting.get_account_card,read.document.search_documents,read.document.get_document,read.accounting.get_account_turnover,read.accounting.get_balance_origin
+```
+
+**Набор для Управления торговлей 11:** деньги и их движение, расчёты с партнёрами (долги по срокам), продажи и
+закупки, цены, остатки, склады, номенклатура, поиск контрагента и документов. Из сценариев остаётся «Разбор продаж за
+месяц»: остальным нужна Бухгалтерия. Описания и схемы — около 43 тыс. символов.
+
+```text
+TOOLS_ALLOW=read.system.health_check,read.system.list_databases,read.system.list_organizations,read.counterparty.find_counterparty,read.analytics.get_cash_balance,read.analytics.get_partner_settlements,read.analytics.get_cashflow,read.analytics.get_payments_breakdown,read.analytics.get_sales_report,read.analytics.get_sales_register,read.analytics.get_purchases_report,read.analytics.get_prices,read.analytics.get_warehouse_stock,read.analytics.get_inventory,read.catalog.list_warehouses,read.catalog.list_items,read.document.search_documents,read.document.get_document
 ```
 
 Ответы и описания могут советовать инструмент не из списка, поэтому подбирайте набор вместе со связанными:
