@@ -4,3 +4,4 @@ coverage
 *.md
 docs
 .env.example
+test/fixtures/api-contract

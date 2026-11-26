@@ -47,7 +47,8 @@
     "snapshot:metadata": "npm run build && node --env-file=.env dist/scripts/snapshot-metadata.js",
     "test:live:http": "npm run build && node --env-file=.env dist/scripts/live-http-write.js",
     "test:live:ut": "npm run build && node --env-file=.env dist/scripts/live-trade-write.js",
-    "compat": "node scripts/compat.mjs"
+    "compat": "node scripts/compat.mjs",
+    "contract:update": "node scripts/contract-update.mjs"
   },
   "keywords": [
     "mcp",
