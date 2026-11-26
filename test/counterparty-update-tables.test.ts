@@ -66,7 +66,7 @@ function setup(existing: Row[], readError?: Error, contacts: Row[] = []) {
     return { error: !!r.isError, s: r.structuredContent as Record<string, unknown>, text: JSON.stringify(r) };
   };
   const sent = () => (patch.mock.calls[0]![1] as Record<string, Row[]>)["ДополнительныеРеквизиты"]!;
-  return { call, patch, sent, read, tool: tool as unknown as { description: string } };
+  return { call, patch, sent, read, tool: tool as unknown as { description: string }, ctxForTest: f.ctx };
 }
 
 describe("update_counterparty с ogrn: остальные дополнительные реквизиты не стираются", () => {
@@ -81,7 +81,13 @@ describe("update_counterparty с ogrn: остальные дополнитель
       { ...others[0], LineNumber: 1 },
       { ...others[1], LineNumber: 2 },
     ]);
-    expect(t.sent()[2]).toEqual({ LineNumber: 3, Свойство_Key: OGRN, Значение: "1027700000000" });
+    // Настоящая 1С (УТ 11.5, 26.11.2026) отвечает 400 на строку без типа значения: «Значение» — составного типа.
+    expect(t.sent()[2]).toEqual({
+      LineNumber: 3,
+      Свойство_Key: OGRN,
+      Значение: "1027700000000",
+      Значение_Type: "Edm.String",
+    });
   });
 
   it("ОГРН уже был — меняется только его значение, на своём месте", async () => {
@@ -240,5 +246,23 @@ describe("copy_document — только документы", () => {
     expect(JSON.stringify(r)).toMatch(/только документы/);
     // Образец даже не читался — до записи дело не дошло.
     expect(read).not.toHaveBeenCalled();
+  });
+});
+
+describe("create_counterparty с ogrn: у строки реквизита есть тип значения", () => {
+  // Без Значение_Type настоящая 1С отвечает 400 (проверено на копии УТ 11.5); тесты с поддельной 1С строку не проверяли.
+  it("предпросмотр содержит Значение_Type", async () => {
+    const t = setup([]);
+    const tools = (
+      createServer(t.ctxForTest) as unknown as {
+        _registeredTools: Record<string, { handler: (a: object, e: object) => Promise<CallToolResult> }>;
+      }
+    )._registeredTools;
+    const r = await tools["write.counterparty.create_counterparty"]!.handler(
+      { name: "ZZ-TEST", legalType: "ЮридическоеЛицо", ogrn: "1027700000000", confirm: false },
+      {},
+    );
+    expect(r.isError, JSON.stringify(r)).toBeFalsy();
+    expect(JSON.stringify(r)).toContain('"Значение_Type":"Edm.String"');
   });
 });

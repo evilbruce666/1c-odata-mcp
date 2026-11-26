@@ -197,7 +197,9 @@ async function counterpartyExtras(
   if (data.ogrn) {
     const prop = await resolveAdditionalProperty(conn, "ОГРН");
     if (prop)
-      fields["ДополнительныеРеквизиты"] = [{ LineNumber: 1, Свойство_Key: prop, Значение: data.ogrn }];
+      fields["ДополнительныеРеквизиты"] = [
+        { LineNumber: 1, Свойство_Key: prop, Значение: data.ogrn, Значение_Type: ADDITIONAL_STRING },
+      ];
     else
       notes.push(
         "ОГРН не записан: в этой базе нет дополнительного реквизита «ОГРН» для контрагентов. Заведите его в 1С (Администрирование → Дополнительные реквизиты), либо вносите ОГРН вручную.",
@@ -1845,6 +1847,12 @@ async function updatedInnCheck(
   return checkDuplicateInn(conn, set, inn ?? now("ИНН"), kpp ?? now("КПП"), guid);
 }
 
+/**
+ * Тип значения строки дополнительного реквизита. «Значение» — составного типа: без поля «Значение_Type» настоящая
+ * 1С отвечает 400 («не найдено поле с указанием типа», проверено на копии УТ 11.5, 26.11.2026). ОГРН — строка.
+ */
+const ADDITIONAL_STRING = "Edm.String";
+
 /** Строки «ДополнительныеРеквизиты» с новым значением одного свойства; остальные строки сохраняются как есть. */
 function withAdditionalValue(rows: Array<Record<string, unknown>>, property: string, value: string) {
   const same = (r: Record<string, unknown>) =>
@@ -1853,7 +1861,7 @@ function withAdditionalValue(rows: Array<Record<string, unknown>>, property: str
     ? rows.map((r) =>
         same(r) ? { ...r, Значение: value, ...(r["ТекстоваяСтрока"] ? { ТекстоваяСтрока: value } : {}) } : r,
       )
-    : [...rows, { Свойство_Key: property, Значение: value }];
+    : [...rows, { Свойство_Key: property, Значение: value, Значение_Type: ADDITIONAL_STRING }];
   return next.map((r, i) => ({ ...r, LineNumber: i + 1 }));
 }
 
