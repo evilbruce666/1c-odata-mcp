@@ -140,6 +140,42 @@ function buildContactRows(
   return rows.map((r, i) => ({ LineNumber: i + 1, ...r }));
 }
 
+function missingContactKinds(
+  kinds: ContactKinds,
+  data: { phone?: string | undefined; email?: string | undefined; address?: string | undefined },
+): string[] {
+  const notes: string[] = [];
+  if (data.phone && !kinds.phone) notes.push("Вид «Телефон» не найден — телефон не записан.");
+  if (data.email && !kinds.email) notes.push("Вид «Email» не найден — email не записан.");
+  if (data.address && !kinds.address) notes.push("Вид «Адрес» не найден — адрес не записан.");
+  return notes;
+}
+
+/**
+ * Прежние строки контактной информации с новыми вместо строк тех же видов. Строки других видов — в том числе того же
+ * типа (фактический и почтовый адрес при смене юридического, второй телефон) — остаются как есть.
+ */
+function replaceContactRows(
+  existing: Array<Record<string, unknown>>,
+  added: Array<Record<string, unknown>>,
+): { rows: Array<Record<string, unknown>>; notes: string[] } {
+  const kind = (r: Record<string, unknown>) => String(r["Вид_Key"]).toLowerCase();
+  const replaced = new Set(added.map(kind));
+  const kept = existing.filter((r) => !replaced.has(kind(r)));
+  const notes: string[] = [];
+  for (const row of added) {
+    const type = String(row["Тип"]);
+    const same = existing.filter((r) => kind(r) === kind(row)).length;
+    const other = kept.filter((r) => String(r["Тип"]) === type).length;
+    if (same > 1) notes.push(`Строк того же вида было ${same} (${type}) — они заменяются одной.`);
+    if (other)
+      notes.push(
+        `Контакты других видов того же типа (${type}: ${other}) не меняются — проверьте предпросмотр.`,
+      );
+  }
+  return { rows: [...kept, ...added].map((r, i) => ({ ...r, LineNumber: i + 1 })), notes };
+}
+
 /** Дополнительные поля карточки контрагента: контактная информация + ОГРН (доп.реквизит). */
 async function counterpartyExtras(
   conn: Connection,
@@ -156,9 +192,7 @@ async function counterpartyExtras(
     const kinds = await contactKindsForCounterparties(conn);
     const rows = buildContactRows(kinds, data);
     if (rows.length) fields["КонтактнаяИнформация"] = rows;
-    if (data.phone && !kinds.phone) notes.push("Вид «Телефон» не найден — телефон не записан.");
-    if (data.email && !kinds.email) notes.push("Вид «Email» не найден — email не записан.");
-    if (data.address && !kinds.address) notes.push("Вид «Адрес» не найден — адрес не записан.");
+    notes.push(...missingContactKinds(kinds, data));
   }
   if (data.ogrn) {
     const prop = await resolveAdditionalProperty(conn, "ОГРН");
@@ -3245,7 +3279,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Изменяет реквизиты контрагента по Ref_Key (наименование/ИНН/КПП/полное имя). " +
         "По умолчанию предпросмотр (dry-run); применение — при confirm=true. Указывайте только меняемые поля." +
         " " +
-        "Непереданные простые реквизиты не меняются. phone, email и address заменяют все контакты того же типа одной строкой: address убирает все прежние адреса, включая фактический и почтовый, и пишет юридический (нет такого вида — первый найденный вид адреса); контакты других типов остаются. ogrn меняет только доп.реквизит «ОГРН», прочие доп.реквизиты сохраняются. Другой контрагент с тем же ИНН — отказ (кроме обособленного подразделения с другим КПП). После записи простые реквизиты перечитываются. Нового контрагента создаёт create_counterparty.",
+        "Непереданные простые реквизиты не меняются. phone, email и address заменяют только контакт того же вида (address — юридический адрес; нет такого вида — первый найденный вид адреса; несколько строк этого вида заменяются одной); остальные, включая фактический и почтовый адреса, остаются. ogrn меняет только доп.реквизит «ОГРН», прочие доп.реквизиты сохраняются. Другой контрагент с тем же ИНН — отказ (кроме обособленного подразделения с другим КПП). После записи простые реквизиты перечитываются. Нового контрагента создаёт create_counterparty.",
       inputSchema: z.object({
         database: databaseField,
         ref: z.string().trim().regex(GUID_RE, "Ref_Key (GUID)").describe("Ref_Key контрагента"),
@@ -3278,23 +3312,25 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         let current: Promise<Record<string, unknown>> | undefined;
         const currentRows = async (part: string) => {
           current ??= conn.client.getEntity(`${set}(guid'${ref.replace(/[{}']/g, "")}')${buildQuery({})}`);
-          return ((await current)[part] as Array<Record<string, unknown>> | undefined) ?? [];
+          const rows = (await current)?.[part];
+          // Нет таблицы в ответе — прежние строки не получены: запись стёрла бы их.
+          if (!Array.isArray(rows))
+            throw new InputError(
+              `Не удалось прочитать прежние строки «${part}» контрагента. Ничего не записано.`,
+            );
+          return rows as Array<Record<string, unknown>>;
         };
-        // Контакты — со слиянием: заменяются все строки заданных типов (Тип, а не вид), прочие типы остаются.
+        // Контакты — со слиянием: заменяются только строки того же вида (Вид_Key). По типу заменять нельзя:
+        // юридический, фактический и почтовый адреса — один тип «Адрес».
         if (phone || email || address) {
           const kinds = await contactKindsForCounterparties(conn);
-          const existing = await currentRows("КонтактнаяИнформация");
-          const replacedTypes = new Set(
-            [phone && kinds.phone?.тип, email && kinds.email?.тип, address && kinds.address?.тип].filter(
-              Boolean,
-            ),
-          );
-          const kept = existing.filter((r) => !replacedTypes.has(String(r["Тип"])));
-          const merged = [...kept, ...buildContactRows(kinds, { phone, email, address })].map((r, i) => ({
-            ...r,
-            LineNumber: i + 1,
-          }));
-          fields["КонтактнаяИнформация"] = merged;
+          const added = buildContactRows(kinds, { phone, email, address });
+          notes.push(...missingContactKinds(kinds, { phone, email, address }));
+          if (added.length) {
+            const merged = replaceContactRows(await currentRows("КонтактнаяИнформация"), added);
+            fields["КонтактнаяИнформация"] = merged.rows;
+            notes.push(...merged.notes);
+          }
         }
         if (ogrn) {
           const prop = await resolveAdditionalProperty(conn, "ОГРН");
@@ -3307,7 +3343,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           else notes.push("ОГРН не записан: в базе нет доп.реквизита «ОГРН» для контрагентов.");
         }
         if (duplicate.note) notes.push(duplicate.note);
-        if (Object.keys(fields).length === 0) return fail("Не задано ни одного поля для изменения.");
+        if (Object.keys(fields).length === 0)
+          return fail(["Не задано ни одного поля для изменения.", ...notes].join(" "));
         return patchOrPreview(conn, set, ref, fields, confirm, notes);
       }),
   );
@@ -3320,7 +3357,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Изменяет реквизиты номенклатуры по Ref_Key (наименование/полное имя/артикул). " +
         "По умолчанию предпросмотр (dry-run); применение — при confirm=true. Указывайте только меняемые поля." +
         " " +
-        "Непереданные реквизиты не меняются; после записи они перечитываются. УТ 11.5 через OData не даёт менять существующую позицию — инструмент вернёт отказ. Новая позиция — create_nomenclature.",
+        "Непереданные реквизиты не меняются; переданные после записи перечитываются. УТ 11.5 через OData не даёт менять существующую позицию — при подтверждении инструмент вернёт отказ. Новая позиция — create_nomenclature.",
       inputSchema: z.object({
         database: databaseField,
         ref: z.string().trim().regex(GUID_RE, "Ref_Key (GUID)").describe("Ref_Key номенклатуры"),
@@ -4498,6 +4535,9 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           serviceFieldRefusal(fields ?? {}) ??
           (lines ?? []).map((l) => serviceFieldRefusal(l.fields)).find((m) => m !== undefined);
         if (service) return fail(service);
+        // Только документы: копия справочника обошла бы проверки дубля ИНН и родителя.
+        if (!entitySet.startsWith("Document_"))
+          return fail("copy_document копирует только документы (Document_…). Ничего не записано.");
         ensurePublished(await conn.available(), entitySet);
         const ka = await stockInAccountingBaseRefusal(conn, entitySet);
         if (ka) return fail(ka);
@@ -6005,7 +6045,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Опционально вкладывает в родительскую папку (parent — имя папки или Ref_Key). " +
         "В 1С «папки» = группы справочника; отдельных тегов в типовой Бухгалтерии нет. dry-run/confirm." +
         " " +
-        "Группу контрагентов в Бухгалтерии с проверкой иерархии и контрольным чтением создаёт write.counterparty.create_group; этот инструмент — для любого иерархического справочника. В Управлении торговлей — только Catalog_Номенклатура.",
+        "Группу контрагентов в Бухгалтерии с проверкой иерархии и контрольным чтением создаёт write.counterparty.create_group; этот инструмент — для других иерархических справочников, где есть группы. В Управлении торговлей — только Catalog_Номенклатура.",
       inputSchema: z.object({
         database: databaseField,
         entitySet: z
@@ -6033,7 +6073,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     {
       title: "Переместить объект в папку",
       description:
-        "Переносит элемент или группу любого иерархического справочника в другую группу: заменяет родителя (Parent_Key), содержимое переносимой группы остаётся в ней. folder — имя группы или Ref_Key; пустой GUID — в корень. Отказ без записи, если новый родитель не найден, помечен на удаление, не группа или это сам объект либо его потомок. Для одного контрагента в Бухгалтерии с проверкой версии объекта есть write.counterparty.set_group. В Управлении торговлей — только Catalog_Номенклатура, и УТ 11.5 через OData перенос существующей позиции отвергает. По умолчанию предпросмотр (dry-run); перенос — при confirm=true.",
+        "Переносит элемент или группу иерархического справочника в другую группу: заменяет родителя (Parent_Key), содержимое переносимой группы остаётся в ней. folder — Ref_Key или имя группы (по имени — где у справочника есть группы); пустой GUID — в корень. Отказ без записи, если новый родитель не найден, помечен на удаление, не группа или это сам объект либо его потомок. Для одного контрагента в Бухгалтерии с проверкой версии объекта есть write.counterparty.set_group. В Управлении торговлей — только Catalog_Номенклатура, и УТ 11.5 через OData перенос существующей позиции отвергает. По умолчанию предпросмотр (dry-run); перенос — при confirm=true.",
       inputSchema: z.object({
         database: databaseField,
         entitySet: z

@@ -129,6 +129,19 @@ describe("перемещение в иерархии: move_to_folder и update_e
     }
   });
 
+  // Ревью: update_entity с прежним родителем в помеченной группе рядом с другими полями отказывал — это не
+  // перемещение. Тесты брали только настоящие перемещения.
+  it("родитель не меняется, хотя группа помечена на удаление, — проходит", async () => {
+    for (const i of [0, 1]) {
+      const t = setup("bp30", { [ITEM]: element(MARKED) });
+      for (const confirm of [false, true]) {
+        const r = await t.movers[i]!(ITEM, MARKED, confirm);
+        expect(r.error, r.text).toBe(false);
+      }
+      expect(t.patch).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it("цикл, уже лежащий в данных, не зацикливает проверку: отказ", async () => {
     const t = setup("bp30", { [A]: folder(B), [B]: folder(A), [AA]: folder(EMPTY) });
     const r = await t.movers[0]!(AA, A, true);

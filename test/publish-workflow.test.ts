@@ -1,16 +1,38 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-// Публикация в реестр MCP из publish.yml: у задачи есть OIDC-токен, а скачанный бинарник исполняется — проверяем,
-// что он закреплён и сверяется, а сбой реестра не мешает выпуску в npm.
-const yml = readFileSync(".github/workflows/publish.yml", "utf8");
-const job = yml.slice(yml.indexOf("\n  registry:\n"));
+// Публикация в реестр MCP: у задачи есть OIDC-токен, а скачанный бинарник исполняется — проверяем, что он закреплён
+// и сверяется, сбой реестра не мешает выпуску в npm, а токен задачи не годится для npm (доверие там — по файлу
+// publish.yml).
+const npm = readFileSync(".github/workflows/publish.yml", "utf8");
+const job = readFileSync(".github/workflows/publish-registry.yml", "utf8");
 
-describe("publish.yml: реестр MCP", () => {
-  it("отдельная задача после npm, без права записи в репозиторий", () => {
-    expect(yml).toContain("\n  registry:\n");
-    expect(job).toContain("needs: publish");
-    const permissions = /permissions:\n((?: {6}.*\n)+)/.exec(job)![1]!;
+describe("publish-registry.yml: реестр MCP", () => {
+  it("в publish.yml реестра нет: OIDC-токен этого файла принимает npm", () => {
+    expect(npm).not.toContain("mcp-publisher");
+    expect(npm.match(/^ {2}[\w-]+:\n {4}runs-on/gm)).toHaveLength(1);
+  });
+
+  it("запускается только после успешной публикации по тегу своим publish.yml", () => {
+    const name = /^name: (.+)$/m.exec(npm)![1]!;
+    expect(job).toContain(`workflows: ["${name}"]`);
+    expect(job).not.toMatch(/^ {2}(push|pull_request|pull_request_target):/m);
+    for (const guard of [
+      "workflow_run.conclusion == 'success'",
+      "workflow_run.event == 'push'",
+      "workflow_run.path == '.github/workflows/publish.yml'",
+      "workflow_run.head_repository.full_name == github.repository",
+      "startsWith(github.event.workflow_run.head_branch, 'v')",
+    ])
+      expect(job).toContain(guard);
+    expect(job).toContain("ref: ${{ github.event.workflow_run.head_sha }}");
+    expect(job).toContain("persist-credentials: false");
+    expect(job).not.toMatch(/\bnpm (ci|install|test|run)\b|\bnpx\b/);
+  });
+
+  it("без права записи в репозиторий и без секретов", () => {
+    expect(job).toContain("\npermissions: {}\n");
+    const permissions = /\n {4}permissions:\n((?: {6}.*\n)+)/.exec(job)![1]!;
     expect(permissions.match(/^ {6}[\w-]+: \w+/gm)!.map((l) => l.trim())).toEqual([
       "contents: read",
       "id-token: write",
@@ -29,7 +51,9 @@ describe("publish.yml: реестр MCP", () => {
     expect(job.indexOf("./mcp-publisher")).toBeGreaterThan(check);
   });
 
-  it("сначала ждёт пакет в npm", () => {
+  it("сначала ждёт пакет в npm — версию из package.json выпущенного коммита", () => {
+    expect(job).toContain('version="$(jq -r .version package.json)"');
+    expect(job).not.toContain("GITHUB_REF_NAME");
     expect(job.indexOf("registry.npmjs.org/1c-odata-mcp/-/")).toBeGreaterThan(0);
     expect(job.indexOf("registry.npmjs.org")).toBeLessThan(job.indexOf("mcp-publisher publish"));
   });

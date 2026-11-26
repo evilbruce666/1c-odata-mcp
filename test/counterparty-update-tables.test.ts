@@ -18,6 +18,7 @@ const KINDS: Row[] = [
   { Ref_Key: kind(4), Description: "Юридический адрес", Тип: "Адрес" },
   { Ref_Key: kind(5), Description: "Почтовый адрес", Тип: "Адрес" },
 ];
+const allKinds = [...KINDS];
 const contact = (n: number, Тип: string, Представление: string): Row => ({
   LineNumber: String(n),
   Тип,
@@ -113,9 +114,10 @@ describe("update_counterparty с ogrn: остальные дополнитель
   });
 });
 
-// Замена контактов идёт по типу. Поведение прежнее; описание 26.11 обещало замену по виду («остальные виды
-// остаются») — тесты на текст описаний и на состав таблицы контактов этого не проверяли (нашло ревью).
-describe("update_counterparty: что происходит с контактами — как сказано в описании", () => {
+// Замена контактов шла по типу: новый юридический адрес стирал фактический и почтовый (старое поведение; описание
+// 26.11 обещало обратное — нашло ревью, на живой базе у части контрагентов заполнены все три адреса). Почему не
+// поймали: слияние контактов не проверял ни один тест.
+describe("update_counterparty: заменяется только контакт того же вида", () => {
   const contacts = [
     contact(4, "Адрес", "юридический прежний"),
     contact(3, "Адрес", "фактический"),
@@ -123,27 +125,73 @@ describe("update_counterparty: что происходит с контактам
     contact(1, "Телефон", "111"),
     contact(2, "Телефон", "факс"),
   ];
-  const result = (s: Record<string, unknown>) =>
-    (s["fields"] as Record<string, Row[]>)["КонтактнаяИнформация"]!.map((r) => r["Представление"]);
+  const rows = (s: Record<string, unknown>) =>
+    (s["fields"] as Record<string, Row[]>)["КонтактнаяИнформация"]!;
+  const result = (s: Record<string, unknown>) => rows(s).map((r) => r["Представление"]);
+  const notes = (s: Record<string, unknown>) => (s["notes"] as string[] | undefined)?.join(" ") ?? "";
 
-  it("address убирает все прежние адреса и пишет один юридический, телефоны остаются", async () => {
+  it("address меняет юридический, фактический и почтовый остаются", async () => {
     const t = setup([], undefined, contacts);
     const r = await t.call(false, { address: "новый" });
-    expect(result(r.s)).toEqual(["111", "факс", "новый"]);
-    expect((r.s["fields"] as Record<string, Row[]>)["КонтактнаяИнформация"]![2]!["Вид_Key"]).toBe(kind(4));
+    expect(result(r.s)).toEqual(["фактический", "почтовый", "111", "факс", "новый"]);
+    expect(rows(r.s)[4]!["Вид_Key"]).toBe(kind(4));
+    expect(rows(r.s).map((x) => x["LineNumber"])).toEqual([1, 2, 3, 4, 5]);
+    // Прежние строки уходят без изменений, кроме номера.
+    expect(rows(r.s)[0]).toEqual({ ...contacts[1], LineNumber: 1 });
+    expect(notes(r.s)).toMatch(/других видов того же типа \(Адрес: 2\)/);
   });
 
-  it("phone заменяет все строки типа «Телефон», адреса остаются", async () => {
-    const t = setup([], undefined, contacts);
+  it("phone меняет только свой вид; вид в другом регистре распознаётся", async () => {
+    const upper = contacts.map((c) => ({ ...c, Вид_Key: String(c["Вид_Key"]).toUpperCase() }));
+    const t = setup([], undefined, upper);
     const r = await t.call(false, { phone: "999" });
-    expect(result(r.s)).toEqual(["юридический прежний", "фактический", "почтовый", "999"]);
+    expect(result(r.s)).toEqual(["юридический прежний", "фактический", "почтовый", "факс", "999"]);
   });
 
-  it("описание говорит о замене по типу и не обещает сохранить другие виды", () => {
+  it("две строки того же вида заменяются одной — об этом сказано в заметке", async () => {
+    const t = setup([], undefined, [contact(1, "Телефон", "111"), contact(1, "Телефон", "222")]);
+    const r = await t.call(false, { phone: "999" });
+    expect(result(r.s)).toEqual(["999"]);
+    expect(notes(r.s)).toMatch(/того же вида было 2/);
+  });
+
+  it("контакта этого вида не было — добавляется, прочие на месте", async () => {
+    const t = setup([], undefined, [contact(3, "Адрес", "фактический")]);
+    const r = await t.call(false, { address: "новый" });
+    expect(result(r.s)).toEqual(["фактический", "новый"]);
+  });
+
+  it.each([{ phone: "999" }, { ogrn: "1027700000000" }])(
+    "в ответе 1С нет прежней таблицы (%o) — отказ без записи",
+    async (args) => {
+      const t = setup(undefined as never, undefined, null as never);
+      const r = await t.call(true, args);
+      expect(r.error).toBe(true);
+      expect(r.text).toMatch(/Не удалось прочитать прежние строки/);
+      expect(t.patch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("вид контакта не найден — таблица не отправляется, в отказе сказано почему", async () => {
+    const t = setup([], undefined, contacts);
+    KINDS.splice(0, KINDS.length);
+    try {
+      const r = await t.call(true, { phone: "999" });
+      expect(r.error).toBe(true);
+      expect(r.text).toMatch(/Вид «Телефон» не найден/);
+      const named = await t.call(false, { phone: "999", name: "ZZ-TEST" });
+      expect(named.s["fields"]).toEqual({ Description: "ZZ-TEST" });
+      expect(notes(named.s)).toMatch(/Вид «Телефон» не найден/);
+      expect(t.patch).not.toHaveBeenCalled();
+    } finally {
+      KINDS.push(...allKinds);
+    }
+  });
+
+  it("описание говорит о замене по виду", () => {
     const { description } = setup([]).tool;
-    expect(description).toContain("все контакты того же типа");
-    expect(description).toContain("включая фактический и почтовый");
-    expect(description).not.toContain("остальные виды остаются");
+    expect(description).toContain("только контакт того же вида");
+    expect(description).toContain("включая фактический и почтовый адреса, остаются");
   });
 
   it("phone вместе с ogrn — контрагент читается один раз", async () => {
@@ -171,5 +219,26 @@ describe("«непереданное не меняется»: в PATCH толь�
     )._registeredTools;
     await tools[name]!.handler({ ref: REF, ...args, confirm: true }, {});
     expect(patch.mock.calls.map((c) => c[1])).toEqual([body]);
+  });
+});
+
+describe("copy_document — только документы", () => {
+  // Копия справочника обошла бы проверки дубля ИНН и родителя; тесты копии брали только документы.
+  it("справочник — отказ уже в предпросмотре: без него подтверждать нечего", async () => {
+    const f = fake1C({ READ_ONLY: "false", ODATA_WRITABLE: "true" });
+    const read = vi.spyOn(f.conn.client, "getEntity");
+    const tools = (
+      createServer(f.ctx) as unknown as {
+        _registeredTools: Record<string, { handler: (a: object, e: object) => Promise<CallToolResult> }>;
+      }
+    )._registeredTools;
+    const r = await tools["write.document.copy_document"]!.handler(
+      { entitySet: "Catalog_Контрагенты", ref: REF, confirm: false },
+      {},
+    );
+    expect(r.isError).toBe(true);
+    expect(JSON.stringify(r)).toMatch(/только документы/);
+    // Образец даже не читался — до записи дело не дошло.
+    expect(read).not.toHaveBeenCalled();
   });
 });

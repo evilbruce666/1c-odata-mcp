@@ -44,13 +44,20 @@ export async function parentMoveRefusal(
   };
 
   const destination = await read(target);
-  if (!destination) return `Новый родитель не найден в ${entitySet}. Ничего не записано.`;
-  if (folders && destination["IsFolder"] === false)
-    return "Новый родитель — не группа (папка), а обычный элемент справочника. Ничего не записано.";
-  if (destination["DeletionMark"] === true) return "Новый родитель помечен на удаление. Ничего не записано.";
+  let own: Promise<ODataEntity | undefined> | undefined;
+  const current = () => (own ??= read(subject));
+  const wrong = !destination
+    ? `Новый родитель не найден в ${entitySet}. Ничего не записано.`
+    : folders && destination["IsFolder"] === false
+      ? "Новый родитель — не группа (папка), а обычный элемент справочника. Ничего не записано."
+      : destination["DeletionMark"] === true
+        ? "Новый родитель помечен на удаление. Ничего не записано."
+        : undefined;
+  // Родитель не меняется (update_entity с прежним Parent_Key рядом с другими полями) — это не перемещение.
+  if (wrong || !destination) return clean((await current())?.["Parent_Key"]) === target ? undefined : wrong;
 
   // Цикл возможен, только если перемещаемый объект сам может быть родителем.
-  if (folders && (await read(subject))?.["IsFolder"] === false) return undefined;
+  if (folders && (await current())?.["IsFolder"] === false) return undefined;
   const seen = new Set([target]);
   let row = destination;
   for (let depth = 0; depth < MAX_DEPTH; depth++) {
