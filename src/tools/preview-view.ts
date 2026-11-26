@@ -101,6 +101,23 @@ function targetOf(
   return meta?.navigations.find((n) => n.name === base)?.toType || undefined;
 }
 
+/**
+ * Строка для человека в одну строку. Названия и прежние значения приходят из 1С, и в них может быть что угодно:
+ * перевод строки с «Сумма документа: 1» выглядел бы на экране отдельным полем, а символы смены направления текста
+ * (U+202E и соседние) переворачивают цифры. Убираются управляющие, невидимые нулевой ширины и символы направления;
+ * переводы строк и табуляция становятся пробелом. Отправляемые данные (payload, fields) не меняются.
+ */
+export function oneLine(value: string): string {
+  return (
+    value
+      .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g, "")
+      // eslint-disable-next-line no-control-regex -- управляющие символы и есть то, что убираем
+      .replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029]+/g, " ")
+      .replace(/ {2,}/g, " ")
+      .trim()
+  );
+}
+
 function display(value: unknown): unknown {
   if (typeof value === "boolean") return value ? "да" : "нет";
   // Дата 1С: «2026-10-24T00:00:00» → «2026-10-24», со временем — «2026-10-24 05:55».
@@ -210,7 +227,8 @@ export async function buildPreviewView(
         if (before) out[fieldLabel(k)] = "—";
         continue; // пустая ссылка — поле не заполнено
       }
-      out[fieldLabel(k)] = isRef(v) ? (names.get(v.toLowerCase()) ?? v) : display(v);
+      const shownValue = isRef(v) ? (names.get(v.toLowerCase()) ?? v) : display(v);
+      out[fieldLabel(k)] = typeof shownValue === "string" ? oneLine(shownValue) : shownValue;
     }
     return out;
   };
