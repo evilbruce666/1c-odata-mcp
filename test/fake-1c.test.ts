@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "../src/mcp/server.js";
-import { fake1C, type FakeSchema } from "./helpers/fake-1c.js";
+import { fake1C, type FakeSchema, FAKE_FOLDER_REF } from "./helpers/fake-1c.js";
 import { SNAPSHOT_REF as id, bp30Metadata } from "./helpers/metadata-snapshot.js";
 import { DOCUMENTS } from "../src/config/mapping.js";
 
@@ -107,7 +107,8 @@ const OVERRIDES: Record<string, Record<string, unknown>> = {
     fields: { Комментарий: "тест" },
   },
   "write.entity.create_folder": { entitySet: "Catalog_Контрагенты", name: "Тест" },
-  "write.entity.move_to_folder": { entitySet: "Catalog_Контрагенты", ref: id, folder: id },
+  // Не в себя: это отказ. Папка назначения — группа, чтобы проверились и запросы проверки родителя.
+  "write.entity.move_to_folder": { entitySet: "Catalog_Контрагенты", ref: id, folder: FAKE_FOLDER_REF },
   "write.document.update_document_lines": {
     entitySet: "Document_РеализацияТоваровУслуг",
     ref: id,

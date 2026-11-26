@@ -64,7 +64,7 @@
   "write.document.update_document_lines": 10,
   "write.entity.create_folder": 0,
   "write.entity.mark_for_deletion": 0,
-  "write.entity.move_to_folder": 4,
+  "write.entity.move_to_folder": 6,
   "write.entity.update_entity": 4,
   "write.money.create_bank_writeoff": 3,
   "write.money.create_cash_payment": 1,

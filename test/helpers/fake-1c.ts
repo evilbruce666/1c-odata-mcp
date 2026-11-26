@@ -229,6 +229,9 @@ export interface FakeQuery {
   params: URLSearchParams;
 }
 
+/** Объект по этой ссылке — группа (IsFolder): синтетика отдаёт обычные элементы. */
+export const FAKE_FOLDER_REF = "ffffffff-0000-4000-8000-000000000001";
+
 export interface FakeOptions {
   schema?: FakeSchema;
   /** Свои строки коллекции; undefined — синтетическая строка, как без опции. */
@@ -419,6 +422,7 @@ export function fake1C(env: Record<string, string> = {}, options: FakeOptions = 
     const row = syntheticRow(fields, base, schema);
     const guid = /guid'([0-9a-f-]{36})'/i.exec(path)?.[1];
     if (keyed && guid && "Ref_Key" in row) row.Ref_Key = guid;
+    if (keyed && guid === FAKE_FOLDER_REF && "IsFolder" in row) row.IsFolder = true;
     if (keyed) Object.assign(row, storedState.get(path), postedState.get(path));
     // Составной ключ (регистры сведений): запись отвечает теми значениями измерений, по которым её запросили.
     const key = /^[^(]+\(([^)]*)\)/.exec(path)?.[1] ?? "";

@@ -53,6 +53,7 @@ import { getDocumentPostings } from "./registers.js";
 import { PRICE_DOC, priceMechanisms, verifyPriceMovements } from "../odata/pricing.js";
 import { tryPreviewView } from "./preview-view.js";
 import { checkDuplicateInn } from "../odata/duplicates.js";
+import { parentMoveRefusal } from "../odata/parent-move.js";
 import { checkResponsible } from "../odata/users.js";
 import { RESPONSIBLE_FIELDS, currentResponsible } from "../odata/responsible-context.js";
 import {
@@ -1810,6 +1811,19 @@ async function updatedInnCheck(
   return checkDuplicateInn(conn, set, inn ?? now("ИНН"), kpp ?? now("КПП"), guid);
 }
 
+/** update_entity с ИНН или КПП контрагента — та же проверка дубля, что у update_counterparty. */
+async function genericInnCheck(
+  conn: Connection,
+  entitySet: string,
+  ref: string,
+  fields: Record<string, unknown>,
+) {
+  if (!(CATALOGS.counterparties as readonly string[]).includes(entitySet)) return {};
+  // null — очистка поля: сравнивается как пустая строка; отсутствие поля — прежнее значение.
+  const given = (k: string) => (k in fields ? String(fields[k] ?? "") : undefined);
+  return updatedInnCheck(conn, entitySet, ref, given("ИНН"), given("КПП"));
+}
+
 /**
  * Создание объекта без подстановок конфигурации: метка операции, предпросмотр или POST, ответ. Сборщики, которым
  * договор и счета расчётов Бухгалтерии не нужны (Управление торговлей), вызывают её напрямую.
@@ -3179,6 +3193,13 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         if (Object.keys(fields).length === 0) return fail("Не заданы поля для изменения.");
         const service = serviceFieldRefusal(fields);
         if (service) return fail(service);
+        // Общий инструмент не обходит проверки частных: цикл и негодный родитель, дубль ИНН контрагента.
+        if ("Parent_Key" in fields) {
+          const refusal = await parentMoveRefusal(conn, entitySet, ref, fields["Parent_Key"]);
+          if (refusal) return fail(refusal);
+        }
+        const duplicate = await genericInnCheck(conn, entitySet, ref, fields);
+        if (duplicate.refusal) return fail(duplicate.refusal);
         const ka = await stockInAccountingBaseRefusal(conn, entitySet);
         if (ka) return fail(ka);
         const trade = await tradeEditKind(conn, entitySet);
@@ -3194,7 +3215,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           );
         const refusedKind = await writeoffKindRefusal(conn, entitySet, fields, ref);
         if (refusedKind) return fail(refusedKind);
-        return patchOrPreview(conn, entitySet, ref, fields, confirm);
+        return patchOrPreview(conn, entitySet, ref, fields, confirm, duplicate.note ? [duplicate.note] : []);
       }),
   );
 
@@ -5997,6 +6018,8 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
         const parentRef = await folderRefOf(conn, entitySet, folder);
+        const refusal = await parentMoveRefusal(conn, entitySet, ref, parentRef);
+        if (refusal) return fail(refusal);
         return patchOrPreview(conn, entitySet, ref, { Parent_Key: parentRef }, confirm);
       }),
   );

@@ -268,6 +268,11 @@ describe("create_nomenclature в Управлении торговлей", () =>
           }),
           { status: 500, headers: { "content-type": "application/json" } },
         );
+      // Папка назначения — настоящая группа, как в 1С (move_to_folder это проверяет).
+      if (
+        decodeURIComponent(String(input instanceof Request ? input.url : input)).includes(`(guid'${FOLDER}')`)
+      )
+        return Response.json({ Ref_Key: FOLDER, IsFolder: true, DeletionMark: false, Parent_Key: "" });
       return inner(input, init);
     });
     const MARK = "write.entity.mark_for_deletion";
