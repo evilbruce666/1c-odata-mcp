@@ -217,7 +217,8 @@ function registerReport(server: McpServer, ctx: ServerContext, kind: Kind): void
             "сказано в note. compareWith — previousPeriod (такой же период перед этим; целые месяцы — столько же месяцев назад, месяц «по сегодня» — те же числа прошлого месяца) или previousYear: у строки prev и " +
             "growth (рост выручки в %), итог сравнения — в compare. sortBy — по чему сортировать (по умолчанию revenue); abc=true — " +
             "класс A/B/C по накопленной доле этой метрики (80 % / 95 %). Отборы: organization, а в УТ ещё warehouses, " +
-            "departments, managers, partners (Ref_Key). count — всего строк; длинный список — с offset=nextOffset.",
+            "departments, managers, partners (Ref_Key). count — всего строк; длинный список — с offset=nextOffset." +
+            " Штуки с розницей и возвратами по регистру УТ — read.analytics.get_sales_register.",
       inputSchema: z.object({
         database: databaseField,
         from: dateField("Начало периода (включительно)"),

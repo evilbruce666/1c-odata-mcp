@@ -526,7 +526,9 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         "кредитовый оборот счёта 90.01 (read.accounting.get_account_turnover). " +
         "Не разбивает по способу оплаты: реализация в 1С с картой, СБП или банком не связана. Поступившие деньги по каналам — " +
         "read.accounting.get_account_card по счёту 62 с groupBy corrAccount (кредит с 51, 50, 57) и по счёту 57.03: " +
-        "это оплаты, а не выручка периода, и эквайринг, ещё не отнесённый на покупателей, виден только на 57.03.",
+        "это оплаты, а не выручка периода, и эквайринг, ещё не отнесённый на покупателей, виден только на 57.03." +
+        " " +
+        "Здесь одна сумма: разбивка по покупателям, месяцам и договорам — get_sales_breakdown, по товарам, складам и марже — get_sales_report.",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
@@ -565,7 +567,9 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
       title: "Движение денежных средств",
       description:
         "Приход и расход денег за период по проведённым банковским и кассовым документам. " +
-        "Возвращает приток, отток и сальдо. Можно ограничить организацией. Период — даты YYYY-MM-DD.",
+        "Возвращает приток, отток и сальдо. Можно ограничить организацией. Период — даты YYYY-MM-DD." +
+        " " +
+        "Считаются все проведённые документы, включая переводы между своими счетами и кассой. Остаток денег — get_cash_balance; разбивка по статьям, контрагентам и видам операций — get_payments_breakdown.",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
@@ -616,7 +620,9 @@ export function registerRegisterTools(server: McpServer, ctx: ServerContext): vo
         "Не отбирает по аналитике и не разбивает по месяцам. Оборот по контрагенту, договору или другому субконто, " +
         "по месяцам или корреспондирующим счетам — read.accounting.get_account_card с counterpartyRef или " +
         "dimensionRef, groupBy и summaryOnly=true; ссылку договора дают его группы (groupBy: contract). " +
-        "Деньги по статье ДДС — read.analytics.get_payments_breakdown с cashflowItem.",
+        "Деньги по статье ДДС — read.analytics.get_payments_breakdown с cashflowItem." +
+        " " +
+        "Из каких документов сложился остаток — get_balance_origin.",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,

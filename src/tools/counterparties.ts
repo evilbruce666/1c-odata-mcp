@@ -276,7 +276,9 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
       title: "История по покупателю",
       description:
         "Документы реализации и счета по контрагенту-покупателю за период. " +
-        "Показывает, что и на какие суммы продавали клиенту. Ref_Key — из find_counterparty.",
+        "Показывает, что и на какие суммы продавали клиенту. Ref_Key — из find_counterparty." +
+        " " +
+        "Без from/to — за всё время, новые первыми, по всем организациям, если organization не задан; в списке есть и непроведённые (posted), и помеченные на удаление. Это список документов; суммы по клиентам и месяцам — get_sales_breakdown, по товарам и марже — get_sales_report.",
       inputSchema: z.object(historyInput),
       outputSchema: counterpartyHistoryResultSchema,
     },
@@ -310,7 +312,9 @@ export function registerCounterpartyTools(server: McpServer, ctx: ServerContext)
       title: "История по поставщику",
       description:
         "Документы поступления по контрагенту-поставщику за период. " +
-        "Показывает закупки у поставщика. Ref_Key — из find_counterparty.",
+        "Показывает закупки у поставщика. Ref_Key — из find_counterparty." +
+        " " +
+        "Без from/to — за всё время, новые первыми, по всем организациям, если organization не задан; в списке есть и непроведённые (posted), и помеченные на удаление. Суммы и рейтинг поставщиков — get_purchases_breakdown, в УТ по товарам — get_purchases_report.",
       inputSchema: z.object(historyInput),
       outputSchema: counterpartyHistoryResultSchema,
     },

@@ -816,7 +816,9 @@ export function registerDebtTools(server: McpServer, ctx: ServerContext): void {
         "банковскому счёту и кассе, итоги available (50+51+52), special (55), inTransit (57). Для валютных " +
         "счетов — сумма в валюте. asOf=YYYY-MM-DD — остатки на конец даты; без него — текущие. В Управлении торговлей " +
         "(нет Хозрасчётного) — остатки регистров денежных средств: расчётные счета, кассы, кассы ККМ (available) и " +
-        "деньги в пути (inTransit), source=registers.",
+        "деньги в пути (inTransit), source=registers." +
+        " " +
+        "Это остаток на дату; приход и расход за период — get_cashflow, на что пришли и ушли деньги — get_payments_breakdown.",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,

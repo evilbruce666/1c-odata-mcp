@@ -221,7 +221,9 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
       description:
         "Показывает поля (с типами) и связи конкретного объекта 1С из $metadata. " +
         "Принимает техническое имя EntitySet, напр. 'Catalog_Контрагенты' или " +
-        "'Document_РеализацияТоваровУслуг'. Используйте перед поиском, чтобы узнать доступные поля.",
+        "'Document_РеализацияТоваровУслуг'. Используйте перед поиском, чтобы узнать доступные поля." +
+        " " +
+        "Читает только схему, не данные. Неизвестное или не включённое в «Состав OData» имя — ошибка; список имён — list_entities.",
       inputSchema: z.object({
         database: databaseField,
         entitySet: z.string().describe("Техническое имя объекта, напр. Catalog_Контрагенты"),

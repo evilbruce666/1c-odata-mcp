@@ -956,7 +956,9 @@ export function registerCardTools(server: McpServer, ctx: ServerContext): void {
         "момент, с которого остаток держится непрерывно, и доля каждого документа, дожившая до даты; поиск " +
         "назад до maxYears лет. since — дата самого " +
         "старого документа остатка, documentCreatedAt — когда документ создан. Отбор: counterpartyRef — " +
-        "контрагент, dimensionRef — договор, номенклатура, банковский счёт.",
+        "контрагент, dimensionRef — договор, номенклатура, банковский счёт." +
+        " " +
+        "Обороты и сальдо по субсчетам — get_account_turnover, все движения за период — get_account_card.",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
