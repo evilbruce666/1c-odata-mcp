@@ -9,6 +9,8 @@ on:
   push:
     tags: ["v*"]
 
+permissions: {}
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -16,8 +18,8 @@ jobs:
       contents: write # создание GitHub Release
       id-token: write # OIDC для Trusted Publishing + provenance
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           registry-url: "https://registry.npmjs.org"
@@ -31,6 +33,10 @@ jobs:
       - run: npm test
       # prepublishOnly соберёт пакет и уберёт probe-скрипты; токен не передаётся
       - run: npm publish --access public
+
+      # Состав пакета (SBOM, CycloneDX) — только зависимости, которые ставятся вместе с пакетом. Прикладывается к релизу,
+      # чтобы проверка поставщика у тех, кто встраивает коннектор, не собирала его заново.
+      - run: npm sbom --sbom-format cyclonedx --omit dev > sbom.cdx.json
 
       # GitHub Release с заметками из секции CHANGELOG для этой версии.
       # Чтобы заметки попали в релиз, финализируйте CHANGELOG (перенесите
@@ -46,4 +52,4 @@ jobs:
             f { print }
           ' CHANGELOG.md)
           [ -z "$notes" ] && notes="Релиз $GITHUB_REF_NAME. См. CHANGELOG.md и npm."
-          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "$notes"
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "$notes" sbom.cdx.json
