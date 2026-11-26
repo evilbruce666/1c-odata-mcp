@@ -1811,6 +1811,18 @@ async function updatedInnCheck(
   return checkDuplicateInn(conn, set, inn ?? now("ИНН"), kpp ?? now("КПП"), guid);
 }
 
+/** Строки «ДополнительныеРеквизиты» с новым значением одного свойства; остальные строки сохраняются как есть. */
+function withAdditionalValue(rows: Array<Record<string, unknown>>, property: string, value: string) {
+  const same = (r: Record<string, unknown>) =>
+    String(r["Свойство_Key"]).toLowerCase() === property.toLowerCase();
+  const next = rows.some(same)
+    ? rows.map((r) =>
+        same(r) ? { ...r, Значение: value, ...(r["ТекстоваяСтрока"] ? { ТекстоваяСтрока: value } : {}) } : r,
+      )
+    : [...rows, { Свойство_Key: property, Значение: value }];
+  return next.map((r, i) => ({ ...r, LineNumber: i + 1 }));
+}
+
 /** update_entity с ИНН или КПП контрагента — та же проверка дубля, что у update_counterparty. */
 async function genericInnCheck(
   conn: Connection,
@@ -3233,7 +3245,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         "Изменяет реквизиты контрагента по Ref_Key (наименование/ИНН/КПП/полное имя). " +
         "По умолчанию предпросмотр (dry-run); применение — при confirm=true. Указывайте только меняемые поля." +
         " " +
-        "Непереданные реквизиты не меняются; телефон, email и адрес заменяют контакты того же вида, остальные виды остаются. Другой контрагент с тем же ИНН — отказ (кроме обособленного подразделения с другим КПП). После записи простые реквизиты перечитываются. Нового контрагента создаёт create_counterparty.",
+        "Непереданные простые реквизиты не меняются. phone, email и address заменяют все контакты того же типа одной строкой: address убирает все прежние адреса, включая фактический и почтовый, и пишет юридический (нет такого вида — первый найденный вид адреса); контакты других типов остаются. ogrn меняет только доп.реквизит «ОГРН», прочие доп.реквизиты сохраняются. Другой контрагент с тем же ИНН — отказ (кроме обособленного подразделения с другим КПП). После записи простые реквизиты перечитываются. Нового контрагента создаёт create_counterparty.",
       inputSchema: z.object({
         database: databaseField,
         ref: z.string().trim().regex(GUID_RE, "Ref_Key (GUID)").describe("Ref_Key контрагента"),
@@ -3262,14 +3274,16 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
           НаименованиеПолное: fullName,
         });
         const notes: string[] = [];
-        // Контакты — со слиянием: заменяем только заданные виды, прочие сохраняем.
+        // Табличные части 1С заменяет целиком, поэтому перед их записью читаются прежние строки — одним запросом.
+        let current: Promise<Record<string, unknown>> | undefined;
+        const currentRows = async (part: string) => {
+          current ??= conn.client.getEntity(`${set}(guid'${ref.replace(/[{}']/g, "")}')${buildQuery({})}`);
+          return ((await current)[part] as Array<Record<string, unknown>> | undefined) ?? [];
+        };
+        // Контакты — со слиянием: заменяются все строки заданных типов (Тип, а не вид), прочие типы остаются.
         if (phone || email || address) {
           const kinds = await contactKindsForCounterparties(conn);
-          const guid = ref.replace(/[{}']/g, "");
-          const existing =
-            ((await conn.client.getEntity(`${set}(guid'${guid}')${buildQuery({})}`))[
-              "КонтактнаяИнформация"
-            ] as Array<Record<string, unknown>>) ?? [];
+          const existing = await currentRows("КонтактнаяИнформация");
           const replacedTypes = new Set(
             [phone && kinds.phone?.тип, email && kinds.email?.тип, address && kinds.address?.тип].filter(
               Boolean,
@@ -3285,7 +3299,11 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         if (ogrn) {
           const prop = await resolveAdditionalProperty(conn, "ОГРН");
           if (prop)
-            fields["ДополнительныеРеквизиты"] = [{ LineNumber: 1, Свойство_Key: prop, Значение: ogrn }];
+            fields["ДополнительныеРеквизиты"] = withAdditionalValue(
+              await currentRows("ДополнительныеРеквизиты"),
+              prop,
+              ogrn,
+            );
           else notes.push("ОГРН не записан: в базе нет доп.реквизита «ОГРН» для контрагентов.");
         }
         if (duplicate.note) notes.push(duplicate.note);

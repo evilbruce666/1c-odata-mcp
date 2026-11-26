@@ -124,6 +124,8 @@ describe("перемещение в иерархии: move_to_folder и update_e
       const done = await t.movers[i]!(ref, to, true);
       expect(done.error, done.text).toBe(false);
       expect(t.patch).toHaveBeenCalledTimes(1);
+      // Описание: заменяется только родитель — состав переносимой группы и прочие реквизиты не трогаются.
+      expect(t.patch.mock.calls[0]![1]).toEqual({ Parent_Key: to });
     }
   });
 
