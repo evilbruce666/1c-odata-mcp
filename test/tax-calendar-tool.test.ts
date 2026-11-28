@@ -315,6 +315,22 @@ describe("режим решает, какие сроки из справочни
     expect(c.notes.join(" ")).not.toContain("taxRegime");
   });
 
+  it("АУСН и НПД названы своими именами, а взносы ИП за себя в заметке не обещаны", async () => {
+    const ausn = await calendar({ [SET.settings]: [setting({ ПрименяетсяАУСН: true })] });
+    expect(ausn.regime).toMatchObject({ source: "settings", system: "Упрощенная", ausn: true, regimes: [] });
+    const ausnNote = ausn.notes.join(" ");
+    expect(ausnNote).toContain("АУСН");
+    expect(ausnNote).not.toContain("по настройкам 1С — «Упрощенная»");
+    expect(ausnNote).not.toContain("кроме взносов");
+    const npd = await calendar({
+      [SET.settings]: [setting({ СистемаНалогообложения: "НалогНаПрофессиональныйДоход" })],
+    });
+    expect(npd.regime).not.toHaveProperty("ausn");
+    expect(npd.notes.join(" ")).not.toContain("кроме взносов");
+    const osno = await calendar({ [SET.settings]: [setting({ СистемаНалогообложения: "Общая" })] });
+    expect(osno.notes.join(" ")).toContain("кроме взносов ИП за себя");
+  });
+
   it("режим не определён — об этом сказано и предложен параметр", async () => {
     const c = await calendar({ [SET.settings]: [] });
     expect(c.regime).toMatchObject({ source: "unknown", regimes: [] });

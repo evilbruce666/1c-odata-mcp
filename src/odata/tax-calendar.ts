@@ -55,6 +55,7 @@ export interface CalendarRegime {
   source: "settings" | "inferred" | "user" | "unknown";
   asOf: string;
   system?: string;
+  ausn?: true;
   calculatedFor?: string;
 }
 
@@ -338,6 +339,7 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
           source: now.regime.source,
           asOf: today,
           ...(now.regime.system ? { system: now.regime.system } : {}),
+          ...(now.regime.ausn ? { ausn: true as const } : {}),
           ...(now.regime.calculatedFor ? { calculatedFor: now.regime.calculatedFor } : {}),
         }
       : { regimes: [], source: "unknown", asOf: today };
@@ -376,8 +378,8 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
   else if (!regime.regimes.length)
     notes.push(
       regime.system
-        ? `Режим на сегодня по настройкам 1С — «${regime.system}»: сроков для него в справочнике нет, кроме взносов ИП ` +
-            "за себя. " +
+        ? `Режим на сегодня по настройкам 1С — ${regime.ausn ? `АУСН («${regime.system}» с признаком «Применяется АУСН»)` : `«${regime.system}»`}: ` +
+            `сроков для него в справочнике нет${now.noContributions ? "" : ", кроме взносов ИП за себя"}. ` +
             "Показано начисленное в 1С."
         : "Режим не определён — сроки УСН из справочника не показаны. Назовите режим параметром regime " +
             "(usn_income, usn_income_expense, psn, osno).",

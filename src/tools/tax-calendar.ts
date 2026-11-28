@@ -34,6 +34,7 @@ export function registerTaxCalendarTools(server: McpServer, ctx: ServerContext):
         "передайте пользователю warnings и missing; справочник покрывает не всё — перечень в notCovered. " +
         "vatThreshold — доход по книгам доходов 1С и порог НДС на УСН: не складывайте и не оценивайте право на " +
         "освобождение сами; нет exceeded — доход учтён не весь. " +
+        "Пустой regime.regimes — ключа режима нет (другая система, АУСН, УСН без объекта); что это значит — в notes. " +
         "По умолчанию — от сегодня на 90 дней.",
       inputSchema: z.object({
         database: databaseField,

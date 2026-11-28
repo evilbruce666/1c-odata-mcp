@@ -196,7 +196,7 @@ describe("страницы и предел", () => {
   it("один запрос с пределом без $skip; страницы режутся в коннекторе и не пересекаются", async () => {
     const first = await read({ limit: 10 }, many(25));
     expect(first.queries.filter((q) => q.base === FLAT)).toHaveLength(1);
-    expect(first.params!.get("$top")).toBe("1000");
+    expect(first.params!.get("$top")).toBe("1001");
     expect(first.params!.get("$skip") ?? "0").toBe("0");
     expect(first.page).toMatchObject({ matched: 25, returned: 10, truncated: true, nextOffset: 10 });
     // 1С отдала те же строки в другом порядке — страницы от этого не меняются.
@@ -229,6 +229,28 @@ describe("страницы и предел", () => {
     );
     expect(params!.get("$orderby")).toBe("Начислено desc");
     expect(page.rows.map((r) => r["Начислено"])).toEqual([2, 1, 0]);
+  });
+
+  it("ровно предел строк — это все строки: продолжение есть, «больше» не говорится", async () => {
+    const { page, params } = await read({ limit: 400 }, many(1000));
+    // На строку больше предела: иначе ровно 1000 строк не отличить от обрезанной выборки.
+    expect(params!.get("$top")).toBe("1001");
+    expect(page).toMatchObject({ matched: 1000, returned: 400, truncated: true, nextOffset: 400 });
+    expect(page.note).not.toContain("больше");
+    const last = await read({ limit: 400, offset: 800, snapshot: page.snapshot }, many(1000));
+    expect(last.error).toBeUndefined();
+    expect(last.page).toMatchObject({ matched: 1000, returned: 200, truncated: false });
+  });
+
+  it("Edm.Int64 1С отдаёт строкой — сортируется как число, а не как текст", async () => {
+    const rows = Array.from({ length: 12 }, (_, i) => row(i, { LineNumber: String(12 - i) }));
+    const { page } = await read(
+      { select: ["LineNumber"], orderBy: "LineNumber", descending: true, limit: 3 },
+      rows,
+    );
+    expect(page.rows.map((r) => r["LineNumber"])).toEqual(["12", "11", "10"]);
+    const asc = await read({ select: ["LineNumber"], orderBy: "LineNumber", limit: 3 }, [...rows].reverse());
+    expect(asc.page.rows.map((r) => r["LineNumber"])).toEqual(["1", "2", "3"]);
   });
 });
 

@@ -96,6 +96,15 @@ describe("режим по настройкам 1С", () => {
     }
   });
 
+  it("«Упрощенная» с признаком АУСН — помечена ausn, ключей УСН нет", async () => {
+    const { conn } = connection({ [SETTINGS]: [setting({ ПрименяетсяАУСН: true })] });
+    const found = await readTaxRegime(conn, ORG, AS_OF);
+    expect(found.regime).toMatchObject({ regimes: [], system: "Упрощенная", ausn: true });
+    expect(found.noContributions).toBe(true);
+    const plain = await readTaxRegime(connection({ [SETTINGS]: [setting()] }).conn, ORG, AS_OF);
+    expect(plain.regime).not.toHaveProperty("ausn");
+  });
+
   it("регистр опубликован, записей нет — режим не угадывается по косвенным признакам", async () => {
     const { conn, queries } = connection({ [CALC]: [{ ПериодРасчета: "2030-03-31T00:00:00" }] });
     const found = await readTaxRegime(conn, ORG, AS_OF);

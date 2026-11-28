@@ -156,8 +156,18 @@ function condition(entity: EntityMeta, f: RegisterFilter, published: ReadonlySet
   return cmp(f.field, f.op, String(f.value));
 }
 
-function compare(a: unknown, b: unknown): number {
+/** Целые 1С отдаёт строкой («12»): как текст «9» встало бы выше «12». */
+const INTEGER = new Set(["Edm.Int64", "Edm.Int32", "Edm.Int16", "Edm.Byte", "Edm.SByte"]);
+
+function compare(a: unknown, b: unknown, integer: boolean): number {
   if (typeof a === "number" && typeof b === "number") return a - b;
+  if (integer) {
+    const int = (v: unknown) =>
+      typeof v === "number" || (typeof v === "string" && /^-?\d+$/.test(v)) ? BigInt(v) : undefined;
+    const x = int(a);
+    const y = int(b);
+    if (x !== undefined && y !== undefined) return x < y ? -1 : x > y ? 1 : 0;
+  }
   return String(a ?? "").localeCompare(String(b ?? ""), "ru");
 }
 
@@ -190,10 +200,11 @@ export async function readRegisterRows(conn: Connection, request: RegisterReques
     if (request.to) conditions.push(cmp("Period", "le", `datetime'${request.to}T23:59:59'`));
   }
 
-  // Один запрос: $skip на регистрах теряет строки (pagination.ts), а предел — размер одного ответа 1С.
+  // Один запрос: $skip на регистрах теряет строки (pagination.ts), а предел — размер одного ответа 1С. Строка сверх
+  // предела отличает «ровно столько» от «больше».
   const limit = conn.behavior.maxRows;
   const direction = request.descending ? "desc" : "asc";
-  const { rows, truncated } = await fetchAll(
+  const { rows } = await fetchAll(
     conn.client,
     entity.entitySet,
     {
@@ -201,17 +212,18 @@ export async function readRegisterRows(conn: Connection, request: RegisterReques
       filter: and(...conditions) || undefined,
       orderby: request.orderBy ? `${request.orderBy} ${direction}` : undefined,
     },
-    limit,
-    limit,
+    limit + 1,
+    limit + 1,
   );
-  const own = rows.map((r) => Object.fromEntries(select.map((name) => [name, r[name]])));
+  const capped = rows.length > limit;
+  const own = rows.slice(0, limit).map((r) => Object.fromEntries(select.map((name) => [name, r[name]])));
   // Порядок, в котором 1С отдаёт равные строки, не обещан: задаём свой, чтобы страницы не перемешивались.
   const key = (r: Record<string, unknown>) => JSON.stringify(select.map((name) => r[name]));
   const sign = request.descending ? -1 : 1;
+  const order = request.orderBy;
+  const integer = INTEGER.has(entity.properties.find((p) => p.name === order)?.type ?? "");
   own.sort(
-    (a, b) =>
-      (request.orderBy ? sign * compare(a[request.orderBy], b[request.orderBy]) : 0) ||
-      key(a).localeCompare(key(b), "ru"),
+    (a, b) => (order ? sign * compare(a[order], b[order], integer) : 0) || key(a).localeCompare(key(b), "ru"),
   );
-  return { register: entity.entitySet, rows: own, capped: truncated, limit };
+  return { register: entity.entitySet, rows: own, capped, limit };
 }

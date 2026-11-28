@@ -1379,6 +1379,7 @@ export const organizationCardResultSchema = z
         source: z.enum(["settings", "inferred"]),
         asOf: z.string(),
         system: z.string().optional(),
+        ausn: z.literal(true).optional(),
         settingsFrom: z.string().optional(),
         calculatedFor: z.string().optional(),
         vatPayerOnUsn: z.boolean().optional(),
@@ -1403,6 +1404,7 @@ export const taxCalendarResultSchema = z
         source: z.enum(["settings", "inferred", "user", "unknown"]),
         asOf: z.string(),
         system: z.string().optional(),
+        ausn: z.literal(true).optional(),
         calculatedFor: z.string().optional(),
       })
       .passthrough(),

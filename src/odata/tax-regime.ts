@@ -25,6 +25,8 @@ export interface TaxRegime {
   asOf: string;
   /** Значение 1С как есть: «Упрощенная», «Общая», «НалогНаПрофессиональныйДоход»… */
   system?: string;
+  /** В настройках «Упрощенная» с признаком «Применяется АУСН»: это автоматизированная УСН, а не обычная. */
+  ausn?: true;
   /** С какой даты действует запись настроек (source=settings). */
   settingsFrom?: string;
   /** На какой расчётный период УСН опирается косвенный вывод (source=inferred). */
@@ -142,6 +144,7 @@ function fromSettings(rows: readonly ODataEntity[], asOf: string): TaxRegimeResu
       source: "settings",
       asOf,
       ...(system ? { system } : {}),
+      ...(row["ПрименяетсяАУСН"] === true ? { ausn: true as const } : {}),
       ...(dateOnly(row["Period"]) ? { settingsFrom: dateOnly(row["Period"])! } : {}),
       ...(usn && typeof row["ПлательщикНДСПрименяющийУСН"] === "boolean"
         ? { vatPayerOnUsn: row["ПлательщикНДСПрименяющийУСН"] }
