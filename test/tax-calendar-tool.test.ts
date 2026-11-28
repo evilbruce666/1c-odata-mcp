@@ -756,19 +756,6 @@ describe("режим за период обязанности неизвесте
     expect(hiddenWarnings(c)[0]).toContain(lost[0]);
   });
 
-  it("«Упрощенная» без объекта налогообложения — сроки названы", async () => {
-    const c = await calendar(
-      { [SET.settings]: [setting({ ОбъектНалогообложенияУСН: "" })] },
-      WINDOW,
-      ORGANIZATION,
-    );
-    expect(hiddenWarnings(c)[0]).toContain(lost[0]);
-    // Заметка и предупреждение не спорят: УСН в настройках есть, не хватает объекта.
-    expect(c.notes.join(" ")).toContain("УСН без объекта налогообложения");
-    expect(c.notes.join(" ")).not.toContain("в справочнике нет");
-    expect(hiddenWarnings(c)[0]).not.toContain("Была ли УСН");
-  });
-
   it("в прошлом был другой известный режим — сроков УСН за него нет и предупреждать не о чем", async () => {
     const c = await calendar(
       {
@@ -806,5 +793,85 @@ describe("режим за период обязанности неизвесте
     );
     expect(find(c, /^Декларация по УСН за 2026/)).toHaveLength(1);
     expect(hiddenWarnings(c)).toEqual([]);
+  });
+});
+
+describe("«Упрощенная» без объекта налогообложения", () => {
+  const WINDOW = { from: "2027-01-15", to: "2027-04-30" };
+  const noObject = (extra: Record<string, unknown> = {}) =>
+    setting({ ОбъектНалогообложенияУСН: "", ПлательщикНДСПрименяющийУСН: false, ...extra });
+  const shown = [/^Декларация по УСН за 2026/, /^Налог по УСН за 2026/, /^Аванс по УСН за 1 квартал 2027/];
+
+  for (const [name, extra] of [
+    ["без патента", {}],
+    ["с патентом", { ПрименяетсяУСНПатент: true }],
+  ] as const)
+    it(`${name}: сроки УСН в списке — они одинаковы для обоих объектов, объект не придуман`, async () => {
+      const c = await calendar({ [SET.settings]: [noObject(extra)] }, WINDOW, { type: "ЮридическоеЛицо" });
+      for (const title of shown) expect(find(c, title), String(title)).toHaveLength(1);
+      expect(c.regime.regimes.filter((r) => r.startsWith("usn"))).toEqual([]);
+      expect(c.warnings.filter((w) => w.includes("не показаны"))).toEqual([]);
+      expect(c.notes.join(" ")).toContain("Объект налогообложения УСН в настройках не заполнен");
+      expect(c.notes.join(" ")).not.toMatch(/в справочнике нет|сроки УСН не показаны/);
+    });
+
+  it("порог НДС проверяется так же, как при заполненном объекте", async () => {
+    const c = await calendar({ [SET.settings]: [noObject()] }, WINDOW, {
+      type: "ЮридическоеЛицо",
+      books: { [SET.usnBook]: { 2026: 21_000_000 } },
+    });
+    expect(c.vatThreshold).toMatchObject([{ year: 2026, exceeded: true }]);
+  });
+
+  it("АУСН под тем же названием системы сроков УСН не получает", async () => {
+    const c = await calendar({ [SET.settings]: [noObject({ ПрименяетсяАУСН: true })] }, WINDOW, {
+      type: "ЮридическоеЛицо",
+    });
+    expect(c.items).toEqual([]);
+    expect(c.vatThreshold).toBeUndefined();
+    expect(turnovers).toEqual([]);
+  });
+});
+
+describe("сверка уведомления с начислением", () => {
+  const WINDOW = { from: "2027-04-01", to: "2027-04-30" };
+  const advance = accrual(USN, "2027-03-31", "2027-04-28", 100);
+  const filed = [notice("2027-04-20", "2027-03-31", 70)];
+  const noticeItem = (c: Calendar) =>
+    c.items.find((i) => i.kind === "notice" && /за 1 квартал 2027/.test(i.title)) as Item & { note?: string };
+  const mismatch = (c: Calendar) => c.warnings.filter((w) => w.includes("в уведомлениях"));
+
+  for (const [name, chart] of [
+    ["план счетов пуст", []],
+    ["вернулся не тот счёт", ACCOUNTS.filter((a) => a.Ref_Key === PSN)],
+  ] as const)
+    it(`${name}: уведомление подано, сверить нельзя — об этом сказано у строки`, async () => {
+      const c = await calendar(
+        { [SET.chart]: [...chart], [SET.accruals]: [advance], [SET.notices]: filed },
+        WINDOW,
+      );
+      expect(noticeItem(c).status).toBe("prepared");
+      expect(noticeItem(c).note).toContain("не сверена");
+      expect(mismatch(c)).toEqual([]);
+    });
+
+  it("счёт прочитан — расхождение в warnings, пометки «не сверена» нет", async () => {
+    const c = await calendar({ [SET.accruals]: [advance], [SET.notices]: filed }, WINDOW);
+    expect(mismatch(c)).toHaveLength(1);
+    expect(noticeItem(c).note).toBeUndefined();
+  });
+
+  it("начисление УСН опознано, неопознано чужое того же квартала — сверка идёт", async () => {
+    const other = accrual(PSN, "2027-03-31", "2027-04-28", 5);
+    const c = await calendar(
+      {
+        [SET.chart]: ACCOUNTS.filter((a) => a.Ref_Key === USN),
+        [SET.accruals]: [advance, other],
+        [SET.notices]: filed,
+      },
+      WINDOW,
+    );
+    expect(mismatch(c)).toHaveLength(1);
+    expect(noticeItem(c).note).toBeUndefined();
   });
 });

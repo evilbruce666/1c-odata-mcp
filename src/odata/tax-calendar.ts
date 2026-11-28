@@ -83,6 +83,7 @@ export interface CalendarInput {
   regime?: TaxRegimeKey[] | undefined;
 }
 
+const USN_KEYS = ["usn_income", "usn_income_expense"] as const;
 /** Начисление и его сторно стоят на разных датах (перенесённой и нет) — читаем шире окна. */
 const READ_MARGIN_DAYS = 120;
 /** Сторно патента находит своё начисление на соседней дате: срок с переносом и без него. */
@@ -222,15 +223,23 @@ function paymentWithoutAccrual(rule: TaxRule): string {
   return "В 1С не начислено: период ещё не закрыт или начислять нечего.";
 }
 
+/** В настройках 1С «Упрощенная», а объект не заполнен: УСН есть, неизвестен только объект. */
+function usnWithoutObject({ regime, noContributions }: TaxRegimeResult): boolean {
+  return (
+    regime?.source === "settings" &&
+    regime.system === "Упрощенная" &&
+    !noContributions &&
+    !regime.regimes.some((k) => k.startsWith("usn"))
+  );
+}
+
 /**
  * Была ли УСН в этот период, по ответу о режиме судить нельзя: режима нет вовсе; он выведен косвенно (отсутствие
- * следов УСН не значит, что её не было); или в настройках УСН без объекта налогообложения. Другая известная система
- * — не «неизвестно».
+ * следов УСН не значит, что её не было). Другая известная система — не «неизвестно».
  */
-function usnUnknown({ regime, noContributions }: TaxRegimeResult): boolean {
+function usnUnknown({ regime }: TaxRegimeResult): boolean {
   if (!regime) return true;
-  if (regime.regimes.some((k) => k.startsWith("usn"))) return false;
-  return regime.source === "inferred" || (regime.system === "Упрощенная" && !noContributions);
+  return regime.source === "inferred" && !regime.regimes.some((k) => k.startsWith("usn"));
 }
 
 const ruleItem = (rule: TaxRule, status: CalendarItem["status"]): CalendarItem => ({
@@ -342,21 +351,24 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
       notes: [],
     }));
     // Взносы за себя ИП платит при любом режиме, кроме НПД и АУСН.
+    // Без объекта показывается только то, что одинаково для обоих объектов УСН.
     const applies = rule.obligation.startsWith("ip_")
       ? !at.noContributions
-      : rule.regimes.some((k) => (at.regime?.regimes ?? []).includes(k));
+      : rule.regimes.some((k) => (at.regime?.regimes ?? []).includes(k)) ||
+        (usnWithoutObject(at) && USN_KEYS.every((k) => rule.regimes.includes(k)));
     if (applies) applicable.push(rule);
     else if (!rule.obligation.startsWith("ip_") && usnUnknown(at)) undecided.push(rule);
   }
-  if (!regime.regimes.length)
+  if (usnWithoutObject(now))
     notes.push(
-      regime.system === "Упрощенная" && !now.noContributions
-        ? "В настройках 1С — УСН без объекта налогообложения: сроки УСН не показаны. Назовите режим параметром " +
-            "regime (usn_income или usn_income_expense)."
-        : regime.system
-          ? `Режим по настройкам 1С — «${regime.system}»: сроков для него в справочнике нет, кроме взносов ИП за себя. ` +
+      "В настройках 1С — УСН без объекта налогообложения. Сроки УСН показаны: они одинаковы для обоих объектов.",
+    );
+  else if (!regime.regimes.length)
+    notes.push(
+      regime.system
+        ? `Режим по настройкам 1С — «${regime.system}»: сроков для него в справочнике нет, кроме взносов ИП за себя. ` +
             "Показано начисленное в 1С."
-          : "Режим не определён — сроки УСН из справочника не показаны. Назовите режим параметром regime " +
+        : "Режим не определён — сроки УСН из справочника не показаны. Назовите режим параметром regime " +
             "(usn_income, usn_income_expense, psn, osno).",
     );
 
@@ -526,10 +538,17 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
         : !calculations
           ? "Расчёт УСН не прочитан: нужно ли уведомление, неизвестно."
           : "Квартал в 1С не рассчитан: нужно ли уведомление, станет ясно после закрытия квартала.";
+      // Начисление этого налога не опознано, а за квартал есть неопознанное: молчание о расхождении ничего не значит.
+      const unchecked = !!account && filed.length > 0 && accrual <= 0 && unclear.has(rule.period.to);
       items.push({
         ...ruleItem(rule, status),
         ...(filed.length ? { notices: filed.sort((a, b) => a.date.localeCompare(b.date)) } : {}),
         ...(status === "unknown" && documents ? { note: why } : {}),
+        ...(unchecked
+          ? {
+              note: "Сумма уведомления не сверена с начислением: за этот квартал есть начисление, но его счёт не прочитан.",
+            }
+          : {}),
       });
       // Одно из уведомлений или их сумма должны совпасть с начислением; какое действует, коннектор не решает.
       const total = filed.reduce((sum, n) => sum + n.amount, 0);
@@ -547,7 +566,7 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
 
   // ─── Порог НДС на УСН ─────────────────────────────────────────────────────
   let vat: VatThresholdResult | undefined;
-  const onUsn = regime.regimes.some((k) => k.startsWith("usn"));
+  const onUsn = regime.regimes.some((k) => k.startsWith("usn")) || (!input.regime && usnWithoutObject(now));
   let vatPayer = now.regime?.vatPayerOnUsn;
   if (onUsn && input.regime)
     vatPayer = await vatPayerFromSettings(conn, orgRef, today).catch((e: unknown) => {
