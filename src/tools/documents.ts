@@ -11,7 +11,7 @@ import { and, cmp, contains, odataGuid, odataString, or, buildQuery } from "../o
 import { DOC_FIELDS, DOCUMENTS, resolveEntity } from "../config/mapping.js";
 import { InputError } from "../errors.js";
 import { resolveOrganization } from "../odata/orgs.js";
-import { ensurePublished } from "../odata/publication.js";
+import { requirePublished } from "../odata/publication.js";
 import {
   matchesIncomingNumber,
   matchesOwnNumber,
@@ -370,8 +370,8 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
       guard("read.document.search_documents", async () => {
         if (entitySet && kind) throw new InputError("Задайте либо entitySet, либо kind, не оба.");
         const conn = ctx.db(database);
+        if (entitySet) await requirePublished(conn, entitySet);
         const available = await conn.available();
-        if (entitySet) ensurePublished(available, entitySet);
         if (entitySet === ROUTINE_OPERATION && postedOnly)
           throw new InputError(
             "У регламентных операций признак проведения не означает выполнение (он не стоит и у выполненных): " +
@@ -526,7 +526,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
     ({ database, entitySet, ref, compact, includeBinary }) =>
       guard("read.document.get_document", async () => {
         const conn = ctx.db(database);
-        ensurePublished(await conn.available(), entitySet);
+        await requirePublished(conn, entitySet);
         const path = `${entitySet}(guid'${ref.replace(/[{}']/g, "")}')${buildQuery({})}`;
         const entity = await conn.client.getEntity(path);
         const read = includeBinary ? { entity, omitted: [] } : withoutBinary(entity);

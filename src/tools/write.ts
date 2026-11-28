@@ -20,7 +20,7 @@ import { writableHint } from "../config/env.js";
 import { ok, fail, guard, databaseField, organizationField } from "./_shared.js";
 import { CATALOGS, WRITE_DOCUMENTS, resolveEntity } from "../config/mapping.js";
 import { resolveOrgOrDefault } from "../odata/orgs.js";
-import { ensurePublished, requireEntity } from "../odata/publication.js";
+import { requirePublished, requireEntity } from "../odata/publication.js";
 import {
   accountsByCode,
   accountsByRef,
@@ -2665,7 +2665,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, entitySet, ref, mark, confirm }) =>
       guard("write.entity.mark_for_deletion", async () => {
         const conn = ctx.db(database);
-        ensurePublished(await conn.available(), entitySet);
+        await requirePublished(conn, entitySet);
         const guid = ref.replace(/[{}']/g, "");
         const path = `${entitySet}(guid'${guid}')?$format=json`;
         // Проведённый документ цен с пометкой продолжал бы действовать: его записи регистра цен остаются.
@@ -3124,7 +3124,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         if (repost && (!post || expectedDataVersion === undefined))
           throw new InputError("repost=true требует post=true и точную expectedDataVersion.");
         const conn = ctx.db(database);
-        ensurePublished(await conn.available(), entitySet);
+        await requirePublished(conn, entitySet);
         // Суммы расшифровки банковского документа — и в предпросмотре: ошибку видно до подтверждения (#61).
         if (post) {
           const blocker = await bankPostingBlocker(conn, entitySet, ref.replace(/[{}']/g, ""));
@@ -3259,7 +3259,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, entitySet, ref, fields, confirm }) =>
       guard("write.entity.update_entity", async () => {
         const conn = ctx.db(database);
-        ensurePublished(await conn.available(), entitySet);
+        await requirePublished(conn, entitySet);
         if (Object.keys(fields).length === 0) return fail("Не заданы поля для изменения.");
         const service = serviceFieldRefusal(fields);
         if (service) return fail(service);
@@ -3825,7 +3825,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, entitySet, ref, lines, confirm }) =>
       guard("write.document.update_document_lines", async () => {
         const conn = ctx.db(database);
-        ensurePublished(await conn.available(), entitySet);
+        await requirePublished(conn, entitySet);
         const ka = await stockInAccountingBaseRefusal(conn, entitySet);
         if (ka) return fail(ka);
         const trade = await tradeEditKind(conn, entitySet);
@@ -4460,7 +4460,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, entitySet, ref, line, confirm }) =>
       guard("write.document.add_document_line", async () => {
         const conn = ctx.db(database);
-        ensurePublished(await conn.available(), entitySet);
+        await requirePublished(conn, entitySet);
         const ka = await stockInAccountingBaseRefusal(conn, entitySet);
         if (ka) return fail(ka);
         const trade = await tradeEditKind(conn, entitySet);
@@ -4556,7 +4556,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
         // Только документы: копия справочника обошла бы проверки дубля ИНН и родителя.
         if (!entitySet.startsWith("Document_"))
           return fail("copy_document копирует только документы (Document_…). Ничего не записано.");
-        ensurePublished(await conn.available(), entitySet);
+        await requirePublished(conn, entitySet);
         const ka = await stockInAccountingBaseRefusal(conn, entitySet);
         if (ka) return fail(ka);
         const trade = await tradeEditKind(conn, entitySet);
@@ -4665,7 +4665,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, entitySet, ref, lineNumber, confirm }) =>
       guard("write.document.remove_document_line", async () => {
         const conn = ctx.db(database);
-        ensurePublished(await conn.available(), entitySet);
+        await requirePublished(conn, entitySet);
         const ka = await stockInAccountingBaseRefusal(conn, entitySet);
         if (ka) return fail(ka);
         const trade = await tradeEditKind(conn, entitySet);
@@ -6079,7 +6079,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, entitySet, name, parent, confirm }) =>
       guard("write.entity.create_folder", async () => {
         const conn = ctx.db(database);
-        ensurePublished(await conn.available(), entitySet);
+        await requirePublished(conn, entitySet);
         const parentRef = await folderRefOf(conn, entitySet, parent);
         const payload = clean({ Description: name, IsFolder: true, Parent_Key: parentRef });
         return createOrPreview(conn, entitySet, payload, confirm);
@@ -6107,7 +6107,7 @@ export function registerWriteTools(server: McpServer, ctx: ServerContext): void 
     ({ database, entitySet, ref, folder, confirm }) =>
       guard("write.entity.move_to_folder", async () => {
         const conn = ctx.db(database);
-        ensurePublished(await conn.available(), entitySet);
+        await requirePublished(conn, entitySet);
         const parentRef = await folderRefOf(conn, entitySet, folder);
         const refusal = await parentMoveRefusal(conn, entitySet, ref, parentRef);
         if (refusal) return fail(refusal);

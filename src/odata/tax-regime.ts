@@ -40,7 +40,9 @@ export interface TaxRegimeResult {
 
 const SETTINGS_LABEL =
   "регистр сведений «Система налогообложения» (InformationRegister_НастройкиСистемыНалогообложения)";
-const PUBLISH_HINT = `Опубликуйте ${SETTINGS_LABEL} в «Составе OData» и повторите запрос.`;
+const PUBLISH_HINT =
+  `Опубликуйте ${SETTINGS_LABEL} в «Составе OData», затем вызовите read.system.health_check (он перечитывает ` +
+  "схему) и повторите запрос.";
 
 /**
  * Старше этого расчёт УСН не используется: режим с тех пор мог смениться, а календарь по старому режиму

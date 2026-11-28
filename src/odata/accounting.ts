@@ -8,7 +8,7 @@ import type { Connection } from "../context.js";
 import { fetchAll } from "./pagination.js";
 import { and, cmp, odataGuid, odataString, or } from "./query.js";
 import { CATALOGS, resolveEntity } from "../config/mapping.js";
-import { ensurePublished, requireEntity } from "./publication.js";
+import { requirePublished, requireEntity } from "./publication.js";
 import { lookupWithRefresh } from "./cache.js";
 import { buildQuery } from "./query.js";
 import {
@@ -847,8 +847,8 @@ export async function requireDocumentEntity(conn: Connection, documentEntity: st
       `"${documentEntity}" — не документ: ожидается имя вида Document_<Имя> (см. list_entities, class=document).`,
     );
   }
+  await requirePublished(conn, documentEntity);
   const meta = await conn.getMetadata();
-  ensurePublished(new Set(meta.entities.keys()), documentEntity);
   const em = meta.entities.get(documentEntity)!;
   const props = propNames(em);
   // Табличная часть документа (Document_X_Товары) тоже class=document, но у неё

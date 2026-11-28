@@ -29,6 +29,9 @@ export class ODataClient {
   private metaPromise: Promise<MetadataMap> | undefined;
   /** С какого момента схема считается устаревшей; undefined — обновление уже идёт или схемы нет. */
   private metaStaleAt: number | undefined;
+  /** Когда схему читали в последний раз (или пытались перечитать перед отказом). */
+  private metaLoadedAt: number | undefined;
+  private recheck: Promise<boolean> | undefined;
   private journal: WriteOperationJournal | undefined;
   /** Необязательный предел одновременных HTTP этого подключения (#57); 0 — без предела. */
   readonly limiter: RequestLimiter;
@@ -54,6 +57,7 @@ export class ODataClient {
     detachedFromCall(() => loadMetadata(this)).then(
       (meta) => {
         this.metaPromise = Promise.resolve(meta);
+        this.metaLoadedAt = Date.now();
         this.metaStaleAt = Date.now() + METADATA_TTL_MS;
       },
       (error: unknown) => {
@@ -78,11 +82,42 @@ export class ODataClient {
     this.metaStaleAt = undefined;
     void pending.then(
       () => {
-        if (this.metaPromise === pending) this.metaStaleAt = Date.now() + METADATA_TTL_MS;
+        if (this.metaPromise !== pending) return;
+        this.metaLoadedAt = Date.now();
+        this.metaStaleAt = Date.now() + METADATA_TTL_MS;
       },
       () => undefined,
     );
     return untilCallAborted(pending);
+  }
+
+  /**
+   * Перечитывает схему, если её читали давнее minAgeMs, — перед отказом «объект не опубликован»: его могли только
+   * что добавить в «Состав OData». true — прочитана новая схема. Прежняя при сбое остаётся, а повтор — не раньше,
+   * чем через minAgeMs: опечатка в имени объекта не должна тянуть $metadata на каждый вызов.
+   */
+  refreshIfOlderThan(minAgeMs: number): Promise<boolean> {
+    if (this.recheck) return untilCallAborted(this.recheck);
+    if (this.metaLoadedAt === undefined || Date.now() - this.metaLoadedAt < minAgeMs)
+      return Promise.resolve(false);
+    this.metaLoadedAt = Date.now();
+    this.recheck = detachedFromCall(() => loadMetadata(this))
+      .then(
+        (meta) => {
+          this.metaPromise = Promise.resolve(meta);
+          this.metaStaleAt = Date.now() + METADATA_TTL_MS;
+          return true;
+        },
+        (error: unknown) => {
+          logger.warn(
+            { database: this.conn.name, err: error instanceof Error ? error.message : String(error) },
+            "Схему 1С перечитать не удалось, отказ строится на прежней",
+          );
+          return false;
+        },
+      )
+      .finally(() => (this.recheck = undefined));
+    return untilCallAborted(this.recheck);
   }
 
   /** Журнал операций записи создаётся при первом обращении: чтению и read-only он не нужен. */

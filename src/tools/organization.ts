@@ -242,7 +242,8 @@ export function registerOrganizationTools(server: McpServer, ctx: ServerContext)
           if (!regSet) {
             notes.push(
               "Регистр «Ответственные лица организаций» не опубликован в OData — директор/бухгалтер " +
-                "недоступны. Добавьте его в «Состав OData», если нужны эти реквизиты.",
+                "недоступны. Добавьте его в «Состав OData», если нужны эти реквизиты, затем вызовите " +
+                "read.system.health_check — он перечитывает схему.",
             );
           } else {
             try {

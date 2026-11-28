@@ -31,8 +31,8 @@ export async function requireEntity(
   candidates: readonly string[],
   label: string,
 ): Promise<string> {
-  const set = resolveEntity(candidates, await conn.available());
-  if (set) return set;
+  const known = resolveEntity(candidates, await conn.available());
+  if (known) return known;
   // Регистр бухгалтерии и план счетов в Управлении торговлей отсутствуют в самой конфигурации: совет опубликовать их
   // неверен, отказ ведёт к инструментам, которые в такой базе работают.
   const accounting = candidates.some((c) => /^(AccountingRegister|ChartOfAccounts)_/.test(c));
@@ -42,7 +42,25 @@ export async function requireEntity(
       tradeRefusal("Этот инструмент работает по бухгалтерскому учёту."),
     );
   }
+  const added = await afterRecheck(conn, candidates);
+  if (added) return added;
   throw new NotPublishedError([{ label, candidates }]);
+}
+
+/** Не чаще раза в минуту: столько после чтения схемы повторный отказ строится на той же. */
+export const RECHECK_AFTER_MS = 60_000;
+
+/** Объект, появившийся в «Составе OData» после того, как схему прочитали. */
+async function afterRecheck(conn: Connection, candidates: readonly string[]): Promise<string | undefined> {
+  if (!(await conn.client?.refreshIfOlderThan?.(RECHECK_AFTER_MS))) return undefined;
+  return resolveEntity(candidates, await conn.available());
+}
+
+/** Как requireEntity — для имени объекта, которое задал пользователь. */
+export async function requirePublished(conn: Connection, entitySet: string, label?: string): Promise<void> {
+  const available = await conn.available();
+  if (available.has(entitySet) || (await afterRecheck(conn, [entitySet]))) return;
+  ensurePublished(available, entitySet, label);
 }
 
 /**
@@ -55,8 +73,8 @@ export async function refuseOnTrade(conn: Connection, label: string, what: strin
   }
 }
 
-/** Проверяет, что конкретный EntitySet опубликован (для имён, заданных пользователем). */
-export function ensurePublished(available: ReadonlySet<string>, entitySet: string, label?: string): void {
+/** Отказ, если конкретного EntitySet нет в переданном наборе; с перечитыванием схемы — requirePublished. */
+function ensurePublished(available: ReadonlySet<string>, entitySet: string, label?: string): void {
   if (!available.has(entitySet)) {
     throw new NotPublishedError([{ label: label ?? entitySet, candidates: [entitySet] }]);
   }
@@ -97,6 +115,7 @@ export function publicationHelp(missing: NotPublishedError["missing"]): string {
     "Эти объекты 1С отсутствуют в доступной OData-схеме, поэтому операция недоступна. " +
     "Добавьте их в 1С: «Все функции → Обработки → Настройка стандартного интерфейса OData → вкладка Состав», затем сохраните:\n" +
     lines +
+    "\nПосле сохранения подождите минуту и повторите запрос: перед отказом коннектор перечитывает схему." +
     "\nВозможны также другое имя объекта, его отсутствие в этой конфигурации или ограничения прав."
   );
 }
