@@ -344,7 +344,7 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
 
   const applicable: TaxRule[] = [];
   /** Сроки УСН, про которые не известно, относятся ли они к организации: не показываются, но называются. */
-  const undecided: TaxRule[] = [];
+  const undecided: Array<{ rule: TaxRule; why: string }> = [];
   for (const rule of candidates) {
     // Режим — тот, что был в периоде обязанности: декларацию за год сдаёт тот, кто был на УСН в этом году.
     const at = await regimeAt(rule.period.to < today ? rule.period.to : today).catch((): TaxRegimeResult => ({
@@ -357,16 +357,27 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
       : rule.regimes.some((k) => (at.regime?.regimes ?? []).includes(k)) ||
         (usnWithoutObject(at) && USN_KEYS.every((k) => rule.regimes.includes(k)));
     if (applies) applicable.push(rule);
-    else if (!rule.obligation.startsWith("ip_") && usnUnknown(at)) undecided.push(rule);
+    else if (!rule.obligation.startsWith("ip_") && usnUnknown(at))
+      undecided.push({
+        rule,
+        // Причина — про тот период, а не про сегодня: заметка о режиме ниже говорит о сегодняшнем дне.
+        why: at.settingsStart
+          ? `Настройки налогообложения в 1С начинаются с ${at.settingsStart}, режим до этой даты 1С не знает`
+          : at.regime
+            ? "Режим определён косвенно, а следов УСН за периоды этих обязанностей в 1С нет"
+            : "Режим за периоды этих обязанностей в 1С не определён",
+      });
   }
   if (usnWithoutObject(now))
     notes.push(
-      "В настройках 1С — УСН без объекта налогообложения. Сроки УСН показаны: они одинаковы для обоих объектов.",
+      "На сегодня в настройках 1С — УСН без объекта налогообложения. Сроки УСН показаны: они одинаковы для обоих " +
+        "объектов.",
     );
   else if (!regime.regimes.length)
     notes.push(
       regime.system
-        ? `Режим по настройкам 1С — «${regime.system}»: сроков для него в справочнике нет, кроме взносов ИП за себя. ` +
+        ? `Режим на сегодня по настройкам 1С — «${regime.system}»: сроков для него в справочнике нет, кроме взносов ИП ` +
+            "за себя. " +
             "Показано начисленное в 1С."
         : "Режим не определён — сроки УСН из справочника не показаны. Назовите режим параметром regime " +
             "(usn_income, usn_income_expense, psn, osno).",
@@ -423,14 +434,18 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
 
   // Режим не определён и на сегодня — об этом уже сказано выше. Начисленное в 1С показано и без режима.
   const unshown = undecided
-    .filter((r) => inWindow(r.due) && !accrued.has(r.id))
-    .sort((a, b) => a.due.localeCompare(b.due) || a.title.localeCompare(b.title, "ru"));
+    .filter(({ rule }) => inWindow(rule.due) && !accrued.has(rule.id))
+    .sort((a, b) => a.rule.due.localeCompare(b.rule.due) || a.rule.title.localeCompare(b.rule.title, "ru"));
   if (unshown.length && (now.regime || input.regime))
-    warnings.push(
-      "По данным 1С нельзя определить режим УСН в периоде этих обязанностей, поэтому они не показаны — проверьте, " +
-        `относятся ли они к вам: ${unshown.map((r) => `«${r.title}» — ${r.due}`).join("; ")}. ` +
-        "Если режим известен, назовите его параметром regime.",
-    );
+    for (const why of new Set(unshown.map((u) => u.why)))
+      warnings.push(
+        `${why}. Если в то время была УСН, остаются сроки: ` +
+          unshown
+            .filter((u) => u.why === why)
+            .map(({ rule }) => `«${rule.title}» — ${rule.due}`)
+            .join("; ") +
+          ". Если режим известен, назовите его параметром regime.",
+      );
 
   // ─── Отчёты ───────────────────────────────────────────────────────────────
   const reports = applicable.filter((r) => r.kind === "report" && inWindow(r.due));

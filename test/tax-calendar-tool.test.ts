@@ -697,7 +697,7 @@ describe("непрочитанный источник не выдаётся за
 describe("режим за период обязанности неизвестен", () => {
   const WINDOW = { from: "2027-01-15", to: "2027-04-30" };
   const ORGANIZATION = { type: "ЮридическоеЛицо" };
-  const hiddenWarnings = (c: Calendar) => c.warnings.filter((w) => w.includes("не показаны"));
+  const hiddenWarnings = (c: Calendar) => c.warnings.filter((w) => w.includes("остаются сроки"));
   const lost = ["«Декларация по УСН за 2026 год»", "«Налог по УСН за 2026 год"];
 
   const expectNamed = (c: Calendar) => {
@@ -756,6 +756,23 @@ describe("режим за период обязанности неизвесте
     expect(hiddenWarnings(c)[0]).toContain(lost[0]);
   });
 
+  for (const [name, now] of [
+    ["«Общая»", { СистемаНалогообложения: "Общая" }],
+    ["АУСН", { ПрименяетсяАУСН: true }],
+  ] as const)
+    it(`сегодня ${name}, настройки начинаются в этом году — предупреждение о прошлом не спорит с заметкой`, async () => {
+      const c = await calendar(
+        { [SET.settings]: [setting({ Period: "2027-01-01T00:00:00", ...now })] },
+        WINDOW,
+        ORGANIZATION,
+      );
+      expect(hiddenWarnings(c)).toHaveLength(1);
+      expect(hiddenWarnings(c)[0]).toContain("начинаются с 2027-01-01, режим до этой даты 1С не знает");
+      expect(hiddenWarnings(c)[0]).toContain("Если в то время была УСН");
+      expect(c.notes.join(" ")).toContain("Режим на сегодня по настройкам 1С");
+      expect(find(c, /по УСН/)).toEqual([]);
+    });
+
   it("в прошлом был другой известный режим — сроков УСН за него нет и предупреждать не о чем", async () => {
     const c = await calendar(
       {
@@ -810,7 +827,7 @@ describe("«Упрощенная» без объекта налогооблож�
       const c = await calendar({ [SET.settings]: [noObject(extra)] }, WINDOW, { type: "ЮридическоеЛицо" });
       for (const title of shown) expect(find(c, title), String(title)).toHaveLength(1);
       expect(c.regime.regimes.filter((r) => r.startsWith("usn"))).toEqual([]);
-      expect(c.warnings.filter((w) => w.includes("не показаны"))).toEqual([]);
+      expect(c.warnings.filter((w) => w.includes("остаются сроки"))).toEqual([]);
       expect(c.notes.join(" ")).toContain("Объект налогообложения УСН в настройках не заполнен");
       expect(c.notes.join(" ")).not.toMatch(/в справочнике нет|сроки УСН не показаны/);
     });

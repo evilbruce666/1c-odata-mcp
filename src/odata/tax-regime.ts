@@ -36,6 +36,8 @@ export interface TaxRegimeResult {
   regime?: TaxRegime;
   /** Что неясно и что сделать, чтобы стало ясно. */
   notes: string[];
+  /** Записи настроек есть, но все позже даты: с какой даты они начинаются. */
+  settingsStart?: string;
   /** АУСН или налог на профессиональный доход: взносы за себя ИП не платит. */
   noContributions?: boolean;
 }
@@ -119,6 +121,7 @@ function fromSettings(rows: readonly ODataEntity[], asOf: string): TaxRegimeResu
   if (!row)
     return {
       notes: [`В регистре «Система налогообложения» нет записей этой организации на ${asOf}.`],
+      ...(dateOnly(rows.at(-1)?.["Period"]) ? { settingsStart: dateOnly(rows.at(-1)!["Period"])! } : {}),
     };
 
   const system = text(row["СистемаНалогообложения"]);
