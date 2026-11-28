@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import type { TaxRegimeKey } from "./tax-regime.js";
 
 /**
- * Справочник сроков tax-calendar.json из корня пакета: то, чего в 1С может ещё не быть. Только сроки и статьи НК РФ —
- * суммы считает 1С.
+ * Справочник сроков tax-calendar.json из корня пакета: то, чего в 1С может ещё не быть. Сроки, статьи НК РФ и пороги НДС
+ * на УСН — суммы налогов считает 1С.
  */
 export interface TaxRule {
   id: string;

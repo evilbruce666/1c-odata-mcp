@@ -153,7 +153,7 @@ describe("tax-calendar.json", () => {
     for (const r of notices) expect(r.condition, r.id).toContain("больше нуля");
   });
 
-  it("сумм в справочнике нет: суммы считает 1С", () => {
+  it("сумм налогов в правилах нет: суммы считает 1С", () => {
     const allowed = new Set(
       "id obligation kind title taxpayers regimes period nominal due basis condition match".split(" "),
     );
