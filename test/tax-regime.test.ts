@@ -128,7 +128,10 @@ describe("режим косвенно, когда регистр настрое�
 
   it("объект из расчёта УСН, патент из действующей операции, период и совет опубликовать", async () => {
     const { conn, queries } = connection(
-      { [CALC]: [calc("2030-03-31")], [PATENT]: [{ Ref_Key: ORG }] },
+      {
+        [CALC]: [calc("2030-03-31")],
+        [PATENT]: [{ Ref_Key: ORG, ДатаНачала: "2030-01-01T00:00:00", ДатаОкончания: `${AS_OF}T00:00:00` }],
+      },
       { hidden },
     );
     const found = await readTaxRegime(conn, ORG, AS_OF);
@@ -142,7 +145,16 @@ describe("режим косвенно, когда регистр настрое�
     const patent = queries.find((q) => q.set === PATENT)!.params.get("$filter")!;
     expect(patent).toContain("Posted eq true");
     expect(patent).toContain(`ДатаНачала le datetime'${AS_OF}T23:59:59'`);
-    expect(patent).toContain(`ДатаОкончания ge datetime'${AS_OF}T00:00:00'`);
+  });
+
+  it("кончившийся и ещё не начавшийся патенты режим не дают", async () => {
+    const patents = [
+      { ДатаНачала: "2030-06-01T00:00:00", ДатаОкончания: "2030-12-31T00:00:00" },
+      { ДатаНачала: "2029-01-01T00:00:00", ДатаОкончания: "2029-12-31T00:00:00" },
+    ];
+    const rows = { [CALC]: [calc("2030-03-31")], [PATENT]: patents };
+    const found = await readTaxRegime(connection(rows, { hidden }).conn, ORG, AS_OF);
+    expect(found.regime?.regimes).toEqual(["usn_income"]);
   });
 
   it("следов нет — режим не назван, ОСНО не предполагается", async () => {

@@ -1411,13 +1411,16 @@ export const taxCalendarResultSchema = z
           periodEnd: z.string().optional(),
           basis: z.string().optional(),
           condition: z.string().optional(),
-          report: z
-            .object({
-              signed: z.string().optional(),
-              sent: z.string().optional(),
-              corrective: z.boolean().optional(),
-            })
-            .passthrough()
+          reports: z
+            .array(
+              z
+                .object({
+                  signed: z.string().optional(),
+                  sent: z.string().optional(),
+                  corrective: z.boolean(),
+                })
+                .passthrough(),
+            )
             .optional(),
           notices: z.array(z.object({ date: z.string(), amount: z.number() }).passthrough()).optional(),
           note: z.string().optional(),

@@ -2,7 +2,7 @@ import type { Connection } from "../context.js";
 import { REGISTERS, TAX_PATENT_DOCUMENTS, resolveEntity } from "../config/mapping.js";
 import { tradeWithoutAccounting } from "./configuration.js";
 import { fetchAll } from "./pagination.js";
-import { and, cmp, odataGuid } from "./query.js";
+import { and, cmp, odataGuid, type QueryOptions } from "./query.js";
 import type { ODataEntity } from "../types/odata.js";
 
 /**
@@ -63,7 +63,6 @@ const dateOnly = (v: unknown): string | undefined => {
   return !s || s.startsWith("0001-01-01") ? undefined : s.slice(0, 10);
 };
 const endOfDay = (ymd: string) => `datetime'${ymd}T23:59:59'`;
-const startOfDay = (ymd: string) => `datetime'${ymd}T00:00:00'`;
 
 function monthsBefore(ymd: string, months: number): string {
   const d = new Date(`${ymd}T00:00:00Z`);
@@ -129,7 +128,7 @@ function fromSettings(rows: readonly ODataEntity[], asOf: string): TaxRegimeResu
     else notes.push("Объект налогообложения УСН в настройках не заполнен.");
     if (row["ПрименяетсяУСНПатент"] === true) regimes.push("psn");
   } else {
-    notes.push("Ключи режима выводятся только для УСН; значение настроек 1С — в taxRegime.system.");
+    notes.push("Ключи режима выводятся только для УСН; значение настроек 1С — в поле system.");
   }
   return {
     regime: {
@@ -152,66 +151,63 @@ function fromSettings(rows: readonly ODataEntity[], asOf: string): TaxRegimeResu
   };
 }
 
-async function inferred(conn: Connection, orgRef: string, asOf: string): Promise<TaxRegimeResult> {
+/** Кварталов расчёта и патентов за историю организации с запасом. */
+const HISTORY_ROWS = 200;
+
+interface Traces {
+  /** Строки расчёта УСН, новые первыми. */
+  calculations: ODataEntity[];
+  patents: ODataEntity[];
+}
+
+/** Следы режима не позже until — по одному запросу на расчёт и на патенты, сколько бы дат ни спрашивали. */
+async function traces(conn: Connection, orgRef: string, until: string): Promise<Traces> {
   const available = await conn.available();
-  const calcSet = resolveEntity(REGISTERS.usnCalculation, available);
-  const patentSet = resolveEntity(TAX_PATENT_DOCUMENTS, available);
   const org = cmp("Организация_Key", "eq", odataGuid(orgRef));
+  const read = async (set: string | undefined, options: QueryOptions): Promise<ODataEntity[]> =>
+    set ? (await fetchAll(conn.client, set, options, HISTORY_ROWS, HISTORY_ROWS)).rows : [];
+  const calculations = await read(resolveEntity(REGISTERS.usnCalculation, available), {
+    filter: and(org, cmp("ПериодРасчета", "le", endOfDay(until))),
+    select: ["ПериодРасчета", "ОбъектНалогообложения"],
+    orderby: "ПериодРасчета desc",
+  });
+  const patents = await read(resolveEntity(TAX_PATENT_DOCUMENTS, available), {
+    filter: and(org, "Posted eq true", cmp("ДатаНачала", "le", endOfDay(until))),
+    select: ["ДатаНачала", "ДатаОкончания"],
+    orderby: "ДатаНачала desc",
+  });
+  return { calculations, patents };
+}
+
+function inferred({ calculations, patents }: Traces, asOf: string): TaxRegimeResult {
   const regimes: TaxRegimeKey[] = [];
   const notes: string[] = [];
   let calculatedFor: string | undefined;
 
-  if (calcSet) {
-    // Две строки одного периода возможны (деятельность с торговым сбором и без) — их объекты должны совпадать.
-    const { rows } = await fetchAll(
-      conn.client,
-      calcSet,
-      {
-        filter: and(org, cmp("ПериодРасчета", "le", endOfDay(asOf))),
-        select: ["ПериодРасчета", "ОбъектНалогообложения"],
-        orderby: "ПериодРасчета desc",
-      },
-      2,
-      2,
+  const known = calculations.filter((r) => (dateOnly(r["ПериодРасчета"]) ?? "9999") <= asOf);
+  const latest = dateOnly(known[0]?.["ПериодРасчета"]);
+  if (latest && latest < monthsBefore(asOf, CALCULATION_MAX_AGE_MONTHS)) {
+    notes.push(
+      `Последний расчёт УСН — за период до ${latest}: он слишком старый, чтобы судить о режиме сейчас.`,
     );
-    const latest = dateOnly(rows[0]?.["ПериодРасчета"]);
-    if (latest && latest < monthsBefore(asOf, CALCULATION_MAX_AGE_MONTHS)) {
-      notes.push(
-        `Последний расчёт УСН — за период до ${latest}: он слишком старый, чтобы судить о режиме сейчас.`,
-      );
-    } else if (latest) {
-      const objects = new Set(
-        rows
-          .filter((r) => dateOnly(r["ПериодРасчета"]) === latest)
-          .map((r) => text(r["ОбъектНалогообложения"])),
-      );
-      const key = objects.size === 1 ? USN_OBJECTS[[...objects][0]!] : undefined;
-      if (key) {
-        regimes.push(key);
-        calculatedFor = latest;
-      } else
-        notes.push(`В расчёте УСН за период до ${latest} объект налогообложения не определяется однозначно.`);
-    }
+  } else if (latest) {
+    // Две строки одного периода возможны (деятельность с торговым сбором и без) — их объекты должны совпадать.
+    const objects = new Set(
+      known
+        .filter((r) => dateOnly(r["ПериодРасчета"]) === latest)
+        .map((r) => text(r["ОбъектНалогообложения"])),
+    );
+    const key = objects.size === 1 ? USN_OBJECTS[[...objects][0]!] : undefined;
+    if (key) {
+      regimes.push(key);
+      calculatedFor = latest;
+    } else
+      notes.push(`В расчёте УСН за период до ${latest} объект налогообложения не определяется однозначно.`);
   }
 
-  if (patentSet) {
-    const { rows } = await fetchAll(
-      conn.client,
-      patentSet,
-      {
-        filter: and(
-          org,
-          "Posted eq true",
-          cmp("ДатаНачала", "le", endOfDay(asOf)),
-          cmp("ДатаОкончания", "ge", startOfDay(asOf)),
-        ),
-        select: ["Ref_Key"],
-      },
-      1,
-      1,
-    );
-    if (rows.length) regimes.push("psn");
-  }
+  const active = (p: ODataEntity) =>
+    (dateOnly(p["ДатаНачала"]) ?? "9999") <= asOf && (dateOnly(p["ДатаОкончания"]) ?? "") >= asOf;
+  if (patents.some(active)) regimes.push("psn");
 
   if (!regimes.length) {
     notes.push(`Режим налогообложения не определён. ${PUBLISH_HINT}`);
@@ -228,9 +224,9 @@ async function inferred(conn: Connection, orgRef: string, asOf: string): Promise
 }
 
 /**
- * Читатель режима организации на разные даты не позже until: история настроек читается одним запросом, косвенный
- * путь — по запросу на каждую новую дату. Пустой результат без заметок — вопрос к этой базе не относится (в
- * Управлении торговлей налогового учёта нет).
+ * Читатель режима организации на разные даты не позже until: история настроек (а без неё — расчёт УСН и патенты)
+ * читается один раз. Пустой результат без заметок — вопрос к этой базе не относится (в Управлении торговлей
+ * налогового учёта нет).
  */
 export async function taxRegimeReader(
   conn: Connection,
@@ -243,12 +239,8 @@ export async function taxRegimeReader(
     return (asOf) => Promise.resolve(fromSettings(rows, asOf));
   }
   if (await tradeWithoutAccounting(conn)) return () => Promise.resolve({ notes: [] });
-  const known = new Map<string, Promise<TaxRegimeResult>>();
-  return (asOf) => {
-    const result = known.get(asOf) ?? inferred(conn, orgRef, asOf);
-    known.set(asOf, result);
-    return result;
-  };
+  const found = await traces(conn, orgRef, until);
+  return (asOf) => Promise.resolve(inferred(found, asOf));
 }
 
 const publishedSettings = async (conn: Connection) =>

@@ -67,7 +67,7 @@ interface Item {
   amount?: number;
   lawDue?: string;
   notices?: unknown[];
-  report?: Record<string, unknown>;
+  reports?: Array<Record<string, unknown>>;
 }
 interface Calendar {
   taxpayer: string;
@@ -79,6 +79,9 @@ interface Calendar {
   rulesCoverage: { years: number[]; missing: number[] };
   notCovered: string[];
 }
+
+/** Сколько запросов к 1С сделал последний вызов. */
+let requests = 0;
 
 async function calendar(
   rows: Rows = {},
@@ -102,7 +105,7 @@ async function calendar(
     [SET.calc]: [],
     ...rows,
   };
-  const { result, violations } = await callTool(
+  const { result, violations, fake } = await callTool(
     TOOL,
     { from: "2027-01-01", to: "2027-04-30", ...args },
     (q) => {
@@ -111,6 +114,7 @@ async function calendar(
       return own;
     },
   );
+  requests = fake.requests.length;
   expect(violations).toEqual([]);
   expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
   return result.structuredContent as unknown as Calendar;
@@ -148,6 +152,17 @@ describe("сведение записей регистра начислений"
     expect(net.excess.map((a) => a.amount).sort()).toEqual([-40, -70].sort());
   });
 
+  it("годовой налог и аванс за 1 квартал на одном счёте и сроке — две обязанности", () => {
+    const net = netAccruals([
+      accrual(USN, "2026-12-31", "2027-04-28", 900),
+      accrual(USN, "2027-03-31", "2027-04-28", 100),
+    ]);
+    expect(net.due.map((a) => [a.periodEnd, a.amount]).sort()).toEqual([
+      ["2026-12-31", 900],
+      ["2027-03-31", 100],
+    ]);
+  });
+
   it("строки одного налога и срока складываются, неактивные не считаются", () => {
     const net = netAccruals([
       accrual(USN, "2026-03-31", "2026-04-28", 10.1),
@@ -165,6 +180,30 @@ describe("платежи", () => {
       { status: "accrued", dueSource: "1c", amount: 1234, due: "2027-04-28" },
     ]);
     expect(c.warnings).toEqual([]);
+  });
+
+  it("ИП: налог за год и аванс за 1 квартал 28 апреля — две строки, уведомление сверяется со своей суммой", async () => {
+    const c = await calendar({
+      [SET.accruals]: [
+        accrual(USN, "2026-12-31", "2027-04-28", 900),
+        accrual(USN, "2027-03-31", "2027-04-28", 100),
+      ],
+      [SET.notices]: [notice("2027-04-20", "2027-03-31", 100)],
+    });
+    expect(find(c, /^Налог по УСН за 2026/)).toMatchObject([{ status: "accrued", amount: 900 }]);
+    expect(find(c, /^Аванс по УСН за 1 квартал 2027/)).toMatchObject([{ status: "accrued", amount: 100 }]);
+    expect(c.warnings).toEqual([]);
+  });
+
+  it("без плана счетов начисление не принимает название уведомления или отчёта", async () => {
+    const c = await calendar({
+      [SET.chart]: [],
+      [SET.accruals]: [accrual(USN, "2027-03-31", "2027-04-28", 100)],
+    });
+    expect(c.items.filter((i) => i.amount !== undefined)).toMatchObject([
+      { kind: "payment", title: "Начислено в 1С: налог без названия счёта" },
+    ]);
+    expect(c.missing.join(" ")).toContain("Названия налогов");
   });
 
   it("срок в 1С не как в справочнике — обе даты и предупреждение", async () => {
@@ -230,6 +269,19 @@ describe("режим решает, какие сроки из справочни
       await expect(contributions({ [SET.settings]: [setting(extra)] })).resolves.toBe(0);
   });
 
+  it("ОСНО известна из настроек: не «не определён», а правил нет", async () => {
+    const c = await calendar(
+      { [SET.settings]: [setting({ СистемаНалогообложения: "Общая" })] },
+      {},
+      { type: "ЮридическоеЛицо" },
+    );
+    expect(c.regime).toMatchObject({ source: "settings", system: "Общая", regimes: [] });
+    expect(c.items).toEqual([]);
+    expect(c.notes.join(" ")).toContain("«Общая»");
+    expect(c.notes.join(" ")).not.toContain("не определён");
+    expect(c.notes.join(" ")).not.toContain("taxRegime");
+  });
+
   it("режим не определён — об этом сказано и предложен параметр", async () => {
     const c = await calendar({ [SET.settings]: [] });
     expect(c.regime).toMatchObject({ source: "unknown", regimes: [] });
@@ -256,13 +308,24 @@ describe("отчёты", () => {
   it("есть документ — prepared, с датой отправки — sent, нет — not_found", async () => {
     await expect(status([report(2026)])).resolves.toMatchObject({
       status: "prepared",
-      report: { signed: "2027-04-01" },
+      reports: [{ signed: "2027-04-01", corrective: false }],
     });
     await expect(status([report(2026, { ДатаОтправки: "2027-04-02T00:00:00" })])).resolves.toMatchObject({
       status: "sent",
-      report: { sent: "2027-04-02" },
+      reports: [{ sent: "2027-04-02" }],
     });
     await expect(status([report(2025)])).resolves.toMatchObject({ status: "not_found" });
+  });
+
+  it("первичный и корректирующий — оба, первичный первым", async () => {
+    await expect(
+      status([report(2026, { Вид: 1, ДатаПодписи: "2027-09-01T00:00:00" }), report(2026)]),
+    ).resolves.toMatchObject({
+      reports: [
+        { signed: "2027-04-01", corrective: false },
+        { signed: "2027-09-01", corrective: true },
+      ],
+    });
   });
 
   it("журнал не прочитался — unknown и объяснение, остальной календарь на месте", async () => {
@@ -309,6 +372,21 @@ describe("уведомления", () => {
         warnings: [],
       });
     }
+  });
+});
+
+describe("запросы к 1С", () => {
+  // Основной тест норм проходит короткую ветку: у синтетических настроек нет УСН. Здесь — все источники.
+  it("полная ветка — не больше девяти, и режим читается одним запросом на все периоды", async () => {
+    await calendar({ [SET.accruals]: [accrual(USN, "2026-12-31", "2027-04-28", 1)] }, { from: "2026-01-01" });
+    expect(requests).toBeLessThanOrEqual(9);
+  });
+
+  it("без регистра настроек — расчёт и патенты читаются по разу, а не на каждую дату", async () => {
+    const { fake } = await callTool(TOOL, { from: "2026-01-01", to: "2027-04-30" }, (q) =>
+      q.base === SET.settings ? [] : undefined,
+    );
+    expect(fake.requests.filter((r) => r.resource === SET.settings)).toHaveLength(1);
   });
 });
 

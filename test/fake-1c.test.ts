@@ -86,7 +86,8 @@ const OVERRIDES: Record<string, Record<string, unknown>> = {
     schedule: "month",
     horizon: "2027-01-31",
   },
-  "read.accounting.get_tax_calendar": { from: "2026-01-01", to: "2026-03-31", regime: ["usn_income"] },
+  // Окно после синтетической даты регистрации и без regime: читаются режим, журнал, уведомления и расчёт.
+  "read.accounting.get_tax_calendar": { from: "2027-01-01", to: "2027-04-30", regime: undefined },
   "read.document.get_document": { entitySet: "Document_РеализацияТоваровУслуг", ref: id },
   "read.document.search_documents": { entitySet: "Document_РеализацияТоваровУслуг" },
   "read.accounting.get_document_postings": {

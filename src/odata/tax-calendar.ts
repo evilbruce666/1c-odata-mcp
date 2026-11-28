@@ -35,7 +35,8 @@ export interface CalendarItem {
   periodEnd?: string;
   basis?: string;
   condition?: string;
-  report?: { signed?: string; sent?: string; corrective?: boolean };
+  /** Все документы отчёта за период: первичный и корректирующие, по дате подписи. */
+  reports?: Array<{ signed?: string; sent?: string; corrective: boolean }>;
   notices?: Array<{ date: string; amount: number }>;
   note?: string;
 }
@@ -103,12 +104,14 @@ export interface Accrual {
   due: string;
   periodEnd: string;
   amount: number;
+  patent: boolean;
 }
 
 /**
  * Сворачивает записи регистра в «налог — срок — сумма». Сумма к сроку — «Начислено»: у патента «СуммаНалога» равна
  * всему налогу, а доли — в «Начислено». Сторно гасит начисление того же счёта и патента: на той же дате или, для
  * остатка, на соседней (начисление патента — с переносом с выходного, сторно уведомлением об уменьшении — без).
+ * Без патента сворачиваются только строки одного периода и срока.
  */
 export function netAccruals(rows: readonly ODataEntity[]): { due: Accrual[]; excess: Accrual[] } {
   const groups = new Map<string, Map<string, Accrual>>();
@@ -118,13 +121,16 @@ export function netAccruals(rows: readonly ODataEntity[]): { due: Accrual[]; exc
     const due = date(r["СрокУплаты"]);
     const periodEnd = date(r["ПериодРасчета"]) ?? "";
     if (!due) continue;
-    const patent = text(r["ДокументПатент_Key"]);
-    const group = `${accountKey}|${patent === EMPTY_GUID ? "" : patent}`;
+    const patent = text(r["ДокументПатент_Key"]).replace(EMPTY_GUID, "");
+    const group = `${accountKey}|${patent}`;
+    // Разные периоды — разные обязанности, даже на одном счёте и сроке: налог за год и аванс за 1 квартал оба
+    // платятся 28 апреля. У патента период строки сторно другой, поэтому внутри патента ключ — только срок.
+    const line = patent ? due : `${due}|${periodEnd}`;
     const byDue = groups.get(group) ?? new Map<string, Accrual>();
     groups.set(group, byDue);
-    const known = byDue.get(due);
+    const known = byDue.get(line);
     const amount = num(r["Начислено"]);
-    if (!known) byDue.set(due, { accountKey, due, periodEnd, amount });
+    if (!known) byDue.set(line, { accountKey, due, periodEnd, amount, patent: !!patent });
     else {
       // Период строки — по начислению, а не по сторно, которое записано более поздним периодом.
       if (amount > 0 && (known.amount <= 0 || periodEnd > known.periodEnd)) known.periodEnd = periodEnd;
@@ -136,7 +142,8 @@ export function netAccruals(rows: readonly ODataEntity[]): { due: Accrual[]; exc
     const rest = [...byDue.values()]
       .map((a) => ({ ...a, amount: money(a.amount) }))
       .filter((a) => a.amount !== 0);
-    for (const minus of rest.filter((a) => a.amount < 0)) {
+    // Соседнюю дату сторно ищет только внутри патента; у остальных налогов остаток показывается как есть.
+    for (const minus of rest.filter((a) => a.amount < 0 && a.patent)) {
       const near = rest
         .filter((a) => a.amount > 0 && daysBetween(a.due, minus.due) <= REVERSAL_DAYS)
         .sort((a, b) => daysBetween(a.due, minus.due) - daysBetween(b.due, minus.due));
@@ -308,8 +315,11 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
   }
   if (!regime.regimes.length)
     notes.push(
-      "Режим не определён — сроки УСН из справочника не показаны. Назовите режим параметром regime " +
-        "(usn_income, usn_income_expense, psn, osno).",
+      regime.system
+        ? `Режим по настройкам 1С — «${regime.system}»: сроков для него в справочнике нет, кроме взносов ИП за себя. ` +
+            "Показано начисленное в 1С."
+        : "Режим не определён — сроки УСН из справочника не показаны. Назовите режим параметром regime " +
+            "(usn_income, usn_income_expense, psn, osno).",
     );
 
   // ─── Платежи ──────────────────────────────────────────────────────────────
@@ -320,6 +330,8 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
     // Начисление — факт: название и статья берутся из справочника, даже если режим не определён.
     const rule = reference.rules.find(
       (r) =>
+        r.kind === "payment" &&
+        !!account?.code &&
         r.taxpayers.includes(taxpayer) &&
         r.match?.account === account?.code &&
         r.match?.periodEnd === a.periodEnd,
@@ -375,33 +387,23 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
           date(r["ДатаОкончания"]) === rule.period.to &&
           date(r["ДатаНачала"]) === rule.period.from,
       );
-      // Отправленный важнее подготовленного; среди равных — корректирующий и подписанный позже.
-      const best = [...found].sort(
-        (a, b) =>
-          Number(!!date(b["ДатаОтправки"])) - Number(!!date(a["ДатаОтправки"])) ||
-          num(b["Вид"]) - num(a["Вид"]) ||
-          text(b["ДатаПодписи"]).localeCompare(text(a["ДатаПодписи"])),
-      )[0];
+      const documents = found
+        .map((r) => {
+          const [signed, sent] = [date(r["ДатаПодписи"]), date(r["ДатаОтправки"])];
+          return { ...(signed ? { signed } : {}), ...(sent ? { sent } : {}), corrective: num(r["Вид"]) > 0 };
+        })
+        .sort(
+          (a, b) =>
+            Number(a.corrective) - Number(b.corrective) || (a.signed ?? "").localeCompare(b.signed ?? ""),
+        );
       const status: ReportStatus = !journal
         ? "unknown"
-        : !best
+        : !documents.length
           ? "not_found"
-          : date(best["ДатаОтправки"])
+          : documents.some((d) => "sent" in d)
             ? "sent"
             : "prepared";
-      const [signed, sent] = best ? [date(best["ДатаПодписи"]), date(best["ДатаОтправки"])] : [];
-      items.push({
-        ...ruleItem(rule, status),
-        ...(best
-          ? {
-              report: {
-                ...(signed ? { signed } : {}),
-                ...(sent ? { sent } : {}),
-                ...(num(best["Вид"]) > 0 ? { corrective: true } : {}),
-              },
-            }
-          : {}),
-      });
+      items.push({ ...ruleItem(rule, status), ...(documents.length ? { reports: documents } : {}) });
     }
     if (reports.length && journal)
       notes.push(

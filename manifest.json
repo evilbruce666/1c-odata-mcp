@@ -7917,20 +7917,26 @@
                 "condition": {
                   "type": "string"
                 },
-                "report": {
-                  "type": "object",
-                  "properties": {
-                    "signed": {
-                      "type": "string"
+                "reports": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "signed": {
+                        "type": "string"
+                      },
+                      "sent": {
+                        "type": "string"
+                      },
+                      "corrective": {
+                        "type": "boolean"
+                      }
                     },
-                    "sent": {
-                      "type": "string"
-                    },
-                    "corrective": {
-                      "type": "boolean"
-                    }
-                  },
-                  "additionalProperties": {}
+                    "required": [
+                      "corrective"
+                    ],
+                    "additionalProperties": {}
+                  }
                 },
                 "notices": {
                   "type": "array",
