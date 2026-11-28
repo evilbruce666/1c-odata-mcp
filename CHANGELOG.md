@@ -5,6 +5,8 @@
 
 ## [Не выпущено]
 
+## [1.3.0] — 2026-11-28
+
 **Главное.** Налоговый календарь (что заплатить и сдать, порог НДС на УСН) и чтение регистров. Смена адреса, телефона или ОГРН контрагента не стирает соседние данные, общие инструменты записи не обходят проверки. 93 инструмента: 45 чтения, 48 записи. [Подробности выпуска](docs/RELEASE-1.3.md).
 
 ### Что изменится при обновлении
@@ -1111,7 +1113,8 @@ POST-тестом (create → read → mark) на реальной базе — 
   коды плана счетов); вежливый фоллбэк при отсутствии объекта в «Составе OData».
 - npm-пакет с запуском через `npx 1c-odata-mcp`.
 
-[Не выпущено]: https://github.com/evilbruce666/1c-odata-mcp/compare/v1.2.0...HEAD
+[Не выпущено]: https://github.com/evilbruce666/1c-odata-mcp/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/evilbruce666/1c-odata-mcp/compare/v0.17.0...v1.0.0

@@ -1,6 +1,6 @@
 {
   "name": "1c-odata-mcp",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "MCP server for 1C:Enterprise (1С) over standard OData: connect Claude, ChatGPT (Codex), Cursor and other AI clients to 1C:Accounting 3.0 and 1C:Trade Management 11 without changing the configuration. 93 tools, read-only by default, write with preview.",
   "mcpName": "io.github.evilbruce666/1c-odata-mcp",
   "type": "module",
