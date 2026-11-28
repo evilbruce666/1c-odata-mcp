@@ -1451,6 +1451,23 @@ export const taxCalendarResultSchema = z
       .object({ years: z.array(z.number()), missing: z.array(z.number()), checkedAt: z.string() })
       .passthrough(),
     notCovered: z.array(z.string()),
+    vatThreshold: z
+      .array(
+        z
+          .object({
+            year: z.number(),
+            through: z.string(),
+            limit: z.number(),
+            appliesTo: z.string(),
+            basis: z.string(),
+            incomeUsn: z.number(),
+            incomePatent: z.number().optional(),
+            income: z.number(),
+            exceeded: z.boolean().optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
   })
   .passthrough();
 

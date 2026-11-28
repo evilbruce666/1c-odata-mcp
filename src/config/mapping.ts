@@ -98,6 +98,9 @@ export const REGISTERS = {
   taxSettings: ["InformationRegister_НастройкиСистемыНалогообложения"],
   /** Расчёт налога УСН по кварталам, плоские записи: объект налогообложения, когда настройки не опубликованы. */
   usnCalculation: ["InformationRegister_РасчетНалогаУСН_RecordType"],
+  /** Книги доходов — для порога НДС на УСН (виртуальная таблица Turnovers). */
+  usnIncomeBook: ["AccumulationRegister_КнигаУчетаДоходовИРасходов"],
+  patentIncomeBook: ["AccumulationRegister_КнигаУчетаДоходовПатент"],
   /** Начисления на единый налоговый счёт со сроками уплаты (плоские записи). */
   taxAccruals: ["InformationRegister_РасчетНачисленияНалоговНаЕНС_RecordType"],
 } as const;

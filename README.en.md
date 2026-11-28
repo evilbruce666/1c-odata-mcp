@@ -18,7 +18,7 @@ you don't read Russian, your assistant can read it for you.
 - **1C:Accounting 3.0** — full support: a morning cash-and-debts brief, overdue receivables and payables, unpaid
   invoices, a month-end close check traced down to the document, account ledger cards, trial balance, postings,
   reconciliation statements, revenue and gross margin by item group and period with year-over-year comparison, sales,
-  taxes; write of documents and catalogs with preview and confirmation, including payments split across contracts,
+  taxes and a tax calendar (what to pay and file); write of documents and catalogs with preview and confirmation, including payments split across contracts,
   transfers between own accounts and card acquiring receipts. Also 1C:Accounting for Belarus through the
   chart-of-accounts settings.
 - **1C:Trade Management 11** (verified on 11.5) — stock by warehouse and item group (with cost from the «Себестоимость

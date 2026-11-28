@@ -14,6 +14,8 @@ export const SYNONYMS: Readonly<Record<string, { bp?: string; ut?: string }>> = 
   AccumulationRegister_ДенежныеСредстваКВыплате: { ut: "Денежные средства к выплате" },
   AccumulationRegister_ДенежныеСредстваНаличные: { ut: "Денежные средства (наличные)" },
   AccumulationRegister_Закупки: { ut: "Закупки" },
+  AccumulationRegister_КнигаУчетаДоходовИРасходов: { bp: "Книга учета доходов и расходов (раздел I)" },
+  AccumulationRegister_КнигаУчетаДоходовПатент: { bp: "Книга учета доходов (патент)" },
   AccumulationRegister_ОплатаСчетов: { bp: "Оплата счетов" },
   AccumulationRegister_РасчетыСКлиентами: { ut: "Расчеты с клиентами" },
   AccumulationRegister_РасчетыСКлиентамиПоСрокам: { ut: "Расчеты с клиентами по срокам" },

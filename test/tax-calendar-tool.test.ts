@@ -18,6 +18,8 @@ const SET = {
   journal: "Document_РегламентированныйОтчет",
   notices: "Document_УведомлениеОбИсчисленныхСуммахНалогов",
   calc: "InformationRegister_РасчетНалогаУСН_RecordType",
+  usnBook: "AccumulationRegister_КнигаУчетаДоходовИРасходов",
+  patentBook: "AccumulationRegister_КнигаУчетаДоходовПатент",
 } as const;
 const ACCOUNTS = [
   { Ref_Key: USN, Code: "68.12", Description: "Налог при УСН" },
@@ -76,18 +78,32 @@ interface Calendar {
   warnings: string[];
   notes: string[];
   missing: string[];
+  vatThreshold?: Array<{
+    year: number;
+    through: string;
+    limit: number;
+    basis: string;
+    incomeUsn: number;
+    incomePatent?: number;
+    income: number;
+    exceeded?: boolean;
+  }>;
   rulesCoverage: { years: number[]; missing: number[] };
   notCovered: string[];
 }
 
-/** Сколько запросов к 1С сделал последний вызов. */
+/** Сколько запросов к 1С сделал последний вызов, и обороты книг доходов, которые он спрашивал. */
 let requests = 0;
+let turnovers: Array<{ base: string; fn?: string; args: Record<string, string> }> = [];
+/** Строки книги дохода по году начала оборотов. */
+type Books = Partial<Record<string, Record<number, number>>>;
 
 async function calendar(
   rows: Rows = {},
   args: Record<string, unknown> = {},
-  options: { type?: string; registered?: string } = {},
+  options: { type?: string; registered?: string; books?: Books } = {},
 ) {
+  turnovers = [];
   const base: Rows = {
     [SET.org]: [
       {
@@ -103,6 +119,8 @@ async function calendar(
     [SET.journal]: [],
     [SET.notices]: [],
     [SET.calc]: [],
+    [SET.usnBook]: [],
+    [SET.patentBook]: [],
     ...rows,
   };
   const { result, violations, fake } = await callTool(
@@ -111,6 +129,16 @@ async function calendar(
     (q) => {
       const own = base[q.base];
       if (own instanceof Error) throw own;
+      if (q.base === SET.usnBook || q.base === SET.patentBook) {
+        turnovers.push({ base: q.base, ...(q.fn ? { fn: q.fn } : {}), args: q.args });
+        const year = Number(/\d{4}/.exec(q.args["StartPeriod"] ?? "")?.[0]);
+        const income = options.books?.[q.base]?.[year];
+        if (income === undefined) return own;
+        // Графа 4 книги УСН — все поступления: в доход она не идёт.
+        return q.base === SET.usnBook
+          ? [{ Графа4Turnover: income * 3, Графа5Turnover: income }]
+          : [{ Графа4Turnover: income }];
+      }
       return own;
     },
   );
@@ -377,9 +405,9 @@ describe("уведомления", () => {
 
 describe("запросы к 1С", () => {
   // Основной тест норм проходит короткую ветку: у синтетических настроек нет УСН. Здесь — все источники.
-  it("полная ветка — не больше девяти, и режим читается одним запросом на все периоды", async () => {
+  it("полная ветка ИП — не больше тринадцати (из них четыре — книги доходов за два года), режим одним запросом на все периоды", async () => {
     await calendar({ [SET.accruals]: [accrual(USN, "2026-12-31", "2027-04-28", 1)] }, { from: "2026-01-01" });
-    expect(requests).toBeLessThanOrEqual(9);
+    expect(requests).toBeLessThanOrEqual(13);
   });
 
   it("без регистра настроек — расчёт и патенты читаются по разу, а не на каждую дату", async () => {
@@ -414,5 +442,102 @@ describe("границы", () => {
     const { result } = await callTool(TOOL, {}, undefined, "ut11");
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain("налоговому учёту Бухгалтерии");
+  });
+});
+
+describe("порог НДС на УСН", () => {
+  const notPayer = setting({ ПлательщикНДСПрименяющийУСН: false });
+  const vatWarnings = (c: Calendar) => c.warnings.filter((w) => w.startsWith("Порог НДС"));
+
+  it("ИП: доход УСН и патента складывается, превышение за прошлый год — предупреждение", async () => {
+    const c = await calendar(
+      { [SET.settings]: [setting({ ПлательщикНДСПрименяющийУСН: false, ПрименяетсяУСНПатент: true })] },
+      {},
+      { books: { [SET.usnBook]: { 2026: 15_000_000, 2027: 100 }, [SET.patentBook]: { 2026: 6_000_000 } } },
+    );
+    expect(c.vatThreshold).toMatchObject([
+      {
+        year: 2026,
+        through: "2026-12-31",
+        incomeUsn: 15_000_000,
+        incomePatent: 6_000_000,
+        income: 21_000_000,
+        limit: 20_000_000,
+        exceeded: true,
+        basis: "абз. 5 п. 1 ст. 145 НК РФ",
+      },
+      { year: 2027, through: "2027-01-15", income: 100, exceeded: false, basis: "абз. 3 п. 5 ст. 145 НК РФ" },
+    ]);
+    expect(vatWarnings(c)).toHaveLength(1);
+    expect(vatWarnings(c)[0]).toContain("освобождения от НДС в 2027 году нет");
+    expect(vatWarnings(c)[0]).toContain("не плательщик НДС — проверьте");
+  });
+
+  it("обороты — по своей организации, с начала года по сегодня, через функцию Turnovers", async () => {
+    await calendar({ [SET.settings]: [notPayer] }, {}, { type: "ЮридическоеЛицо" });
+    expect(turnovers).toMatchObject([
+      { base: SET.usnBook, fn: "Turnovers" },
+      { base: SET.usnBook, fn: "Turnovers" },
+    ]);
+    expect(turnovers[1]!.args).toMatchObject({
+      StartPeriod: "datetime'2027-01-01T00:00:00'",
+      EndPeriod: "datetime'2027-01-15T23:59:59'",
+      Condition: `Организация_Key eq guid'${ORG}'`,
+    });
+  });
+
+  it("превышение в этом году называет начало обязанности и не определяет месяц", async () => {
+    const c = await calendar(
+      { [SET.settings]: [notPayer] },
+      {},
+      { type: "ЮридическоеЛицо", books: { [SET.usnBook]: { 2027: 20_000_000.01 } } },
+    );
+    expect(vatWarnings(c)).toHaveLength(1);
+    expect(vatWarnings(c)[0]).toContain("с 1-го числа месяца после месяца превышения");
+  });
+
+  it("ровно порог — не превышение; приближение предупреждением не бывает", async () => {
+    const c = await calendar(
+      { [SET.settings]: [notPayer] },
+      {},
+      { type: "ЮридическоеЛицо", books: { [SET.usnBook]: { 2026: 20_000_000, 2027: 19_999_999 } } },
+    );
+    expect(c.vatThreshold!.map((f) => f.exceeded)).toEqual([false, false]);
+    expect(vatWarnings(c)).toEqual([]);
+  });
+
+  it("книга патента не читается — «не превышен» не говорится, причина названа один раз", async () => {
+    const c = await calendar(
+      { [SET.settings]: [notPayer], [SET.patentBook]: new Error("нет прав") },
+      {},
+      { books: { [SET.usnBook]: { 2026: 21_000_000, 2027: 5 } } },
+    );
+    expect(c.vatThreshold!.map((f) => f.exceeded)).toEqual([true, undefined]);
+    expect(c.vatThreshold![1]).not.toHaveProperty("incomePatent");
+    expect(c.missing.filter((m) => m.startsWith("Доход по патенту"))).toHaveLength(1);
+  });
+
+  it("в книгах нет записей — «не проверен», а не ноль", async () => {
+    const c = await calendar({ [SET.settings]: [notPayer] });
+    expect(c.vatThreshold).toBeUndefined();
+    expect(c.notes.filter((n) => /Порог НДС за 202[67] год не проверен/.test(n))).toHaveLength(2);
+  });
+
+  it("год до регистрации не проверяется", async () => {
+    const c = await calendar(
+      { [SET.settings]: [notPayer] },
+      {},
+      { registered: "2027-01-10", books: { [SET.usnBook]: { 2027: 1 } } },
+    );
+    expect(c.vatThreshold!.map((f) => f.year)).toEqual([2027]);
+    expect(c.notes.join(" ")).not.toContain("2026 год не проверен");
+  });
+
+  it("плательщику НДС и не на УСН порог не нужен: книги не читаются", async () => {
+    for (const extra of [{ ПлательщикНДСПрименяющийУСН: true }, { СистемаНалогообложения: "Общая" }]) {
+      const c = await calendar({ [SET.settings]: [setting(extra)] });
+      expect(c.vatThreshold).toBeUndefined();
+      expect(turnovers).toEqual([]);
+    }
   });
 });

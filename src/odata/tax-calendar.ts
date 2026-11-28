@@ -7,6 +7,8 @@ import { describeObject, refuseOnTrade, requireEntity } from "./publication.js";
 import { and, cmp, odataGuid } from "./query.js";
 import { taxRules, type TaxRule } from "./tax-calendar-rules.js";
 import { taxRegimeReader, type TaxRegime, type TaxRegimeKey, type TaxRegimeResult } from "./tax-regime.js";
+import { turnoversPath } from "./item-sales.js";
+import { readVatThreshold, type VatThresholdFact, type VatThresholdResult } from "./vat-threshold.js";
 import type { ODataEntity } from "../types/odata.js";
 
 /**
@@ -61,6 +63,8 @@ export interface TaxCalendar {
   missing: string[];
   rulesCoverage: { years: number[]; missing: number[]; checkedAt: string };
   notCovered: string[];
+  /** Доход по книгам 1С рядом с порогом НДС — для УСН, пока организация не плательщик НДС. */
+  vatThreshold?: VatThresholdFact[];
 }
 
 export interface CalendarInput {
@@ -485,6 +489,34 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
     }
   }
 
+  // ─── Порог НДС на УСН ─────────────────────────────────────────────────────
+  let vat: VatThresholdResult | undefined;
+  if (regime.regimes.some((k) => k.startsWith("usn")) && now.regime?.vatPayerOnUsn !== true) {
+    vat = await readVatThreshold({
+      taxpayer,
+      today,
+      registered,
+      vatPayer: now.regime?.vatPayerOnUsn,
+      thresholds: reference.vatThreshold,
+      turnover: (book, since, until) =>
+        optional(
+          s,
+          book === "usn" ? REGISTERS.usnIncomeBook : REGISTERS.patentIncomeBook,
+          book === "usn"
+            ? "Порог НДС не проверен"
+            : "Доход по патенту в порог НДС не прибавлен (нужен, если патент применялся)",
+          async (set) => {
+            const path = turnoversPath(set, since, until, cmp("Организация_Key", "eq", odataGuid(orgRef)));
+            // Графа 4 нужна ради строки: по одной графе 5 при нулевом доходе 1С не вернула бы ничего.
+            const select = book === "usn" ? ["Графа4Turnover", "Графа5Turnover"] : ["Графа4Turnover"];
+            return (await fetchAll(s.conn.client, path, { select }, MAX_ROWS, MAX_ROWS)).rows;
+          },
+        ),
+    });
+    warnings.push(...vat.warnings);
+    notes.push(...vat.notes);
+  }
+
   const years: number[] = [];
   for (let y = Number(from.slice(0, 4)); y <= Number(to.slice(0, 4)); y++) years.push(y);
   const uncovered = years.filter((y) => !reference.dueYears.includes(y));
@@ -505,12 +537,14 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
     items: items.sort((a, b) => a.due.localeCompare(b.due) || a.title.localeCompare(b.title, "ru")),
     warnings,
     notes,
-    missing: s.missing,
+    // Одна и та же книга нужна за два года: причина называется один раз.
+    missing: [...new Set(s.missing)],
     rulesCoverage: {
       years: years.filter((y) => reference.dueYears.includes(y)),
       missing: uncovered,
       checkedAt: reference.checkedAt,
     },
     notCovered: reference.notCovered,
+    ...(vat?.facts.length ? { vatThreshold: vat.facts } : {}),
   };
 }

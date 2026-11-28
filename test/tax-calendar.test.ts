@@ -55,6 +55,18 @@ describe("tax-calendar.json", () => {
     expect(missing, "добавьте в tax-calendar.json правила на эти годы по НК РФ").toEqual([]);
   });
 
+  it("пороги НДС есть на каждый год сроков и на год перед ним", () => {
+    const { inYear, previousYear } = (
+      data as unknown as {
+        vatThreshold: Record<"inYear" | "previousYear", { limits: Record<string, number> }>;
+      }
+    ).vatThreshold;
+    for (const year of requiredYears(new Date())) {
+      expect(inYear.limits[String(year)], `в течение ${year}`).toBeGreaterThan(0);
+      expect(previousYear.limits[String(year - 1)], `доход за ${year - 1}`).toBeGreaterThan(0);
+    }
+  });
+
   it("декабрь требует следующий год", () => {
     expect(requiredYears(day("2027-11-30"))).toEqual([2027]);
     expect(requiredYears(day("2027-12-01"))).toEqual([2027, 2028]);

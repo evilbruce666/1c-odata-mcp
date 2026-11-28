@@ -25,6 +25,12 @@ export interface TaxRules {
   dueYears: number[];
   covers: string;
   notCovered: string[];
+  /** Порог доходов для освобождения от НДС на УСН по годам дохода. */
+  vatThreshold: {
+    edition: string;
+    inYear: { basis: string; limits: Record<string, number> };
+    previousYear: { basis: string; limits: Record<string, number> };
+  };
   rules: TaxRule[];
 }
 
