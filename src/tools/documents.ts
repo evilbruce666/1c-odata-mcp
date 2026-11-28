@@ -30,6 +30,7 @@ import {
   type PolyMode,
 } from "../odata/poly-counterparty.js";
 import { searchDocumentsResultSchema, odataEntitySchema } from "../schemas/output.js";
+import { withoutBinary } from "./binary-fields.js";
 import { addPageNames, compactDocument, documentRefs, type DocumentRefs } from "./document-names.js";
 
 /** Входящий номер — номер документа контрагента (накладной поставщика, платёжки покупателя). */
@@ -501,7 +502,7 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
         "Ref_Key берётся из search_documents или истории взаиморасчётов. compact=true — без пустых значений и " +
         "служебных ключей, с названиями рядом со ссылками (Контрагент_Название, Номенклатура_Название…): так короче " +
         "и понятнее; без него — сущность 1С как есть. У Document_РегламентнаяОперация выполнение показывает " +
-        "Состояние, а не Posted.",
+        "Состояние, а не Posted. Двоичные поля («…_Base64Data») не возвращаются, их имена — в omittedBinary.",
       inputSchema: z.object({
         database: databaseField,
         entitySet: z.string().describe("Имя документа, напр. Document_РеализацияТоваровУслуг"),
@@ -512,16 +513,25 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
           .describe(
             "true — без пустых значений, с названиями рядом со ссылками; по умолчанию — сущность 1С как есть",
           ),
+        includeBinary: z
+          .boolean()
+          .optional()
+          .describe(
+            "true — вернуть и двоичные поля («…_Base64Data»). Нужно программе, а не модели: они могут занимать " +
+              "десятки тысяч знаков",
+          ),
       }),
       outputSchema: odataEntitySchema,
     },
-    ({ database, entitySet, ref, compact }) =>
+    ({ database, entitySet, ref, compact, includeBinary }) =>
       guard("read.document.get_document", async () => {
         const conn = ctx.db(database);
         ensurePublished(await conn.available(), entitySet);
         const path = `${entitySet}(guid'${ref.replace(/[{}']/g, "")}')${buildQuery({})}`;
         const entity = await conn.client.getEntity(path);
-        return ok(compact ? await compactDocument(conn, entity) : entity);
+        const read = includeBinary ? { entity, omitted: [] } : withoutBinary(entity);
+        const shown = compact ? await compactDocument(conn, read.entity) : read.entity;
+        return ok(read.omitted.length ? { ...shown, omittedBinary: read.omitted } : shown);
       }),
   );
 }
