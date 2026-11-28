@@ -62,3 +62,53 @@ describe("publish-registry.yml: реестр MCP", () => {
     expect(npm).toMatch(/node-version: 24\n/);
   });
 });
+
+// Подпись релиза: у задачи OIDC-токен и право записи в релиз — поэтому код репозитория не исполняется, тег
+// проверяется до всего остального, а подписывается только архив, совпавший с npm.
+const sign = readFileSync(".github/workflows/sign-release.yml", "utf8");
+
+describe("sign-release.yml: подписи файлов релиза", () => {
+  it("запускается тегом или вручную; тег из события — только через окружение и проверяется первым", () => {
+    expect(sign).toMatch(/^on:\n {2}push:\n {4}tags: \["v\*"\]\n {2}workflow_dispatch:\n/m);
+    expect(sign).not.toMatch(/workflow_run|pull_request|branches:/);
+    expect(sign).toMatch(
+      /\n {6}TAG: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.tag \|\| github\.ref_name \}\}\n/,
+    );
+    expect(sign).not.toMatch(/run: [|>][^]*\$\{\{/);
+    const check = sign.indexOf('[[ "$TAG" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]');
+    expect(check).toBeGreaterThan(0);
+    for (const later of ["curl", "gh release", "cosign-installer"])
+      expect(sign.indexOf(later)).toBeGreaterThan(check);
+  });
+
+  it("код репозитория не скачивается и не исполняется, секретов нет", () => {
+    expect(sign).not.toMatch(/actions\/checkout|\bnpm (ci|install|test|run|publish)\b|\bnpx\b/);
+    expect(sign).not.toContain("secrets.");
+  });
+
+  it("права — только запись в релиз и OIDC", () => {
+    expect(sign).toContain("\npermissions: {}\n");
+    const permissions = /\n {4}permissions:\n((?: {6}.*\n)+)/.exec(sign)![1]!;
+    expect(permissions.match(/^ {6}[\w-]+: \w+/gm)!.map((l) => l.trim())).toEqual([
+      "contents: write",
+      "id-token: write",
+    ]);
+  });
+
+  it("cosign закреплён версией; архив сверен с npm до подписи; каждая подпись проверяется", () => {
+    expect(sign).toMatch(/cosign-release: v\d+\.\d+\.\d+\n/);
+    const integrity = sign.indexOf('[ "$actual" = "$expected" ]');
+    expect(integrity).toBeGreaterThan(sign.indexOf(".dist.integrity"));
+    expect(sign.indexOf("cosign sign-blob")).toBeGreaterThan(integrity);
+    expect(sign.indexOf("cosign verify-blob")).toBeGreaterThan(sign.indexOf("cosign sign-blob"));
+    expect(sign).toContain("--certificate-oidc-issuer https://token.actions.githubusercontent.com");
+    // Scorecard (Signed-Releases) узнаёт подпись по расширению файла в релизе.
+    expect(sign).toMatch(/--bundle "\$f\.sigstore\.json"/);
+    expect(sign).toMatch(/gh release upload[^\n]*\*\.sigstore\.json/);
+  });
+
+  it("publish.yml и реестр подписи не трогают: сбой подписи не мешает выпуску", () => {
+    expect(npm).not.toContain("cosign");
+    expect(job).not.toContain("cosign");
+  });
+});

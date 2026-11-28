@@ -63,6 +63,17 @@
   каждой задачи заданы явно и минимальны. Обновления действий и зависимостей предлагает Dependabot.
 - К каждому релизу на GitHub приложен SBOM (`sbom.cdx.json`, CycloneDX) — состав зависимостей, которые ставятся
   вместе с пакетом.
+- Начиная с 1.3.0 к релизу приложены npm-архив пакета (ровно тот, что отдаёт npm) и подписи архива и SBOM без
+  ключей, через sigstore (`*.sigstore.json`). Подпись выдана workflow `sign-release.yml` этого репозитория. Проверка
+  [cosign](https://docs.sigstore.dev/cosign/system_config/installation/), например для 1.3.0:
+
+  ```bash
+  cosign verify-blob 1c-odata-mcp-1.3.0.tgz --bundle 1c-odata-mcp-1.3.0.tgz.sigstore.json \
+    --certificate-identity-regexp '^https://github\.com/evilbruce666/1c-odata-mcp/\.github/workflows/sign-release\.yml@refs/(tags/v[0-9.]+|heads/main)$' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+  ```
+
+  `heads/main` — у релизов, подписанных вручную после выхода (1.3.0), `tags/v…` — у подписанных при выпуске.
 - Код, который попадает в пакет, проверяется CodeQL при каждом изменении и раз в неделю; практики репозитория —
   OpenSSF Scorecard. Публикация в официальный реестр MCP идёт тем же тегом и только после того, как пакет появился
   в npm.

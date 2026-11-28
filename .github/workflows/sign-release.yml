@@ -1,0 +1,80 @@
+name: Sign release
+
+# Подпись файлов GitHub-релиза без ключей (sigstore): npm-архив пакета — ровно тот, что отдаёт npm, — и SBOM. Подпись
+# привязана к этому workflow и репозиторию через сертификат GitHub OIDC; ключей и секретов нет. Проверка —
+# SECURITY.md, «Сборка и выпуск».
+#
+# По тегу ждёт, пока publish.yml опубликует пакет и создаст релиз. Вручную (Run workflow, tag) подписывает уже
+# выпущенный релиз. Код репозитория не скачивается и не исполняется: только файлы релиза и npm.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Тег выпущенного релиза, например v1.3.0"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # файлы подписей в релиз
+      id-token: write # OIDC для сертификата sigstore
+    env:
+      # Значение из события — только через окружение, не подстановкой в скрипт.
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Проверить тег
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Не тег выпуска: $TAG"; exit 1; }
+
+      - name: Дождаться пакета в npm и релиза с SBOM
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          for _ in $(seq 1 60); do
+            if curl -fsS -o /dev/null "https://registry.npmjs.org/1c-odata-mcp/$version" &&
+              gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx sbom.cdx.json; then
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "За 30 минут нет пакета $version в npm или релиза $TAG с sbom.cdx.json"
+          exit 1
+
+      - name: Скачать npm-архив и SBOM, сверить архив с npm
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          file="1c-odata-mcp-$version.tgz"
+          curl -fsSL -o "$file" "https://registry.npmjs.org/1c-odata-mcp/-/$file"
+          expected="$(curl -fsS "https://registry.npmjs.org/1c-odata-mcp/$version" | jq -r .dist.integrity)"
+          actual="sha512-$(openssl dgst -sha512 -binary "$file" | base64 -w0)"
+          [ "$actual" = "$expected" ] || { echo "Архив не совпал с dist.integrity в npm"; exit 1; }
+          gh release download "$TAG" --pattern sbom.cdx.json
+
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+        with:
+          cosign-release: v3.1.4
+
+      # Каждая подпись сразу проверяется так же, как её проверит пользователь: тем же workflow этого репозитория.
+      - name: Подписать и проверить подписи
+        run: |
+          set -euo pipefail
+          identity="^https://github\.com/${GITHUB_REPOSITORY}/\.github/workflows/sign-release\.yml@refs/(tags/v[0-9.]+|heads/main)$"
+          for f in 1c-odata-mcp-*.tgz sbom.cdx.json; do
+            cosign sign-blob --yes --bundle "$f.sigstore.json" "$f"
+            cosign verify-blob --bundle "$f.sigstore.json" \
+              --certificate-identity-regexp "$identity" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com "$f"
+          done
+
+      - name: Приложить к релизу
+        run: gh release upload "$TAG" --clobber 1c-odata-mcp-*.tgz ./*.sigstore.json
