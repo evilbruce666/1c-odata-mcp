@@ -1,5 +1,6 @@
 import type { Connection } from "../context.js";
 import { resolveEntity } from "../config/mapping.js";
+import { SYNONYMS } from "../config/synonyms.js";
 import { tradeRefusal, tradeWithoutAccounting } from "./configuration.js";
 
 /**
@@ -61,9 +62,37 @@ export function ensurePublished(available: ReadonlySet<string>, entitySet: strin
   }
 }
 
+const KINDS: Readonly<Record<string, string>> = {
+  Catalog: "справочник",
+  Document: "документ",
+  InformationRegister: "регистр сведений",
+  AccumulationRegister: "регистр накопления",
+  AccountingRegister: "регистр бухгалтерии",
+  ChartOfAccounts: "план счетов",
+  ChartOfCharacteristicTypes: "план видов характеристик",
+};
+
+/**
+ * Объект так, как его искать в «Составе OData»: вид и название, в скобках техническое имя. Таблица записей регистра
+ * («…_RecordType») в составе отдельно не отмечается — называется сам регистр. Без проверенного названия — только имя.
+ */
+export function describeObject(entitySet: string): string {
+  const name = entitySet.replace(/_RecordType$/, "");
+  const synonym = SYNONYMS[name];
+  const kind = KINDS[name.slice(0, name.indexOf("_"))];
+  if (!synonym || !kind) return name;
+  const title =
+    synonym.bp && synonym.ut
+      ? `«${synonym.bp}» (в Управлении торговлей — «${synonym.ut}»)`
+      : `«${synonym.bp ?? synonym.ut}»`;
+  return `${kind} ${title} [${name}]`;
+}
+
 /** Собирает текст вежливого фоллбэка по списку недостающих объектов. */
 export function publicationHelp(missing: NotPublishedError["missing"]): string {
-  const lines = missing.map((m) => `  • ${m.label} (${m.candidates.join(" или ")})`).join("\n");
+  const lines = missing
+    .map((m) => `  • ${m.label}: ${[...new Set(m.candidates.map(describeObject))].join(" или ")}`)
+    .join("\n");
   return (
     "Эти объекты 1С отсутствуют в доступной OData-схеме, поэтому операция недоступна. " +
     "Добавьте их в 1С: «Все функции → Обработки → Настройка стандартного интерфейса OData → вкладка Состав», затем сохраните:\n" +
