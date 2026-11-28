@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Connection } from "../src/context.js";
+import { readRegisterRows } from "../src/odata/register-rows.js";
 import { callTool } from "./helpers/call-tool.js";
 
 const TOOL = "read.schema.read_register";
@@ -240,5 +242,40 @@ describe("в Управлении торговлей регистры тоже �
     expect(got.error).toBeUndefined();
     expect(got.violations).toEqual([]);
     expect(got.base).toBe("AccumulationRegister_ТоварыНаСкладах_RecordType");
+  });
+});
+
+describe("поля с паролями и токенами", () => {
+  const register = "InformationRegister_Проверка";
+  const read = (name: string) =>
+    readRegisterRows(
+      {
+        behavior: { maxRows: 10 },
+        available: async () => new Set([register]),
+        getMetadata: async () => ({
+          entities: new Map([
+            [register, { entitySet: register, properties: [{ name, type: "Edm.String", nullable: true }] }],
+          ]),
+        }),
+        client: { getCollection: async () => ({ value: [] }) },
+      } as unknown as Connection,
+      { register, select: [name] },
+    );
+
+  it("не читаются по имени", async () => {
+    for (const name of [
+      "ПарольДоступа",
+      "Password",
+      "СекретныйКлюч",
+      "КлиентскийСекрет",
+      "ClientSecret",
+      "ТокенДоступа",
+    ])
+      await expect(read(name), name).rejects.toThrow("пароль или токен");
+  });
+
+  it("секретарь — должность, а не секрет", async () => {
+    for (const name of ["Секретарь", "СекретарьКомиссии", "ФИОСекретаря", "Secretary"])
+      await expect(read(name), name).resolves.toMatchObject({ rows: [] });
   });
 });

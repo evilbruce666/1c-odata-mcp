@@ -51,7 +51,8 @@ const REGISTER_CLASSES = new Set([
 ]);
 const RECORDS = "_RecordType";
 /** Поля с паролями и токенами не читаются: модели они не нужны, а ответ уходит в её контекст. */
-const SECRET_FIELD = /парол|password|секрет|secret|токен|token/i;
+/** «Секретарь» — должность, а не секрет. */
+const SECRET_FIELD = /парол|password|секрет(?!ар)|secret(?!ar)|токен|token/i;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/;
 const GUID = /^\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?$/i;
