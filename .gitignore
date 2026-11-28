@@ -8,3 +8,4 @@ dist/
 coverage/
 *.mcpb
 scripts/bench/out/
+__pycache__/
