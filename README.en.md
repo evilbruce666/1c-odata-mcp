@@ -3,6 +3,8 @@
 [Русская версия](README.md) · [Documentation (in Russian)](docs/README.md)
 
 [![Glama](https://glama.ai/mcp/servers/evilbruce666/1c-odata-mcp/badges/score.svg)](https://glama.ai/mcp/servers/evilbruce666/1c-odata-mcp)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/17220/badge)](https://www.bestpractices.dev/projects/17220)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/evilbruce666/1c-odata-mcp/badge)](https://scorecard.dev/viewer/?uri=github.com/evilbruce666/1c-odata-mcp)
 
 **Connect AI to your 1C database without changing its configuration.** This is an MCP server that runs on your own
 computer and lets Claude, ChatGPT desktop (via Codex), Cursor or a local model work with a 1C:Enterprise database

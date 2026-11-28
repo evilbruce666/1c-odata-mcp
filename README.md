@@ -5,6 +5,8 @@
 [![license](https://img.shields.io/npm/l/1c-odata-mcp)](LICENSE)
 [![node](https://img.shields.io/node/v/1c-odata-mcp)](https://nodejs.org)
 [![Glama](https://glama.ai/mcp/servers/evilbruce666/1c-odata-mcp/badges/score.svg)](https://glama.ai/mcp/servers/evilbruce666/1c-odata-mcp)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/17220/badge)](https://www.bestpractices.dev/projects/17220)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/evilbruce666/1c-odata-mcp/badge)](https://scorecard.dev/viewer/?uri=github.com/evilbruce666/1c-odata-mcp)
 
 **Подключите ИИ к своей 1С без изменения конфигурации.** Это MCP-сервер: он запускается у вас на компьютере и даёт
 Claude, ChatGPT для компьютера (через Codex), Cursor или локальной модели доступ к базе 1С через стандартный OData.
