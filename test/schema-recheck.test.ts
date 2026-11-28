@@ -7,6 +7,7 @@ import {
   requireEntity,
   requirePublished,
 } from "../src/odata/publication.js";
+import { registerMetaTools } from "../src/tools/meta.js";
 import { BP30_METADATA_XML, UT11_METADATA_XML } from "./helpers/metadata-snapshot.js";
 
 const SET = "InformationRegister_НастройкиСистемыНалогообложения";
@@ -78,6 +79,24 @@ describe("перечитывание схемы перед отказом «не
     xml = BP30_METADATA_XML;
     later(RECHECK_AFTER_MS + 1);
     await expect(requirePublished(conn, SET)).resolves.toBeUndefined();
+  });
+
+  it("describe_entity — им проверяют, появился ли объект, — тоже видит добавленный", async () => {
+    const conn = connect();
+    await conn.getMetadata();
+    xml = BP30_METADATA_XML;
+    later(RECHECK_AFTER_MS + 1);
+    let handler!: (a: { entitySet: string }) => Promise<{ isError?: boolean }>;
+    registerMetaTools(
+      {
+        registerTool: (name: string, _c: unknown, h: typeof handler) => {
+          if (name === "read.schema.describe_entity") handler = h;
+        },
+      } as never,
+      { db: () => conn, databases: () => [], defaultName: "x" } as never,
+    );
+    expect((await handler({ entitySet: SET })).isError).toBeFalsy();
+    expect(loads).toBe(2);
   });
 
   it("сбой перечитывания — тот же отказ, прежняя схема цела, повтора сразу нет", async () => {

@@ -15,6 +15,7 @@ import {
 } from "./_shared.js";
 import { listOrganizations } from "../odata/orgs.js";
 import type { EntityClass } from "../types/odata.js";
+import { RECHECK_AFTER_MS } from "../odata/publication.js";
 import {
   listDatabasesResultSchema,
   healthCheckResultSchema,
@@ -232,7 +233,11 @@ export function registerMetaTools(server: McpServer, ctx: ServerContext): void {
     },
     ({ database, entitySet }) =>
       guard("read.schema.describe_entity", async () => {
-        const meta = await ctx.db(database).getMetadata();
+        const conn = ctx.db(database);
+        // Этим инструментом проверяют, появился ли объект: после «Состава OData» схема перечитывается.
+        const known = (await conn.getMetadata()).entities.has(entitySet);
+        if (!known) await conn.client.refreshIfOlderThan(RECHECK_AFTER_MS);
+        const meta = await conn.getMetadata();
         const e = meta.entities.get(entitySet);
         if (!e) {
           return fail(
