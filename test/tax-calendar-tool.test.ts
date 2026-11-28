@@ -720,7 +720,19 @@ describe("режим за период обязанности неизвесте
     expect(hiddenWarnings(c)[0]).toMatch(/2027-03-\d\d/);
   });
 
-  it("косвенно: расчёты УСН только с этого года — то же", async () => {
+  it("косвенно: на сегодня расчёт есть, за прошлый год нет — декларация названа", async () => {
+    vi.setSystemTime(new Date("2027-04-10T12:00:00"));
+    const c = await calendar(
+      { [SET.calc]: [{ ПериодРасчета: "2027-03-31T00:00:00", ОбъектНалогообложения: "Доходы" }] },
+      { from: "2027-03-01", to: "2027-04-30" },
+      { ...ORGANIZATION, hidden: [SET.settings] },
+    );
+    expect(c.regime).toMatchObject({ regimes: ["usn_income"], source: "inferred" });
+    expect(hiddenWarnings(c)).toHaveLength(1);
+    for (const title of lost) expect(hiddenWarnings(c)[0]).toContain(title);
+  });
+
+  it("косвенно: на сегодня режим не определён целиком — об этом заметка, второго предупреждения нет", async () => {
     const c = await calendar(
       { [SET.calc]: [{ ПериодРасчета: "2027-03-31T00:00:00", ОбъектНалогообложения: "Доходы" }] },
       { from: "2027-01-15", to: "2027-04-30" },
@@ -751,6 +763,10 @@ describe("режим за период обязанности неизвесте
       ORGANIZATION,
     );
     expect(hiddenWarnings(c)[0]).toContain(lost[0]);
+    // Заметка и предупреждение не спорят: УСН в настройках есть, не хватает объекта.
+    expect(c.notes.join(" ")).toContain("УСН без объекта налогообложения");
+    expect(c.notes.join(" ")).not.toContain("в справочнике нет");
+    expect(hiddenWarnings(c)[0]).not.toContain("Была ли УСН");
   });
 
   it("в прошлом был другой известный режим — сроков УСН за него нет и предупреждать не о чем", async () => {

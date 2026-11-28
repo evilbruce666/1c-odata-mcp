@@ -350,10 +350,13 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
   }
   if (!regime.regimes.length)
     notes.push(
-      regime.system
-        ? `Режим по настройкам 1С — «${regime.system}»: сроков для него в справочнике нет, кроме взносов ИП за себя. ` +
+      regime.system === "Упрощенная" && !now.noContributions
+        ? "В настройках 1С — УСН без объекта налогообложения: сроки УСН не показаны. Назовите режим параметром " +
+            "regime (usn_income или usn_income_expense)."
+        : regime.system
+          ? `Режим по настройкам 1С — «${regime.system}»: сроков для него в справочнике нет, кроме взносов ИП за себя. ` +
             "Показано начисленное в 1С."
-        : "Режим не определён — сроки УСН из справочника не показаны. Назовите режим параметром regime " +
+          : "Режим не определён — сроки УСН из справочника не показаны. Назовите режим параметром regime " +
             "(usn_income, usn_income_expense, psn, osno).",
     );
 
@@ -412,7 +415,7 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
     .sort((a, b) => a.due.localeCompare(b.due) || a.title.localeCompare(b.title, "ru"));
   if (unshown.length && (now.regime || input.regime))
     warnings.push(
-      "Была ли УСН в периоде этих обязанностей, по данным 1С не установлено, поэтому они не показаны — проверьте, " +
+      "По данным 1С нельзя определить режим УСН в периоде этих обязанностей, поэтому они не показаны — проверьте, " +
         `относятся ли они к вам: ${unshown.map((r) => `«${r.title}» — ${r.due}`).join("; ")}. ` +
         "Если режим известен, назовите его параметром regime.",
     );
