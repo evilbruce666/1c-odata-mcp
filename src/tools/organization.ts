@@ -5,6 +5,7 @@ import { CATALOGS, REGISTERS, resolveEntity } from "../config/mapping.js";
 import { resolveOrgOrDefault } from "../odata/orgs.js";
 import { resolveNames } from "../odata/accounting.js";
 import { KI_KINDS } from "../odata/refdata.js";
+import { readTaxRegime, type TaxRegime } from "../odata/tax-regime.js";
 import { fetchAll } from "../odata/pagination.js";
 import { cmp, odataGuid, buildQuery } from "../odata/query.js";
 import type { ODataEntity } from "../types/odata.js";
@@ -28,6 +29,12 @@ function dateOnly(v: unknown): string | undefined {
   const s = typeof v === "string" ? v : undefined;
   if (!s || s.startsWith("0001-01-01")) return undefined;
   return s.slice(0, 10);
+}
+
+/** Сегодня по часам компьютера, а не по UTC: ночью в России дата в UTC ещё вчерашняя. */
+function localDate(d: Date): string {
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
 }
 
 function clean<T extends Record<string, unknown>>(obj: T): Partial<T> {
@@ -144,7 +151,9 @@ export function registerOrganizationTools(server: McpServer, ctx: ServerContext)
         "организации); для ООО и т.п. — из регистра «Ответственные лица организаций», " +
         "если он опубликован в OData (если нет — вернётся заметка, что нужно добавить в " +
         "«Состав OData»). Работает для любой организации базы — по названию (organization) " +
-        "или автоматически, если она в базе одна.",
+        "или автоматически, если она в базе одна. taxRegime — режим налогообложения на сегодня («какой у нас " +
+        "режим»): regimes (usn_income, usn_income_expense, psn), значение 1С в system; source=settings — из " +
+        "настроек 1С, inferred — косвенно по расчёту УСН и патентам, это стоит сказать пользователю.",
       inputSchema: z.object({
         database: databaseField,
         organization: organizationField,
@@ -251,6 +260,19 @@ export function registerOrganizationTools(server: McpServer, ctx: ServerContext)
           }
         }
 
+        // Режим налогообложения: сбой чтения (права, релиз) не должен лишать остальных реквизитов.
+        let taxRegime: TaxRegime | undefined;
+        try {
+          const found = await readTaxRegime(conn, org.ref, localDate(new Date()));
+          taxRegime = found.regime;
+          notes.push(...found.notes);
+        } catch (e) {
+          notes.push(
+            "Не удалось прочитать режим налогообложения (регистр сведений «Система налогообложения» или права " +
+              `на него): ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+
         return ok(
           clean({
             database: conn.cfg.name,
@@ -272,6 +294,7 @@ export function registerOrganizationTools(server: McpServer, ctx: ServerContext)
             bankAccount,
             director,
             accountant,
+            taxRegime,
             notes: notes.length ? notes : undefined,
           }),
         );

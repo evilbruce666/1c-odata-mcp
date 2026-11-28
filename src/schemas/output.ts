@@ -11,6 +11,7 @@
  */
 
 import { z } from "zod";
+import { TAX_REGIME_KEYS } from "../odata/tax-regime.js";
 
 /** Справочник «Контрагенты» — единая форма для find_counterparty/get_counterparty. */
 export const counterpartySchema = z
@@ -1352,6 +1353,18 @@ export const organizationCardResultSchema = z
       .optional(),
     director: z.object({ fullName: z.string() }).passthrough().optional(),
     accountant: z.object({ fullName: z.string() }).passthrough().optional(),
+    taxRegime: z
+      .object({
+        regimes: z.array(z.enum(TAX_REGIME_KEYS)),
+        source: z.enum(["settings", "inferred"]),
+        asOf: z.string(),
+        system: z.string().optional(),
+        settingsFrom: z.string().optional(),
+        calculatedFor: z.string().optional(),
+        vatPayerOnUsn: z.boolean().optional(),
+      })
+      .passthrough()
+      .optional(),
     notes: z.array(z.string()).optional(),
   })
   .passthrough();
