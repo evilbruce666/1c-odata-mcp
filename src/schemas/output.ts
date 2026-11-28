@@ -44,6 +44,9 @@ export const documentSummarySchema = z
     amount: z.number().optional(),
     responsibleRef: z.string().optional(),
     responsible: z.string().optional(),
+    /** Только у регламентных операций: вид операции и состояние выполнения. */
+    operation: z.string().optional(),
+    state: z.string().optional(),
   })
   .passthrough();
 

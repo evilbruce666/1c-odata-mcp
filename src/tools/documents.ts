@@ -63,6 +63,15 @@ const ONLY_EXPLICIT_NAMES: ReadonlySet<string> = new Set([
   "Document_ПересчетТоваров",
 ]);
 
+/** У регламентной операции проведения нет: на двух базах Бухгалтерии Posted=false и у выполненных. */
+const ROUTINE_OPERATION = "Document_РегламентнаяОперация";
+const ROUTINE_FIELDS = ["ВидОперации", "Состояние"] as const;
+
+function routineState(r: ODataEntity): { operation?: string; state?: string } {
+  const [operation, state] = ROUTINE_FIELDS.map((f) => (typeof r[f] === "string" ? r[f] : ""));
+  return { ...(operation ? { operation } : {}), ...(state ? { state } : {}) };
+}
+
 function toSummary(r: ODataEntity, set: string): DocumentSummary {
   const incoming = typeof r[INCOMING_NUMBER] === "string" ? r[INCOMING_NUMBER].trim() : "";
   const responsible = RESPONSIBLE_FIELDS.map((f) => r[f]).find(
@@ -78,6 +87,8 @@ function toSummary(r: ODataEntity, set: string): DocumentSummary {
     deletionMark:
       typeof r[DOC_FIELDS.deletionMark] === "boolean" ? (r[DOC_FIELDS.deletionMark] as boolean) : undefined,
     amount: typeof r[DOC_FIELDS.amount] === "number" ? (r[DOC_FIELDS.amount] as number) : undefined,
+    // Регламентная операция: выполнение показывает состояние, а не признак проведения.
+    ...(set === ROUTINE_OPERATION ? routineState(r) : {}),
     ...(incoming ? { incomingNumber: incoming } : {}),
     ...(responsible ? { responsibleRef: responsible } : {}),
   };
@@ -194,6 +205,7 @@ async function searchSet(conn: Connection, set: string, p: SearchParams): Promis
     DOC_FIELDS.organization,
     ...(cpClientRef || props.has(POLY_COUNTERPARTY) ? [POLY_COUNTERPARTY, `${POLY_COUNTERPARTY}_Type`] : []),
     INCOMING_NUMBER,
+    ...(set === ROUTINE_OPERATION ? ROUTINE_FIELDS : []),
     // Ответственный документа — по схеме: «Ответственный», иначе «Менеджер» (1.1, имя — одним запросом на страницу).
     ...RESPONSIBLE_FIELDS.filter((f) => props.has(f)).slice(0, 1),
   ].filter((f) => props.has(f));
@@ -294,7 +306,8 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
         "«документ №33»). number — номер как его называет человек: «33» находит 0000-000033, а также " +
         "входящий номер документа контрагента (накладной поставщика). Нумерация в 1С каждый год своя — " +
         "по одному номеру обычно несколько документов разных лет; уточняйте период. Редкие виды " +
-        "(зарплата, регламентные операции) — только через entitySet. " +
+        "(зарплата, регламентные операции) — только через entitySet. У регламентной операции posted=false и у " +
+        "выполненной: смотрите state («Выполнено», «Пропущено») и operation. " +
         "Ответ постраничный: count и returned — строк на этой странице, а не всего, страница короче limit, если не помещается. " +
         "При nextOffset читайте дальше; truncated без nextOffset значит, что в видах из cappedSets выборка упёрлась в ODATA_ANALYTICS_MAX_ROWS " +
         "при отборе на стороне коннектора (контрагент, номер): сузьте период или укажите entitySet. Посчитать сумму за период проще " +
@@ -358,6 +371,11 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
         const conn = ctx.db(database);
         const available = await conn.available();
         if (entitySet) ensurePublished(available, entitySet);
+        if (entitySet === ROUTINE_OPERATION && postedOnly)
+          throw new InputError(
+            "У регламентных операций признак проведения не означает выполнение (он не стоит и у выполненных): " +
+              "уберите postedOnly и смотрите state в строках.",
+          );
         const q = number === undefined ? undefined : parseNumberQuery(number);
         if (number !== undefined && !q) throw new InputError("Пустой номер документа.");
         const orgKey = organization ? (await resolveOrganization(conn, organization)).ref : undefined;
@@ -482,7 +500,8 @@ export function registerDocumentTools(server: McpServer, ctx: ServerContext): vo
         "Возвращает документ по типу и Ref_Key со всеми полями, включая табличные части. " +
         "Ref_Key берётся из search_documents или истории взаиморасчётов. compact=true — без пустых значений и " +
         "служебных ключей, с названиями рядом со ссылками (Контрагент_Название, Номенклатура_Название…): так короче " +
-        "и понятнее; без него — сущность 1С как есть.",
+        "и понятнее; без него — сущность 1С как есть. У Document_РегламентнаяОперация выполнение показывает " +
+        "Состояние, а не Posted.",
       inputSchema: z.object({
         database: databaseField,
         entitySet: z.string().describe("Имя документа, напр. Document_РеализацияТоваровУслуг"),
