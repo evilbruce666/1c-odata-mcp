@@ -130,6 +130,28 @@ describe("отборы: неприменимый — отказ, а не про�
     );
   });
 
+  it("дата без времени в «равно» и «не равно» — весь день, а не полночь", async () => {
+    const filter = async (op: string, value = "2030-03-31") =>
+      (
+        await read({
+          filters: [
+            { field: "СрокУплаты", op, value },
+            { field: "Начислено", op: "gt", value: 0 },
+          ],
+        })
+      ).params!.get("$filter");
+    await expect(filter("eq")).resolves.toBe(
+      "(СрокУплаты ge datetime'2030-03-31T00:00:00' and СрокУплаты le datetime'2030-03-31T23:59:59') and Начислено gt 0",
+    );
+    await expect(filter("ne")).resolves.toBe(
+      "(СрокУплаты lt datetime'2030-03-31T00:00:00' or СрокУплаты gt datetime'2030-03-31T23:59:59') and Начислено gt 0",
+    );
+    // С временем — ровно этот момент.
+    await expect(filter("eq", "2030-03-31T12:00:00")).resolves.toBe(
+      "СрокУплаты eq datetime'2030-03-31T12:00:00' and Начислено gt 0",
+    );
+  });
+
   it("составная ссылка — только с типом, через cast", async () => {
     const filters = [{ field: "Recorder", op: "eq", value: REF }];
     const bare = await read({ filters });

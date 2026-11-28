@@ -126,7 +126,12 @@ function condition(entity: EntityMeta, f: RegisterFilter, published: ReadonlySet
   if (meta.type === "Edm.DateTime") {
     if (typeof f.value !== "string" || !(DAY.test(f.value) || DATE_TIME.test(f.value)))
       throw bad("значение — дата «2026-03-31» или «2026-03-31T00:00:00»");
-    // Дата без времени в «по» и «позже» — весь этот день.
+    // Дата без времени — весь этот день: у записей регистратора есть время, и равенство полуночи их теряет.
+    if (DAY.test(f.value) && (f.op === "eq" || f.op === "ne")) {
+      const from = cmp(f.field, f.op === "eq" ? "ge" : "lt", `datetime'${f.value}T00:00:00'`);
+      const to = cmp(f.field, f.op === "eq" ? "le" : "gt", `datetime'${f.value}T23:59:59'`);
+      return `(${from} ${f.op === "eq" ? "and" : "or"} ${to})`;
+    }
     const time = f.op === "le" || f.op === "gt" ? "T23:59:59" : "T00:00:00";
     return cmp(f.field, f.op, `datetime'${DAY.test(f.value) ? f.value + time : f.value}'`);
   }
