@@ -257,7 +257,8 @@ describe("настоящий клиент по настоящему сокету
     expect(stats.calls).toBe(1);
     await client.close();
     await server.close();
-  });
+    // Настоящий сокет и пауза 1,2 с: под нагрузкой (раннер CI, параллельные файлы) набегает 4–5 с.
+  }, 15_000);
 
   it("лимит времени работает по HTTP без участия клиента", async () => {
     const f = fake1C({ READ_ONLY: "true", ODATA_TOOL_DEADLINE_MS: "100" });

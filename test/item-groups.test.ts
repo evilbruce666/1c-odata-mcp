@@ -4,6 +4,9 @@ import { createServer } from "../src/mcp/server.js";
 import { PAGE_READ_ENTRIES, PAGE_READ_TTL_MS, pageCached } from "../src/odata/cache.js";
 import { fake1C, type FakeQuery } from "./helpers/fake-1c.js";
 
+// Тысячи синтетических позиций: на медленном раннере CI секунда превращается в несколько, предел 5 с — впритык.
+vi.setConfig({ testTimeout: 30_000 });
+
 /**
  * Номенклатура УТ на синтетическом корпусе в 6000 позиций: список справочника (list_items), отбор по нескольким группам
  * за вызов (groups) и листание длинного списка остатков и продаж. Метрика приёмки:
