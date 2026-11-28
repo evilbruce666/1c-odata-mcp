@@ -176,6 +176,19 @@ describe("режим косвенно, когда регистр настрое�
     expect(found.regime?.regimes).toEqual(["usn_income_expense"]);
   });
 
+  it("год, закрытый только к декларации: в апреле расчёту 16 месяцев — режим есть, но с просьбой проверить", async () => {
+    const at = async (asOf: string) =>
+      readTaxRegime(connection({ [CALC]: [calc("2025-12-31")] }, { hidden }).conn, ORG, asOf);
+    const april = await at("2027-04-28");
+    expect(april.regime?.regimes).toEqual(["usn_income"]);
+    expect(april.notes.join(" ")).toContain("проверьте режим");
+    // Граница — 18 месяцев.
+    await expect(at("2027-06-30")).resolves.toMatchObject({ regime: { regimes: ["usn_income"] } });
+    expect((await at("2027-07-01")).regime).toBeUndefined();
+    // Моложе года — без пометки.
+    expect((await at("2026-12-31")).notes.join(" ")).not.toContain("проверьте режим");
+  });
+
   it("давний расчёт не выдаётся за нынешний режим", async () => {
     const found = await readTaxRegime(
       connection({ [CALC]: [calc("2027-12-31")] }, { hidden }).conn,
