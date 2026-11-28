@@ -41,7 +41,8 @@ Reference — [docs/TOOLS.md](docs/TOOLS.md), all parameters — [docs/TOOLS-REF
 
 1. **Node.js 22 or newer** (`node -v`).
 2. **Publish OData** in 1C and add the objects you need to its «Состав» (content) — your 1C administrator or cloud
-   provider does this; step by step — [docs/ODATA-SETUP.md](docs/ODATA-SETUP.md).
+   provider does this; step by step — [docs/ODATA-SETUP.md](docs/ODATA-SETUP.md). Connect through a **separate 1C user**
+   with rights only to what it needs: whatever 1C forbids that user, the connector cannot do either.
 3. **Add the server** to your MCP client config:
 
 ```json
