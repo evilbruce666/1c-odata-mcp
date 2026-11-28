@@ -1372,6 +1372,68 @@ export const organizationCardResultSchema = z
   })
   .passthrough();
 
+/** get_tax_calendar: суммы и сроки начисленного — из 1С, остальные сроки — из справочника, без сумм. */
+export const taxCalendarResultSchema = z
+  .object({
+    database: z.string(),
+    organization: z.object({ ref: z.string(), name: z.string() }).passthrough(),
+    taxpayer: z.enum(["ip", "organization"]),
+    from: z.string(),
+    to: z.string(),
+    regime: z
+      .object({
+        regimes: z.array(z.enum(TAX_REGIME_KEYS)),
+        source: z.enum(["settings", "inferred", "user", "unknown"]),
+        asOf: z.string(),
+        system: z.string().optional(),
+        calculatedFor: z.string().optional(),
+      })
+      .passthrough(),
+    items: z.array(
+      z
+        .object({
+          kind: z.enum(["payment", "report", "notice"]),
+          title: z.string(),
+          due: z.string(),
+          dueSource: z.enum(["1c", "law"]),
+          lawDue: z.string().optional(),
+          status: z.enum([
+            "accrued",
+            "not_accrued",
+            "sent",
+            "prepared",
+            "not_found",
+            "unknown",
+            "not_required",
+          ]),
+          amount: z.number().optional(),
+          account: z.string().optional(),
+          periodEnd: z.string().optional(),
+          basis: z.string().optional(),
+          condition: z.string().optional(),
+          report: z
+            .object({
+              signed: z.string().optional(),
+              sent: z.string().optional(),
+              corrective: z.boolean().optional(),
+            })
+            .passthrough()
+            .optional(),
+          notices: z.array(z.object({ date: z.string(), amount: z.number() }).passthrough()).optional(),
+          note: z.string().optional(),
+        })
+        .passthrough(),
+    ),
+    warnings: z.array(z.string()),
+    notes: z.array(z.string()),
+    missing: z.array(z.string()),
+    rulesCoverage: z
+      .object({ years: z.array(z.number()), missing: z.array(z.number()), checkedAt: z.string() })
+      .passthrough(),
+    notCovered: z.array(z.string()),
+  })
+  .passthrough();
+
 /** write.operation.status: состояние операции создания и результат сверки с 1С. */
 export const operationStatusSchema = z
   .object({

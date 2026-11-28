@@ -36,6 +36,8 @@ export interface TaxRegimeResult {
   regime?: TaxRegime;
   /** Что неясно и что сделать, чтобы стало ясно. */
   notes: string[];
+  /** АУСН или налог на профессиональный доход: взносы за себя ИП не платит. */
+  noContributions?: boolean;
 }
 
 const SETTINGS_LABEL =
@@ -75,17 +77,22 @@ async function presentFields(conn: Connection, set: string, wanted: readonly str
   return wanted.filter((f) => names.has(f));
 }
 
-async function fromSettings(
+/** Столько смен режима за историю организации с большим запасом. */
+const SETTINGS_ROWS = 100;
+
+/** Все записи настроек организации не позже даты, новые первыми. */
+async function settingsHistory(
   conn: Connection,
   set: string,
   orgRef: string,
-  asOf: string,
-): Promise<TaxRegimeResult> {
+  until: string,
+): Promise<ODataEntity[]> {
   const select = await presentFields(conn, set, [
     "Period",
     "СистемаНалогообложения",
     "ПрименяетсяУСНПатент",
     "ПрименяетсяАУСН",
+    "ПрименяетсяНалогНаПрофессиональныйДоход",
     "ОбъектНалогообложенияУСН",
     "ПлательщикНДСПрименяющийУСН",
   ]);
@@ -94,14 +101,19 @@ async function fromSettings(
     conn.client,
     set,
     {
-      filter: and(cmp("Организация_Key", "eq", odataGuid(orgRef)), cmp("Period", "le", endOfDay(asOf))),
+      filter: and(cmp("Организация_Key", "eq", odataGuid(orgRef)), cmp("Period", "le", endOfDay(until))),
       select,
       orderby: "Period desc",
     },
-    1,
-    1,
+    SETTINGS_ROWS,
+    SETTINGS_ROWS,
   );
-  const row: ODataEntity | undefined = rows[0];
+  return rows;
+}
+
+/** rows — история настроек, новые первыми. */
+function fromSettings(rows: readonly ODataEntity[], asOf: string): TaxRegimeResult {
+  const row = rows.find((r) => text(r["Period"]).slice(0, 10) <= asOf);
   if (!row)
     return {
       notes: [`В регистре «Система налогообложения» нет записей этой организации на ${asOf}.`],
@@ -131,6 +143,12 @@ async function fromSettings(
         : {}),
     },
     notes,
+    ...(row["ПрименяетсяАУСН"] === true ||
+    row["ПрименяетсяНалогНаПрофессиональныйДоход"] === true ||
+    system === "АУСН" ||
+    system === "НалогНаПрофессиональныйДоход"
+      ? { noContributions: true }
+      : {}),
   };
 }
 
@@ -210,16 +228,37 @@ async function inferred(conn: Connection, orgRef: string, asOf: string): Promise
 }
 
 /**
- * Режим организации на дату. Пустой результат без заметок — вопрос к этой базе не относится (в Управлении
- * торговлей налогового учёта нет).
+ * Читатель режима организации на разные даты не позже until: история настроек читается одним запросом, косвенный
+ * путь — по запросу на каждую новую дату. Пустой результат без заметок — вопрос к этой базе не относится (в
+ * Управлении торговлей налогового учёта нет).
  */
+export async function taxRegimeReader(
+  conn: Connection,
+  orgRef: string,
+  until: string,
+): Promise<(asOf: string) => Promise<TaxRegimeResult>> {
+  const settings = await publishedSettings(conn);
+  if (settings) {
+    const rows = await settingsHistory(conn, settings, orgRef, until);
+    return (asOf) => Promise.resolve(fromSettings(rows, asOf));
+  }
+  if (await tradeWithoutAccounting(conn)) return () => Promise.resolve({ notes: [] });
+  const known = new Map<string, Promise<TaxRegimeResult>>();
+  return (asOf) => {
+    const result = known.get(asOf) ?? inferred(conn, orgRef, asOf);
+    known.set(asOf, result);
+    return result;
+  };
+}
+
+const publishedSettings = async (conn: Connection) =>
+  resolveEntity(REGISTERS.taxSettings, await conn.available());
+
+/** Режим организации на дату. */
 export async function readTaxRegime(
   conn: Connection,
   orgRef: string,
   asOf: string,
 ): Promise<TaxRegimeResult> {
-  const settings = resolveEntity(REGISTERS.taxSettings, await conn.available());
-  if (settings) return fromSettings(conn, settings, orgRef, asOf);
-  if (await tradeWithoutAccounting(conn)) return { notes: [] };
-  return inferred(conn, orgRef, asOf);
+  return (await taxRegimeReader(conn, orgRef, asOf))(asOf);
 }

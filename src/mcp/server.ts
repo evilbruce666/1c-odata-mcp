@@ -38,6 +38,7 @@ import { APPS_EXTENSION_ID, appMetaFor, registerApps } from "./apps.js";
 import { registerCashflowTools } from "../tools/cashflow.js";
 import { registerSalesTools } from "../tools/sales.js";
 import { registerOrganizationTools } from "../tools/organization.js";
+import { registerTaxCalendarTools } from "../tools/tax-calendar.js";
 import { fitWritePreview, OPERATION_ID_CHARS } from "../tools/preview-fit.js";
 import { registerWriteTools } from "../tools/write.js";
 import { registerAuditTools } from "../tools/audit.js";
@@ -948,6 +949,7 @@ export function createServer(ctx: ServerContext): McpServer {
   registerCashflowTools(server, ctx);
   registerSalesTools(server, ctx);
   registerOrganizationTools(server, ctx);
+  registerTaxCalendarTools(server, ctx);
   registerAuditTools(server, ctx);
   registerFreshnessTools(server, ctx);
   registerWriteTools(server, ctx);

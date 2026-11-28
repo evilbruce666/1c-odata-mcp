@@ -37,7 +37,7 @@ try {
   // Приложения MCP (долги по срокам) сервер читает из apps/ рядом с dist.
   cpSync("apps", join(stage, "apps"), { recursive: true });
   rmSync(join(stage, "dist", "scripts"), { recursive: true, force: true });
-  for (const file of ["package.json", "package-lock.json", "README.md", "LICENSE"]) {
+  for (const file of ["package.json", "package-lock.json", "README.md", "LICENSE", "tax-calendar.json"]) {
     copyFileSync(file, join(stage, file));
   }
   const manifest = JSON.parse(readFileSync("manifest.json", "utf8")) as Parameters<typeof bundleManifest>[0];

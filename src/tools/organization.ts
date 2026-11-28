@@ -3,6 +3,7 @@ import type { Connection, ServerContext } from "../context.js";
 import { ok, fail, guard, databaseField, organizationField } from "./_shared.js";
 import { CATALOGS, REGISTERS, resolveEntity } from "../config/mapping.js";
 import { resolveOrgOrDefault } from "../odata/orgs.js";
+import { localDate } from "./local-date.js";
 import { resolveNames } from "../odata/accounting.js";
 import { KI_KINDS } from "../odata/refdata.js";
 import { readTaxRegime, type TaxRegime } from "../odata/tax-regime.js";
@@ -29,12 +30,6 @@ function dateOnly(v: unknown): string | undefined {
   const s = typeof v === "string" ? v : undefined;
   if (!s || s.startsWith("0001-01-01")) return undefined;
   return s.slice(0, 10);
-}
-
-/** Сегодня по часам компьютера, а не по UTC: ночью в России дата в UTC ещё вчерашняя. */
-function localDate(d: Date): string {
-  const two = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
 }
 
 function clean<T extends Record<string, unknown>>(obj: T): Partial<T> {

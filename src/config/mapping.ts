@@ -98,10 +98,15 @@ export const REGISTERS = {
   taxSettings: ["InformationRegister_НастройкиСистемыНалогообложения"],
   /** Расчёт налога УСН по кварталам, плоские записи: объект налогообложения, когда настройки не опубликованы. */
   usnCalculation: ["InformationRegister_РасчетНалогаУСН_RecordType"],
+  /** Начисления на единый налоговый счёт со сроками уплаты (плоские записи). */
+  taxAccruals: ["InformationRegister_РасчетНачисленияНалоговНаЕНС_RecordType"],
 } as const;
 
 /** Получение и прекращение патентов: даты действия каждого патента. */
 export const TAX_PATENT_DOCUMENTS = ["Document_ОперацияСПатентом"] as const;
+/** Журнал подготовленных отчётов и уведомления об исчисленных суммах. */
+export const TAX_REPORTS = ["Document_РегламентированныйОтчет"] as const;
+export const TAX_NOTICES = ["Document_УведомлениеОбИсчисленныхСуммахНалогов"] as const;
 
 /**
  * Префиксы счетов плана счетов БП 3.0 для аналитики через регистр Хозрасчетный.

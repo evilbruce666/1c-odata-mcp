@@ -32,7 +32,7 @@ you don't read Russian, your assistant can read it for you.
 - **Other and customised configurations** (UNF, ZUP, Retail and others) — documents, catalogs and the schema; no
   dedicated analytics for them.
 
-91 tools (43 read/analytics + 48 write), each with an `outputSchema`; names are `<read|write>.<category>.<name>`.
+92 tools (44 read/analytics + 48 write), each with an `outputSchema`; names are `<read|write>.<category>.<name>`.
 Reference — [docs/TOOLS.md](docs/TOOLS.md), all parameters — [docs/TOOLS-REFERENCE.md](docs/TOOLS-REFERENCE.md).
 
 ## Quick start

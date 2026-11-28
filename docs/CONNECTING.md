@@ -584,24 +584,24 @@ networks:
 
 Сколько времени отвечает локальная модель по сравнению с облачными — в [замере](LOCAL-MODELS.md).
 
-Описания и схемы параметров всех 91 инструмента — около 240 тыс. символов контекста на каждый запрос, только чтения —
-около 86 тыс. Клиенту с малым контекстом, например локальной модели, это мешает:
+Описания и схемы параметров всех 92 инструментов — около 249 тыс. символов контекста на каждый запрос, только чтения —
+около 90 тыс. Клиенту с малым контекстом, например локальной модели, это мешает:
 
 - `TOOLS_PROFILE=read` оставляет только инструменты чтения;
 - `TOOLS_ALLOW=имя,имя` оставляет точный список. Неизвестное имя останавливает запуск, вместе с
   `TOOLS_PROFILE` не задаётся. Сценарии (prompts), ведущие к скрытым инструментам, не показываются.
 
-**Готовые наборы для маленького контекста** — по 18 инструментов чтения, свой для каждой конфигурации: у Бухгалтерии и
+**Готовые наборы для маленького контекста** — инструменты только чтения (19 для Бухгалтерии, 18 для УТ), свой набор для каждой конфигурации: у Бухгалтерии и
 Управления торговлей долги, остатки и разбор учёта берутся разными инструментами. Строка ставится в блок `env` вместо
 `TOOLS_PROFILE` (вместе они не задаются); как поведёт себя конкретная локальная модель, зависит от неё. Если подключены
 базы обеих конфигураций, объедините строки.
 
 **Набор для Бухгалтерии 3.0:** деньги, долги, неоплаченные счета, продажи, остатки, проверка закрытия месяца,
-карточка и ОСВ счёта, акт сверки, поиск контрагента и документов. Все четыре сценария остаются. Описания и схемы —
-около 37 тыс. символов.
+налоговый календарь, карточка и ОСВ счёта, акт сверки, поиск контрагента и документов. Все четыре сценария остаются. Описания и схемы —
+около 39 тыс. символов.
 
 ```text
-TOOLS_ALLOW=read.system.health_check,read.system.list_databases,read.system.list_organizations,read.counterparty.find_counterparty,read.counterparty.get_reconciliation,read.analytics.get_cash_balance,read.analytics.get_debtors,read.analytics.get_creditors,read.analytics.get_unpaid_invoices,read.analytics.get_sales_report,read.analytics.get_sales_breakdown,read.analytics.get_inventory,read.accounting.check_month_close,read.accounting.get_account_card,read.document.search_documents,read.document.get_document,read.accounting.get_account_turnover,read.accounting.get_balance_origin
+TOOLS_ALLOW=read.system.health_check,read.system.list_databases,read.system.list_organizations,read.counterparty.find_counterparty,read.counterparty.get_reconciliation,read.analytics.get_cash_balance,read.analytics.get_debtors,read.analytics.get_creditors,read.analytics.get_unpaid_invoices,read.analytics.get_sales_report,read.analytics.get_sales_breakdown,read.analytics.get_inventory,read.accounting.check_month_close,read.accounting.get_account_card,read.document.search_documents,read.document.get_document,read.accounting.get_account_turnover,read.accounting.get_balance_origin,read.accounting.get_tax_calendar
 ```
 
 **Набор для Управления торговлей 11:** деньги и их движение, расчёты с партнёрами (долги по срокам), продажи и

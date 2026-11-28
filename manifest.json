@@ -4,7 +4,7 @@
   "display_name": "1С через OData: Бухгалтерия и Торговля",
   "version": "1.2.0",
   "description": "MCP-сервер для 1С:Предприятие через OData: Бухгалтерия 3.0 и Управление торговлей 11 — чтение и запись документов с предпросмотром (склад, деньги, продажи и закупки, цены, справочники) на естественном языке; запись и в режиме сервера (HTTP).",
-  "long_description": "Подключает любой MCP-клиент (Claude, Cursor, VS Code и др.) к базе 1С:Предприятие через стандартный интерфейс OData. Ничего не устанавливается внутри 1С. Конфигурации: Бухгалтерия 3.0 — полностью, Управление торговлей 11 — чтение и запись цен, справочников, складских и денежных документов, продаж и закупок (проверено на 11.5), КА 2 и ERP 2 — по тем же регистрам, без проверки на живой базе. По умолчанию только чтение — 91 инструмент и 4 готовых сценария: аналитика Бухгалтерии (дебиторка и кредиторка по срокам, деньги на счетах, неоплаченные счета, проверка закрытия месяца, карточка счёта, акт сверки, остатки, продажи, движение денег, налоги, ОСВ по счёту, проводки документа, хронология для аудита), Управления торговлей (остатки на складах, продажи в штуках с розницей и выручкой, расчёты с клиентами и поставщиками, деньги в кассах и на счетах, списки складов и номенклатуры, цены), справочники и документы. Запись включается отдельно (readOnly=false), в Управлении торговлей — установка цен, справочники, перемещения, излишки, недостачи и пересчёты, касса, банк и заявки на расходование, заказы, счета, реализации, приобретения, возвраты и счета-фактуры, и всегда работает в режиме предпросмотра — сначала показывает, что будет создано/изменено, и пишет только после подтверждения.",
+  "long_description": "Подключает любой MCP-клиент (Claude, Cursor, VS Code и др.) к базе 1С:Предприятие через стандартный интерфейс OData. Ничего не устанавливается внутри 1С. Конфигурации: Бухгалтерия 3.0 — полностью, Управление торговлей 11 — чтение и запись цен, справочников, складских и денежных документов, продаж и закупок (проверено на 11.5), КА 2 и ERP 2 — по тем же регистрам, без проверки на живой базе. По умолчанию только чтение — 92 инструмента и 4 готовых сценария: аналитика Бухгалтерии (дебиторка и кредиторка по срокам, деньги на счетах, неоплаченные счета, проверка закрытия месяца, карточка счёта, акт сверки, остатки, продажи, движение денег, налоги, ОСВ по счёту, проводки документа, хронология для аудита), Управления торговлей (остатки на складах, продажи в штуках с розницей и выручкой, расчёты с клиентами и поставщиками, деньги в кассах и на счетах, списки складов и номенклатуры, цены), справочники и документы. Запись включается отдельно (readOnly=false), в Управлении торговлей — установка цен, справочники, перемещения, излишки, недостачи и пересчёты, касса, банк и заявки на расходование, заказы, счета, реализации, приобретения, возвраты и счета-фактуры, и всегда работает в режиме предпросмотра — сначала показывает, что будет создано/изменено, и пишет только после подтверждения.",
   "author": {
     "name": "evilbruce666",
     "url": "https://github.com/evilbruce666"
@@ -7734,6 +7734,301 @@
         "required": [
           "database",
           "ref"
+        ],
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": true
+      }
+    },
+    {
+      "name": "read.accounting.get_tax_calendar",
+      "title": "Налоговый календарь: что заплатить и сдать",
+      "description": "Что организации или ИП заплатить и сдать в окне дат и что из этого уже есть в 1С («какие налоги и когда платить», «когда сдавать декларацию по УСН», «сходятся ли уведомления с начислениями»). Только Бухгалтерия. Суммы и сроки начисленного (status=accrued) — из 1С; чего в 1С ещё нет (декларации, уведомления, будущие взносы и авансы), идёт из справочника со статьёй НК РФ и без сумм — не считайте и не придумывайте их сами. Оплачено ли — календарь не знает. prepared — отчёт или уведомление есть в 1С, это не значит «сдан», но и не «не сдан». unknown — данных нет, это не «не найдено». Обязательно передайте пользователю warnings и missing; справочник покрывает не всё — перечень в notCovered. По умолчанию — от сегодня на 90 дней.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "description": "Имя базы 1С из list_databases. Без указания — база по умолчанию; если баз несколько и неясно какая, спросите пользователя.",
+            "type": "string"
+          },
+          "organization": {
+            "description": "Организация (юрлицо) для фильтра: часть названия, ИНН или Ref_Key из list_organizations. Без указания — все организации базы.",
+            "type": "string"
+          },
+          "from": {
+            "description": "Первый срок окна (YYYY-MM-DD), по умолчанию сегодня",
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "to": {
+            "description": "Последний срок окна (YYYY-MM-DD), по умолчанию через 90 дней после from",
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "regime": {
+            "description": "Режим со слов пользователя, если 1С его не отдаёт или отдаёт неверно: usn_income (УСН «доходы»), usn_income_expense («доходы минус расходы»), psn (патент), osno. Заменяет определение по базе",
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "usn_income",
+                "usn_income_expense",
+                "psn",
+                "osno"
+              ]
+            }
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "database": {
+            "type": "string"
+          },
+          "organization": {
+            "type": "object",
+            "properties": {
+              "ref": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "ref",
+              "name"
+            ],
+            "additionalProperties": {}
+          },
+          "taxpayer": {
+            "type": "string",
+            "enum": [
+              "ip",
+              "organization"
+            ]
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "regime": {
+            "type": "object",
+            "properties": {
+              "regimes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "usn_income",
+                    "usn_income_expense",
+                    "psn",
+                    "osno"
+                  ]
+                }
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "settings",
+                  "inferred",
+                  "user",
+                  "unknown"
+                ]
+              },
+              "asOf": {
+                "type": "string"
+              },
+              "system": {
+                "type": "string"
+              },
+              "calculatedFor": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "regimes",
+              "source",
+              "asOf"
+            ],
+            "additionalProperties": {}
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "payment",
+                    "report",
+                    "notice"
+                  ]
+                },
+                "title": {
+                  "type": "string"
+                },
+                "due": {
+                  "type": "string"
+                },
+                "dueSource": {
+                  "type": "string",
+                  "enum": [
+                    "1c",
+                    "law"
+                  ]
+                },
+                "lawDue": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "accrued",
+                    "not_accrued",
+                    "sent",
+                    "prepared",
+                    "not_found",
+                    "unknown",
+                    "not_required"
+                  ]
+                },
+                "amount": {
+                  "type": "number"
+                },
+                "account": {
+                  "type": "string"
+                },
+                "periodEnd": {
+                  "type": "string"
+                },
+                "basis": {
+                  "type": "string"
+                },
+                "condition": {
+                  "type": "string"
+                },
+                "report": {
+                  "type": "object",
+                  "properties": {
+                    "signed": {
+                      "type": "string"
+                    },
+                    "sent": {
+                      "type": "string"
+                    },
+                    "corrective": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": {}
+                },
+                "notices": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "date": {
+                        "type": "string"
+                      },
+                      "amount": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "date",
+                      "amount"
+                    ],
+                    "additionalProperties": {}
+                  }
+                },
+                "note": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "title",
+                "due",
+                "dueSource",
+                "status"
+              ],
+              "additionalProperties": {}
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rulesCoverage": {
+            "type": "object",
+            "properties": {
+              "years": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              },
+              "missing": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              },
+              "checkedAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "years",
+              "missing",
+              "checkedAt"
+            ],
+            "additionalProperties": {}
+          },
+          "notCovered": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "database",
+          "organization",
+          "taxpayer",
+          "from",
+          "to",
+          "regime",
+          "items",
+          "warnings",
+          "notes",
+          "missing",
+          "rulesCoverage",
+          "notCovered"
         ],
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": {}
