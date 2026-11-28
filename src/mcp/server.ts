@@ -15,6 +15,7 @@ import { registerMetaTools } from "../tools/meta.js";
 import { registerCounterpartyTools } from "../tools/counterparties.js";
 import { registerDocumentTools } from "../tools/documents.js";
 import { registerRegisterTools } from "../tools/registers.js";
+import { registerReadRegisterTools } from "../tools/read-register.js";
 import { registerStockTools } from "../tools/stock.js";
 import { registerItemSalesTools } from "../tools/item-sales.js";
 import { registerPartnerSettlementTools } from "../tools/partner-settlements.js";
@@ -935,6 +936,7 @@ export function createServer(ctx: ServerContext): McpServer {
   registerCounterpartyTools(server, ctx);
   registerDocumentTools(server, ctx);
   registerRegisterTools(server, ctx);
+  registerReadRegisterTools(server, ctx);
   registerStockTools(server, ctx);
   registerItemSalesTools(server, ctx);
   registerPartnerSettlementTools(server, ctx);

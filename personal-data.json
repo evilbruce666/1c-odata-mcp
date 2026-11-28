@@ -281,7 +281,8 @@
       "read.analytics.get_purchases_breakdown",
       "read.analytics.get_sales_breakdown",
       "read.analytics.get_taxes_paid",
-      "read.audit.get_document_history"
+      "read.audit.get_document_history",
+      "read.schema.read_register"
     ]
   },
   "rawAttributes": [

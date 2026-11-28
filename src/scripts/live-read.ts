@@ -159,6 +159,21 @@ async function main(): Promise<number> {
     }
     check(`${db}: инструменты чтения без аргументов (${noArgReads.length})`, true);
 
+    // Сам в список выше не попадает: регистр и поля обязательны. Берётся тот, что есть в конфигурации базы.
+    let registerRead = { ok: false, text: "ни один из проверочных регистров не опубликован" };
+    for (const register of ["AccountingRegister_Хозрасчетный", "AccumulationRegister_ТоварыНаСкладах"]) {
+      const r = await run("read.schema.read_register", {
+        database: db,
+        register,
+        select: ["Period"],
+        limit: 1,
+      });
+      if (r.kind === "not_published") continue;
+      registerRead = { ok: !r.err, text: r.err ? r.text.slice(0, 120) : register };
+      break;
+    }
+    check(`${db}: read_register`, registerRead.ok, registerRead.text);
+
     for (const entitySet of POSTING_DOCS) {
       const s = await run("read.document.search_documents", {
         database: db,

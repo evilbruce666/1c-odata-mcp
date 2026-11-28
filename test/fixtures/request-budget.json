@@ -39,6 +39,7 @@
   "read.organization.get_organization_card": 7,
   "read.schema.describe_entity": 0,
   "read.schema.list_entities": 0,
+  "read.schema.read_register": 1,
   "read.system.data_freshness": 10,
   "read.system.health_check": 0,
   "read.system.list_databases": 0,

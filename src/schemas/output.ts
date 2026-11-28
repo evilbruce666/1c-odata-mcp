@@ -274,6 +274,23 @@ export const describeEntityResultSchema = z
   })
   .passthrough();
 
+/** read_register: строки регистра как есть. */
+export const readRegisterResultSchema = z
+  .object({
+    database: z.string(),
+    register: z.string(),
+    matched: z.number(),
+    offset: z.number(),
+    returned: z.number(),
+    truncated: z.boolean(),
+    nextOffset: z.number().optional(),
+    snapshot: z.string(),
+    dataChanged: z.boolean().optional(),
+    note: z.string(),
+    rows: z.array(z.object({}).passthrough()),
+  })
+  .passthrough();
+
 /** get_customer_history/get_supplier_history: {counterparty, period} + спред truncatedList. */
 export const counterpartyHistoryResultSchema = z
   .object({
