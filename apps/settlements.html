@@ -234,11 +234,12 @@ function show(result) {
 
 // ---- Протокол MCP Apps: JSON-RPC 2.0 через postMessage (SDK не грузим — внешние загрузки запрещены) ----
 let rpcId = 0;
-const pending = {};
+// Ожидающие ответа запросы — Map, а не объект: id приходит в сообщении, и «__proto__» не должен ничего найти.
+const pending = new Map();
 function request(method, params) {
   return new Promise((resolve) => {
     const id = ++rpcId;
-    pending[id] = resolve;
+    pending.set(id, resolve);
     window.parent.postMessage({ jsonrpc: "2.0", id: id, method: method, params: params }, "*");
   });
 }
@@ -255,11 +256,13 @@ function reportSize() {
   });
 }
 window.addEventListener("message", (event) => {
+  // Говорит с приложением только окно-хозяин: сообщения других окон не показываются и не отвечаются.
+  if (event.source !== window.parent) return;
   const d = event.data;
   if (!d || d.jsonrpc !== "2.0") return;
   if (d.id != null && d.method == null) {
-    const resolve = pending[d.id];
-    if (resolve) { delete pending[d.id]; resolve(d.result); }
+    const resolve = pending.get(d.id);
+    if (resolve) { pending.delete(d.id); resolve(d.result); }
     return;
   }
   if (d.method === "ui/notifications/tool-result") { show(d.params || {}); return; }

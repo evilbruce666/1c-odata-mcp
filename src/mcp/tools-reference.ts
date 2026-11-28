@@ -24,7 +24,11 @@ export interface ManifestTool {
 }
 
 /** Ячейка таблицы: без переводов строк и с экранированной чертой. */
-const cell = (s: string) => s.replace(/\s*\n\s*/g, " ").replace(/\|/g, "\\|");
+const cell = (s: string) =>
+  s
+    .replace(/\s*\n\s*/g, " ")
+    .replace(/\\/g, "\\\\")
+    .replace(/\|/g, "\\|");
 
 function typeOf(s: JsonSchema): string {
   if (s.enum) return s.enum.map((v) => `\`${String(v)}\``).join(", ");

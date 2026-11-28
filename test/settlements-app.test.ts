@@ -42,7 +42,13 @@ function load() {
     createElement: () => makeElement(),
     createTextNode: (text: string) => ({ textContent: text }),
   };
-  const window = { parent: { postMessage() {} }, addEventListener() {} };
+  const listeners: Array<(event: unknown) => void> = [];
+  const window = {
+    parent: { postMessage() {} },
+    addEventListener(type: string, fn: (event: unknown) => void) {
+      if (type === "message") listeners.push(fn);
+    },
+  };
   const context: Record<string, unknown> = {
     document,
     window,
@@ -56,7 +62,7 @@ function load() {
   runInNewContext(script, context);
   const render = context["render"] as (p: unknown) => void;
   const sub = () => String(elements.get("sub")!.textContent);
-  return { render, sub, elements };
+  return { render, sub, elements, context, listeners, parent: window.parent };
 }
 
 const debtors = (n: number) =>
@@ -128,5 +134,27 @@ describe("settlements.html на настоящих формах ответа", (
       ],
     });
     expect(elements.get("view")!.hidden).toBe(false);
+  });
+});
+
+describe("сообщения окну приложения", () => {
+  it("показывается только то, что прислало окно-хозяин; id из сообщения не находит чужого", () => {
+    const { context, listeners, parent } = load();
+    const shown: unknown[] = [];
+    context["show"] = (r: unknown) => shown.push(r);
+    const send = (source: unknown, data: unknown) => {
+      for (const fn of listeners) fn({ source, data });
+    };
+    const result = {
+      jsonrpc: "2.0",
+      method: "ui/notifications/tool-result",
+      params: { structuredContent: {} },
+    };
+    send({ postMessage() {} }, result);
+    expect(shown).toEqual([]);
+    send(parent, result);
+    expect(shown).toHaveLength(1);
+    expect(() => send(parent, { jsonrpc: "2.0", id: "__proto__", result: {} })).not.toThrow();
+    expect(() => send(parent, { jsonrpc: "2.0", id: "constructor", result: {} })).not.toThrow();
   });
 });
