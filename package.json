@@ -16,7 +16,8 @@
     "CHANGELOG.md",
     "LICENSE",
     ".env.example",
-    "personal-data.json"
+    "personal-data.json",
+    "tax-calendar.json"
   ],
   "repository": {
     "type": "git",

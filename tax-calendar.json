@@ -1,0 +1,678 @@
+{
+  "description": "Сроки отчётов, уведомлений и платежей, которых в 1С может ещё не быть. Только сроки и статьи НК РФ, без сумм: суммы считает 1С. Срок уже начисленного налога берите из 1С. nominal — дата по статье, due — с переносом по п. 7 ст. 6.1 НК РФ.",
+  "checkedAt": "2026-11-28",
+  "dueYears": [
+    2026,
+    2027
+  ],
+  "covers": "Российские организации на УСН (декларация, авансы, уведомления, налог за год) и ИП на УСН (то же и взносы за себя), ИП на патенте и ОСНО — только взносы за себя.",
+  "notCovered": [
+    "Сроки патента: они зависят от дат патента — берутся из начислений 1С (п. 2 ст. 346.51 НК РФ). У уведомления об уменьшении налога по патенту срока в статье нет.",
+    "Отчётность и налоги за сотрудников (6-НДФЛ, РСВ, ЕФС-1, персонифицированные сведения).",
+    "ОСНО, НДС, налог на прибыль, имущественные налоги, ЕСХН, АУСН, налог на профессиональный доход.",
+    "Бухгалтерская отчётность организаций и статистика.",
+    "Прекращение деятельности, потеря права на спецрежим, отсрочки по регионам и отраслям (постановления Правительства)."
+  ],
+  "workingWeekends": [
+    "2027-02-20"
+  ],
+  "nonWorkingWeekdays": {
+    "2026": [
+      "2026-01-01",
+      "2026-01-02",
+      "2026-01-05",
+      "2026-01-06",
+      "2026-01-07",
+      "2026-01-08",
+      "2026-01-09",
+      "2026-02-23",
+      "2026-03-09",
+      "2026-05-01",
+      "2026-05-11",
+      "2026-06-12",
+      "2026-11-04",
+      "2026-12-31"
+    ],
+    "2027": [
+      "2027-01-01",
+      "2027-01-04",
+      "2027-01-05",
+      "2027-01-06",
+      "2027-01-07",
+      "2027-01-08",
+      "2027-02-22",
+      "2027-02-23",
+      "2027-03-08",
+      "2027-05-03",
+      "2027-05-10",
+      "2027-06-14",
+      "2027-11-04",
+      "2027-11-05",
+      "2027-12-31"
+    ]
+  },
+  "sources": {
+    "ст. 6.1": "https://www.consultant.ru/document/cons_doc_LAW_19671/14139b16d4f3091c91b334a13073c34237f8e4c4/",
+    "ст. 58": "https://www.consultant.ru/document/cons_doc_LAW_19671/16beab15150ef95aab09458473185ea218811e56/",
+    "ст. 346.21": "https://www.consultant.ru/document/cons_doc_LAW_28165/22c21f60902851e312e9a7ebc582ba92ecea94a6/",
+    "ст. 346.23": "https://www.consultant.ru/document/cons_doc_LAW_28165/051edffc72ec0bb6fb9c14a883b2ec4de75cfe8c/",
+    "ст. 346.51": "https://www.consultant.ru/document/cons_doc_LAW_28165/d64434f3895da64e749c616b0f8368962a7ad139/",
+    "ст. 432": "https://www.consultant.ru/document/cons_doc_LAW_28165/61cf20d6fef78624729113dab2aad81847aa701a/",
+    "производственный календарь 2026": "https://www.consultant.ru/law/ref/calendar/proizvodstvennye/2026/",
+    "производственный календарь 2027": "https://www.consultant.ru/law/ref/calendar/proizvodstvennye/2027/"
+  },
+  "rules": [
+    {
+      "id": "usn_declaration-org-2025-12-31",
+      "obligation": "usn_declaration",
+      "kind": "report",
+      "title": "Декларация по УСН за 2025 год",
+      "taxpayers": [
+        "organization"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense"
+      ],
+      "period": {
+        "from": "2025-01-01",
+        "to": "2025-12-31"
+      },
+      "nominal": "2026-03-25",
+      "due": "2026-03-25",
+      "basis": "пп. 1 п. 1 ст. 346.23 НК РФ",
+      "match": {
+        "reportSource": "РегламентированныйОтчетУСН"
+      }
+    },
+    {
+      "id": "usn_tax-org-2025-12-31",
+      "obligation": "usn_tax",
+      "kind": "payment",
+      "title": "Налог по УСН за 2025 год",
+      "taxpayers": [
+        "organization"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense"
+      ],
+      "period": {
+        "from": "2025-01-01",
+        "to": "2025-12-31"
+      },
+      "nominal": "2026-03-28",
+      "due": "2026-03-30",
+      "basis": "п. 7 ст. 346.21 НК РФ",
+      "match": {
+        "account": "68.12",
+        "periodEnd": "2025-12-31"
+      }
+    },
+    {
+      "id": "usn_advance_notice-all-2026-03-31",
+      "obligation": "usn_advance_notice",
+      "kind": "notice",
+      "title": "Уведомление об исчисленном авансе по УСН за 1 квартал 2026",
+      "taxpayers": [
+        "ip",
+        "organization"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense"
+      ],
+      "period": {
+        "from": "2026-01-01",
+        "to": "2026-03-31"
+      },
+      "nominal": "2026-04-25",
+      "due": "2026-04-27",
+      "basis": "п. 9 ст. 58 НК РФ",
+      "condition": "Только если к уплате получилась сумма больше нуля.",
+      "match": {
+        "kbk": [
+          "18210501011011000110",
+          "18210501021011000110"
+        ],
+        "periodEnd": "2026-03-31"
+      }
+    },
+    {
+      "id": "usn_declaration-ip-2025-12-31",
+      "obligation": "usn_declaration",
+      "kind": "report",
+      "title": "Декларация по УСН за 2025 год",
+      "taxpayers": [
+        "ip"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense"
+      ],
+      "period": {
+        "from": "2025-01-01",
+        "to": "2025-12-31"
+      },
+      "nominal": "2026-04-25",
+      "due": "2026-04-27",
+      "basis": "пп. 2 п. 1 ст. 346.23 НК РФ",
+      "match": {
+        "reportSource": "РегламентированныйОтчетУСН"
+      }
+    },
+    {
+      "id": "usn_advance-all-2026-03-31",
+      "obligation": "usn_advance",
+      "kind": "payment",
+      "title": "Аванс по УСН за 1 квартал 2026",
+      "taxpayers": [
+        "ip",
+        "organization"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense"
+      ],
+      "period": {
+        "from": "2026-01-01",
+        "to": "2026-03-31"
+      },
+      "nominal": "2026-04-28",
+      "due": "2026-04-28",
+      "basis": "п. 7 ст. 346.21 НК РФ",
+      "match": {
+        "account": "68.12",
+        "periodEnd": "2026-03-31"
+      }
+    },
+    {
+      "id": "usn_tax-ip-2025-12-31",
+      "obligation": "usn_tax",
+      "kind": "payment",
+      "title": "Налог по УСН за 2025 год",
+      "taxpayers": [
+        "ip"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense"
+      ],
+      "period": {
+        "from": "2025-01-01",
+        "to": "2025-12-31"
+      },
+      "nominal": "2026-04-28",
+      "due": "2026-04-28",
+      "basis": "п. 7 ст. 346.21 НК РФ",
+      "match": {
+        "account": "68.12",
+        "periodEnd": "2025-12-31"
+      }
+    },
+    {
+      "id": "ip_extra_contribution-ip-2025-12-31",
+      "obligation": "ip_extra_contribution",
+      "kind": "payment",
+      "title": "Взнос 1% с дохода свыше 300 000 ₽ за 2025 год",
+      "taxpayers": [
+        "ip"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense",
+        "psn",
+        "osno"
+      ],
+      "period": {
+        "from": "2025-01-01",
+        "to": "2025-12-31"
+      },
+      "nominal": "2026-07-01",
+      "due": "2026-07-01",
+      "basis": "пп. 1 п. 1.2 ст. 430, п. 2 ст. 432 НК РФ",
+      "condition": "Только если доход за год больше 300 000 ₽. Для патента доходом считается потенциально возможный."
+    },
+    {
+      "id": "usn_advance_notice-all-2026-06-30",
+      "obligation": "usn_advance_notice",
+      "kind": "notice",
+      "title": "Уведомление об исчисленном авансе по УСН за 2 квартал (полугодие) 2026",
+      "taxpayers": [
+        "ip",
+        "organization"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense"
+      ],
+      "period": {
+        "from": "2026-04-01",
+        "to": "2026-06-30"
+      },
+      "nominal": "2026-07-25",
+      "due": "2026-07-27",
+      "basis": "п. 9 ст. 58 НК РФ",
+      "condition": "Только если к уплате получилась сумма больше нуля.",
+      "match": {
+        "kbk": [
+          "18210501011011000110",
+          "18210501021011000110"
+        ],
+        "periodEnd": "2026-06-30"
+      }
+    },
+    {
+      "id": "usn_advance-all-2026-06-30",
+      "obligation": "usn_advance",
+      "kind": "payment",
+      "title": "Аванс по УСН за 2 квартал (полугодие) 2026",
+      "taxpayers": [
+        "ip",
+        "organization"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense"
+      ],
+      "period": {
+        "from": "2026-04-01",
+        "to": "2026-06-30"
+      },
+      "nominal": "2026-07-28",
+      "due": "2026-07-28",
+      "basis": "п. 7 ст. 346.21 НК РФ",
+      "match": {
+        "account": "68.12",
+        "periodEnd": "2026-06-30"
+      }
+    },
+    {
+      "id": "usn_advance_notice-all-2026-09-30",
+      "obligation": "usn_advance_notice",
+      "kind": "notice",
+      "title": "Уведомление об исчисленном авансе по УСН за 3 квартал (9 месяцев) 2026",
+      "taxpayers": [
+        "ip",
+        "organization"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense"
+      ],
+      "period": {
+        "from": "2026-07-01",
+        "to": "2026-09-30"
+      },
+      "nominal": "2026-10-25",
+      "due": "2026-10-26",
+      "basis": "п. 9 ст. 58 НК РФ",
+      "condition": "Только если к уплате получилась сумма больше нуля.",
+      "match": {
+        "kbk": [
+          "18210501011011000110",
+          "18210501021011000110"
+        ],
+        "periodEnd": "2026-09-30"
+      }
+    },
+    {
+      "id": "usn_advance-all-2026-09-30",
+      "obligation": "usn_advance",
+      "kind": "payment",
+      "title": "Аванс по УСН за 3 квартал (9 месяцев) 2026",
+      "taxpayers": [
+        "ip",
+        "organization"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense"
+      ],
+      "period": {
+        "from": "2026-07-01",
+        "to": "2026-09-30"
+      },
+      "nominal": "2026-10-28",
+      "due": "2026-10-28",
+      "basis": "п. 7 ст. 346.21 НК РФ",
+      "match": {
+        "account": "68.12",
+        "periodEnd": "2026-09-30"
+      }
+    },
+    {
+      "id": "ip_fixed_contributions-ip-2026-12-31",
+      "obligation": "ip_fixed_contributions",
+      "kind": "payment",
+      "title": "Фиксированные взносы ИП за 2026 год",
+      "taxpayers": [
+        "ip"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense",
+        "psn",
+        "osno"
+      ],
+      "period": {
+        "from": "2026-01-01",
+        "to": "2026-12-31"
+      },
+      "nominal": "2026-12-28",
+      "due": "2026-12-28",
+      "basis": "п. 2 ст. 432 НК РФ",
+      "match": {
+        "account": "69.06.6",
+        "periodEnd": "2026-12-31"
+      },
+      "condition": "Уведомление по фиксированным взносам не подаётся. АУСН и самозанятые ИП их не платят."
+    },
+    {
+      "id": "usn_declaration-org-2026-12-31",
+      "obligation": "usn_declaration",
+      "kind": "report",
+      "title": "Декларация по УСН за 2026 год",
+      "taxpayers": [
+        "organization"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense"
+      ],
+      "period": {
+        "from": "2026-01-01",
+        "to": "2026-12-31"
+      },
+      "nominal": "2027-03-25",
+      "due": "2027-03-25",
+      "basis": "пп. 1 п. 1 ст. 346.23 НК РФ",
+      "match": {
+        "reportSource": "РегламентированныйОтчетУСН"
+      }
+    },
+    {
+      "id": "usn_tax-org-2026-12-31",
+      "obligation": "usn_tax",
+      "kind": "payment",
+      "title": "Налог по УСН за 2026 год",
+      "taxpayers": [
+        "organization"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense"
+      ],
+      "period": {
+        "from": "2026-01-01",
+        "to": "2026-12-31"
+      },
+      "nominal": "2027-03-28",
+      "due": "2027-03-29",
+      "basis": "п. 7 ст. 346.21 НК РФ",
+      "match": {
+        "account": "68.12",
+        "periodEnd": "2026-12-31"
+      }
+    },
+    {
+      "id": "usn_advance_notice-all-2027-03-31",
+      "obligation": "usn_advance_notice",
+      "kind": "notice",
+      "title": "Уведомление об исчисленном авансе по УСН за 1 квартал 2027",
+      "taxpayers": [
+        "ip",
+        "organization"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense"
+      ],
+      "period": {
+        "from": "2027-01-01",
+        "to": "2027-03-31"
+      },
+      "nominal": "2027-04-25",
+      "due": "2027-04-26",
+      "basis": "п. 9 ст. 58 НК РФ",
+      "condition": "Только если к уплате получилась сумма больше нуля. С 01.04.2027 в абз. 1 п. 9 ст. 58 вступают изменения (425-ФЗ); их текст не сверен — проверьте перед подачей.",
+      "match": {
+        "kbk": [
+          "18210501011011000110",
+          "18210501021011000110"
+        ],
+        "periodEnd": "2027-03-31"
+      }
+    },
+    {
+      "id": "usn_declaration-ip-2026-12-31",
+      "obligation": "usn_declaration",
+      "kind": "report",
+      "title": "Декларация по УСН за 2026 год",
+      "taxpayers": [
+        "ip"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense"
+      ],
+      "period": {
+        "from": "2026-01-01",
+        "to": "2026-12-31"
+      },
+      "nominal": "2027-04-25",
+      "due": "2027-04-26",
+      "basis": "пп. 2 п. 1 ст. 346.23 НК РФ",
+      "match": {
+        "reportSource": "РегламентированныйОтчетУСН"
+      }
+    },
+    {
+      "id": "usn_advance-all-2027-03-31",
+      "obligation": "usn_advance",
+      "kind": "payment",
+      "title": "Аванс по УСН за 1 квартал 2027",
+      "taxpayers": [
+        "ip",
+        "organization"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense"
+      ],
+      "period": {
+        "from": "2027-01-01",
+        "to": "2027-03-31"
+      },
+      "nominal": "2027-04-28",
+      "due": "2027-04-28",
+      "basis": "п. 7 ст. 346.21 НК РФ",
+      "match": {
+        "account": "68.12",
+        "periodEnd": "2027-03-31"
+      }
+    },
+    {
+      "id": "usn_tax-ip-2026-12-31",
+      "obligation": "usn_tax",
+      "kind": "payment",
+      "title": "Налог по УСН за 2026 год",
+      "taxpayers": [
+        "ip"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense"
+      ],
+      "period": {
+        "from": "2026-01-01",
+        "to": "2026-12-31"
+      },
+      "nominal": "2027-04-28",
+      "due": "2027-04-28",
+      "basis": "п. 7 ст. 346.21 НК РФ",
+      "match": {
+        "account": "68.12",
+        "periodEnd": "2026-12-31"
+      }
+    },
+    {
+      "id": "ip_extra_contribution-ip-2026-12-31",
+      "obligation": "ip_extra_contribution",
+      "kind": "payment",
+      "title": "Взнос 1% с дохода свыше 300 000 ₽ за 2026 год",
+      "taxpayers": [
+        "ip"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense",
+        "psn",
+        "osno"
+      ],
+      "period": {
+        "from": "2026-01-01",
+        "to": "2026-12-31"
+      },
+      "nominal": "2027-07-01",
+      "due": "2027-07-01",
+      "basis": "пп. 1 п. 1.2 ст. 430, п. 2 ст. 432 НК РФ",
+      "condition": "Только если доход за год больше 300 000 ₽. Для патента доходом считается потенциально возможный."
+    },
+    {
+      "id": "usn_advance_notice-all-2027-06-30",
+      "obligation": "usn_advance_notice",
+      "kind": "notice",
+      "title": "Уведомление об исчисленном авансе по УСН за 2 квартал (полугодие) 2027",
+      "taxpayers": [
+        "ip",
+        "organization"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense"
+      ],
+      "period": {
+        "from": "2027-04-01",
+        "to": "2027-06-30"
+      },
+      "nominal": "2027-07-25",
+      "due": "2027-07-26",
+      "basis": "п. 9 ст. 58 НК РФ",
+      "condition": "Только если к уплате получилась сумма больше нуля. С 01.04.2027 в абз. 1 п. 9 ст. 58 вступают изменения (425-ФЗ); их текст не сверен — проверьте перед подачей.",
+      "match": {
+        "kbk": [
+          "18210501011011000110",
+          "18210501021011000110"
+        ],
+        "periodEnd": "2027-06-30"
+      }
+    },
+    {
+      "id": "usn_advance-all-2027-06-30",
+      "obligation": "usn_advance",
+      "kind": "payment",
+      "title": "Аванс по УСН за 2 квартал (полугодие) 2027",
+      "taxpayers": [
+        "ip",
+        "organization"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense"
+      ],
+      "period": {
+        "from": "2027-04-01",
+        "to": "2027-06-30"
+      },
+      "nominal": "2027-07-28",
+      "due": "2027-07-28",
+      "basis": "п. 7 ст. 346.21 НК РФ",
+      "match": {
+        "account": "68.12",
+        "periodEnd": "2027-06-30"
+      }
+    },
+    {
+      "id": "usn_advance_notice-all-2027-09-30",
+      "obligation": "usn_advance_notice",
+      "kind": "notice",
+      "title": "Уведомление об исчисленном авансе по УСН за 3 квартал (9 месяцев) 2027",
+      "taxpayers": [
+        "ip",
+        "organization"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense"
+      ],
+      "period": {
+        "from": "2027-07-01",
+        "to": "2027-09-30"
+      },
+      "nominal": "2027-10-25",
+      "due": "2027-10-25",
+      "basis": "п. 9 ст. 58 НК РФ",
+      "condition": "Только если к уплате получилась сумма больше нуля. С 01.04.2027 в абз. 1 п. 9 ст. 58 вступают изменения (425-ФЗ); их текст не сверен — проверьте перед подачей.",
+      "match": {
+        "kbk": [
+          "18210501011011000110",
+          "18210501021011000110"
+        ],
+        "periodEnd": "2027-09-30"
+      }
+    },
+    {
+      "id": "usn_advance-all-2027-09-30",
+      "obligation": "usn_advance",
+      "kind": "payment",
+      "title": "Аванс по УСН за 3 квартал (9 месяцев) 2027",
+      "taxpayers": [
+        "ip",
+        "organization"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense"
+      ],
+      "period": {
+        "from": "2027-07-01",
+        "to": "2027-09-30"
+      },
+      "nominal": "2027-10-28",
+      "due": "2027-10-28",
+      "basis": "п. 7 ст. 346.21 НК РФ",
+      "match": {
+        "account": "68.12",
+        "periodEnd": "2027-09-30"
+      }
+    },
+    {
+      "id": "ip_fixed_contributions-ip-2027-12-31",
+      "obligation": "ip_fixed_contributions",
+      "kind": "payment",
+      "title": "Фиксированные взносы ИП за 2027 год",
+      "taxpayers": [
+        "ip"
+      ],
+      "regimes": [
+        "usn_income",
+        "usn_income_expense",
+        "psn",
+        "osno"
+      ],
+      "period": {
+        "from": "2027-01-01",
+        "to": "2027-12-31"
+      },
+      "nominal": "2027-12-28",
+      "due": "2027-12-28",
+      "basis": "п. 2 ст. 432 НК РФ",
+      "match": {
+        "account": "69.06.6",
+        "periodEnd": "2027-12-31"
+      },
+      "condition": "Уведомление по фиксированным взносам не подаётся. АУСН и самозанятые ИП их не платят."
+    }
+  ]
+}
