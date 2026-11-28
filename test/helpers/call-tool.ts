@@ -16,6 +16,8 @@ export async function callTool(
   raw: Record<string, unknown>,
   data?: FakeOptions["data"],
   schema?: FakeOptions["schema"],
+  /** Объекты, которых нет в «Составе OData»: схема их знает, публикация — нет. */
+  hidden: readonly string[] = [],
 ) {
   const queries: FakeQuery[] = [];
   const fake = fake1C(
@@ -28,6 +30,10 @@ export async function callTool(
       },
     },
   );
+  if (hidden.length) {
+    const published = fake.conn.available.bind(fake.conn);
+    fake.conn.available = async () => new Set([...(await published())].filter((n) => !hidden.includes(n)));
+  }
   const tool = (createServer(fake.ctx) as unknown as { _registeredTools: Record<string, Registered> })
     ._registeredTools[name]!;
   const result = await tool.handler(tool.inputSchema ? tool.inputSchema.parse(raw) : raw, {});

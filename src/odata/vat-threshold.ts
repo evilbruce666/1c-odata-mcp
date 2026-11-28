@@ -72,7 +72,12 @@ export async function readVatThreshold(input: VatThresholdInput): Promise<VatThr
     const patent = taxpayer === "ip" ? await input.turnover("patent", `${year}-01-01`, through) : [];
     // 1С не отдаёт строку, где все запрошенные ресурсы нулевые: нет строк — в книгах за год пусто.
     if (!usn.length && !patent?.length) {
-      result.notes.push(`Порог НДС за ${year} год не проверен: в книгах доходов 1С за этот год нет записей.`);
+      result.notes.push(
+        `Порог НДС за ${year} год не проверен: ` +
+          (patent
+            ? "в книгах доходов 1С за этот год нет записей."
+            : "в книге доходов УСН записей за этот год нет, а книга патента не прочитана."),
+      );
       continue;
     }
     const incomeUsn = total(usn, "Графа5Turnover");

@@ -101,7 +101,7 @@ type Books = Partial<Record<string, Record<number, number>>>;
 async function calendar(
   rows: Rows = {},
   args: Record<string, unknown> = {},
-  options: { type?: string; registered?: string; books?: Books } = {},
+  options: { type?: string; registered?: string; books?: Books; hidden?: string[] } = {},
 ) {
   turnovers = [];
   const base: Rows = {
@@ -141,6 +141,8 @@ async function calendar(
       }
       return own;
     },
+    undefined,
+    options.hidden,
   );
   requests = fake.requests.length;
   expect(violations).toEqual([]);
@@ -579,4 +581,108 @@ describe("порог НДС на УСН", () => {
       expect(turnovers).toEqual([]);
     }
   });
+});
+
+/**
+ * «Не прочитано» — не «пусто». Каждый необязательный источник: прочитан и пуст, не опубликован, не читается.
+ * Утверждать «не начислено», «не рассчитан», «не требуется», «нет записей» можно только по прочитанному.
+ */
+describe("непрочитанный источник не выдаётся за факт", () => {
+  const WINDOW = { from: "2027-04-01", to: "2027-04-30" };
+  const advance = accrual(USN, "2027-03-31", "2027-04-28", 100);
+  const zero = [{ ПериодРасчета: "2027-03-31T00:00:00", НалогКУплате: 0 }];
+  const unread = ["не опубликован", "ошибка чтения"] as const;
+  const broken = (set: string, how: (typeof unread)[number], rows: Rows = {}) =>
+    how === "не опубликован"
+      ? { rows, hidden: [set] }
+      : { rows: { ...rows, [set]: new Error("нет прав") }, hidden: [] };
+  const run = (
+    { rows, hidden }: { rows: Rows; hidden: string[] },
+    options: { type?: string; books?: Books } = {},
+  ) => calendar(rows, WINDOW, { ...options, hidden });
+  const q1 = (c: Calendar, kind: string) =>
+    c.items.filter((i) => i.kind === kind && /за 1 квартал 2027/.test(i.title));
+  const note = (i: Item | undefined) => (i as { note?: string } | undefined)?.note ?? "";
+
+  const expectUnidentified = (c: Calendar) => {
+    expect(q1(c, "payment")).toMatchObject([{ status: "unknown" }]);
+    // Само начисление не теряется: оно показано без названия налога.
+    expect(c.items.filter((i) => i.status === "accrued" && i.amount === 100)).toHaveLength(1);
+    // Начисления другого периода неопознанным этот платёж не делают.
+    expect(find(c, /^Налог по УСН за 2026/)).toMatchObject([{ status: "not_accrued" }]);
+    expect(q1(c, "notice")).toMatchObject([{ status: "unknown" }]);
+    expect(note(q1(c, "notice")[0])).toContain("счёт не прочитан");
+    expect(c.missing.join(" ")).toMatch(/[Пп]лан счетов|Названия/);
+  };
+
+  for (const how of unread)
+    it(`план счетов: ${how} — платёж этого периода неизвестен, а не «не начислено»`, async () => {
+      const c = await run(broken(SET.chart, how, { [SET.accruals]: [advance], [SET.calc]: zero }));
+      expectUnidentified(c);
+    });
+
+  it("план счетов вернул не все счета — то же и названо в missing", async () => {
+    const other = accrual(PSN, "2025-12-31", "2027-04-28", 5);
+    const c = await calendar(
+      {
+        [SET.chart]: ACCOUNTS.filter((a) => a.Ref_Key === PSN),
+        [SET.accruals]: [advance, other],
+        [SET.calc]: zero,
+      },
+      WINDOW,
+    );
+    expectUnidentified(c);
+  });
+
+  it("счета прочитаны, начисления нет — «не начислено», квартал с нулём — «не требуется»", async () => {
+    const c = await calendar({ [SET.calc]: zero }, WINDOW);
+    expect(q1(c, "payment")).toMatchObject([{ status: "not_accrued" }]);
+    expect(q1(c, "notice")).toMatchObject([{ status: "not_required" }]);
+  });
+
+  it("расчёт УСН прочитан и пуст — «квартал не рассчитан»", async () => {
+    const c = await calendar({}, WINDOW);
+    expect(note(q1(c, "notice")[0])).toContain("не рассчитан");
+  });
+
+  for (const how of unread) {
+    it(`расчёт УСН: ${how} — «не прочитан», а не «не рассчитан»`, async () => {
+      const c = await run(broken(SET.calc, how));
+      expect(q1(c, "notice")).toMatchObject([{ status: "unknown" }]);
+      expect(note(q1(c, "notice")[0])).toContain("не прочитан");
+      expect(note(q1(c, "notice")[0])).not.toContain("не рассчитан");
+      expect(c.missing.join(" ")).toContain("Расчёт УСН");
+    });
+
+    it(`уведомления: ${how} — статус неизвестен`, async () => {
+      const c = await run(broken(SET.notices, how, { [SET.calc]: zero }));
+      expect(q1(c, "notice")).toMatchObject([{ status: "unknown" }]);
+      expect(note(q1(c, "notice")[0])).toBe("");
+      expect(c.missing.join(" ")).toContain("Уведомления");
+    });
+
+    it(`журнал отчётов: ${how} — статус неизвестен, а не «не найден»`, async () => {
+      const c = await run(broken(SET.journal, how));
+      const reports = c.items.filter((i) => i.kind === "report");
+      expect(reports.length).toBeGreaterThan(0);
+      expect(reports.every((i) => i.status === "unknown")).toBe(true);
+      expect(c.missing.join(" ")).toContain("отчётов");
+    });
+
+    it(`книга доходов УСН: ${how} — порога нет, причина названа`, async () => {
+      const c = await run(broken(SET.usnBook, how), { type: "ЮридическоеЛицо" });
+      expect(c.vatThreshold).toBeUndefined();
+      expect(c.notes.join(" ")).not.toContain("нет записей");
+      expect(c.missing.join(" ")).toContain("Порог НДС не проверен");
+    });
+
+    it(`книга патента: ${how}, в книге УСН пусто — не «в книгах нет записей»`, async () => {
+      const c = await run(broken(SET.patentBook, how));
+      expect(c.vatThreshold).toBeUndefined();
+      const about = c.notes.filter((n) => n.startsWith("Порог НДС за"));
+      expect(about).toHaveLength(2);
+      for (const n of about) expect(n).toContain("книга патента не прочитана");
+      expect(c.missing.join(" ")).toContain("Доход по патенту");
+    });
+  }
 });

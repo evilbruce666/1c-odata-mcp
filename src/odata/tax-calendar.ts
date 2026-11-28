@@ -25,7 +25,8 @@ import type { ODataEntity } from "../types/odata.js";
  * распределяет ФНС (п. 8 ст. 45 НК РФ), в 1С этого нет.
  */
 
-export type PaymentStatus = "accrued" | "not_accrued";
+/** unknown — за этот период есть начисление, счёт которого не прочитан: этот ли это платёж, неизвестно. */
+export type PaymentStatus = "accrued" | "not_accrued" | "unknown";
 export type ReportStatus = "sent" | "prepared" | "not_found" | "unknown";
 export type NoticeStatus = "prepared" | "not_required" | "not_found" | "unknown";
 
@@ -260,16 +261,27 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
     ["СрокУплаты", "ПериодРасчета", "СчетУчета_Key", "ДокументПатент_Key", "Начислено", "Active"],
   );
   const net = netAccruals(rows);
-  const chart = resolveEntity(accountingChart(conn.cfg), await conn.available());
   const keys = [...net.due, ...net.excess].map((a) => a.accountKey);
-  const accounts = new Map<string, Account>();
-  if (chart && keys.length)
-    for (const [ref, r] of await readByRefs(conn, chart, keys, ["Ref_Key", "Code", "Description"]))
-      accounts.set(ref, { code: text(r["Code"]), name: text(r["Description"]) });
-  if (keys.length && !accounts.size)
+  // undefined — план счетов не прочитан; это не то же самое, что «таких счетов нет».
+  const chart = keys.length
+    ? await optional(
+        s,
+        accountingChart(conn.cfg),
+        "Названия налогов не прочитаны, начисления не сопоставить со сроками",
+        (set) => readByRefs(conn, set, keys, ["Ref_Key", "Code", "Description"]),
+      )
+    : undefined;
+  const accounts = new Map<string, Account>(
+    [...(chart ?? [])].map(([ref, r]) => [ref, { code: text(r["Code"]), name: text(r["Description"]) }]),
+  );
+  const unidentified = [...net.due, ...net.excess].filter((a) => !accounts.get(a.accountKey)?.code);
+  if (chart && unidentified.length)
     s.missing.push(
-      `Названия налогов: опубликуйте ${describeObject(accountingChart(conn.cfg)[0]!)} — без него начисления не сопоставить со сроками.`,
+      `Названия ${accounts.size ? "части налогов" : "налогов"} не прочитаны: план счетов вернул не все счета — ` +
+        "эти начисления не сопоставить со сроками.",
     );
+  /** Периоды, за которые есть начисление неизвестно по какому счёту: «не начислено» о них сказать нельзя. */
+  const unclear = new Set(unidentified.map((a) => a.periodEnd));
 
   // ─── Режим ────────────────────────────────────────────────────────────────
   // Справочные сроки — кандидаты в окне и рядом: срок начисления в 1С может чуть отличаться.
@@ -371,7 +383,14 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
         `${rub(a.amount)} ₽ (уменьшение или сторно). Это не платёж.`,
     );
   for (const rule of applicable.filter((r) => r.kind === "payment" && !accrued.has(r.id) && inWindow(r.due)))
-    items.push({ ...ruleItem(rule, "not_accrued"), note: paymentWithoutAccrual(rule) });
+    items.push(
+      unclear.has(rule.period.to)
+        ? {
+            ...ruleItem(rule, "unknown"),
+            note: "За этот период в 1С есть начисление, но его счёт не прочитан: этот ли это платёж, неизвестно.",
+          }
+        : { ...ruleItem(rule, "not_accrued"), note: paymentWithoutAccrual(rule) },
+    );
 
   // ─── Отчёты ───────────────────────────────────────────────────────────────
   const reports = applicable.filter((r) => r.kind === "report" && inWindow(r.due));
@@ -470,15 +489,19 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
           ? "unknown"
           : accrual > 0 || toPay > 0
             ? "not_found"
-            : calculated.length
+            : calculated.length && !unclear.has(rule.period.to)
               ? "not_required"
               : "unknown";
+      // Уведомления прочитаны, а ответа всё равно нет — называется причина.
+      const why = unclear.has(rule.period.to)
+        ? "За этот квартал есть начисление, но его счёт не прочитан: нужно ли уведомление, неизвестно."
+        : !calculations
+          ? "Расчёт УСН не прочитан: нужно ли уведомление, неизвестно."
+          : "Квартал в 1С не рассчитан: нужно ли уведомление, станет ясно после закрытия квартала.";
       items.push({
         ...ruleItem(rule, status),
         ...(filed.length ? { notices: filed.sort((a, b) => a.date.localeCompare(b.date)) } : {}),
-        ...(status === "unknown" && documents
-          ? { note: "Квартал в 1С не рассчитан: нужно ли уведомление, станет ясно после закрытия квартала." }
-          : {}),
+        ...(status === "unknown" && documents ? { note: why } : {}),
       });
       // Одно из уведомлений или их сумма должны совпасть с начислением; какое действует, коннектор не решает.
       const total = filed.reduce((sum, n) => sum + n.amount, 0);
