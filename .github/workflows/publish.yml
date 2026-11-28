@@ -21,14 +21,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          # npm >= 11.5.1 нужен для Trusted Publishing; с Node 24 он идёт в комплекте (24.22 — npm 11.19), отдельная
+          # установка npm не нужна. Тесты на Node 24 гоняет и CI.
+          node-version: 24
           registry-url: "https://registry.npmjs.org"
           cache: npm
-      # npm >= 11.5.1 нужен для Trusted Publishing. Пиним МАЖОР (не @latest):
-      # npm@12.0.0 (вышла 2026-07-08) ломает provenance при self-upgrade на раннере
-      # ("Cannot find module 'sigstore'") — сорвала публикацию 0.1.10. npm@11
-      # получает патчи/миноры автоматически, но не подхватит следующий битый мажор.
-      - run: npm install -g npm@11
       - run: npm ci
       - run: npm test
       # prepublishOnly соберёт пакет и уберёт probe-скрипты; токен не передаётся

@@ -25,4 +25,10 @@ jobs:
           languages: javascript-typescript
           build-mode: none
           queries: security-extended
+          # Смотрим то, что попадает к пользователям: тесты и скрипты разработчика в npm-пакет не входят.
+          config: |
+            paths-ignore:
+              - test
+              - src/scripts
+              - scripts
       - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3

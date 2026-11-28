@@ -13,24 +13,16 @@ describe("publish-registry.yml: реестр MCP", () => {
     expect(npm.match(/^ {2}[\w-]+:\n {4}runs-on/gm)).toHaveLength(1);
   });
 
-  it("запускается только после успешной публикации по тегу своим publish.yml", () => {
-    const name = /^name: (.+)$/m.exec(npm)![1]!;
-    expect(job).toContain(`workflows: ["${name}"]`);
-    expect(job).not.toMatch(/^ {2}(push|pull_request|pull_request_target):/m);
-    for (const guard of [
-      "workflow_run.conclusion == 'success'",
-      "workflow_run.event == 'push'",
-      "workflow_run.path == '.github/workflows/publish.yml'",
-      "workflow_run.head_repository.full_name == github.repository",
-      "startsWith(github.event.workflow_run.head_branch, 'v')",
-    ])
-      expect(job).toContain(guard);
-    expect(job).toContain("ref: ${{ github.event.workflow_run.head_sha }}");
+  it("запускается только пушем тега, без кода по ссылке из события (Scorecard: Dangerous-Workflow)", () => {
+    expect(job).toMatch(/^on:\n {2}push:\n {4}tags: \["v\*"\]\n/m);
+    expect(job).not.toMatch(/workflow_run|pull_request|branches:/);
+    expect(job).not.toMatch(/\bref: \$\{\{/);
     expect(job).toContain("persist-credentials: false");
-    // Имя ветки на «v» не делает запуск релизом: версия из package.json должна равняться тегу и тег — существовать.
-    expect(job).toContain('[ "$HEAD_BRANCH" = "v$version" ]');
-    expect(job).toContain("refs/tags/v$version");
-    expect(job.indexOf('[ "$HEAD_BRANCH"')).toBeLessThan(job.indexOf("mcp-publisher publish"));
+    // Тег должен равняться версии из package.json — и до публикации.
+    expect(job).toContain('[ "$GITHUB_REF_NAME" = "v$version" ]');
+    expect(job.indexOf('[ "$GITHUB_REF_NAME"')).toBeLessThan(job.indexOf("mcp-publisher publish"));
+    // Значение из события — только через переменную окружения, не подстановкой в скрипт.
+    expect(job).not.toMatch(/run: [|>][^]*\$\{\{ *github\.(event|head_ref)/);
     expect(job).not.toMatch(/\bnpm (ci|install|test|run)\b|\bnpx\b/);
   });
 
@@ -55,10 +47,18 @@ describe("publish-registry.yml: реестр MCP", () => {
     expect(job.indexOf("./mcp-publisher")).toBeGreaterThan(check);
   });
 
-  it("сначала ждёт пакет в npm — версию из package.json выпущенного коммита", () => {
+  it("сначала ждёт пакет в npm: не опубликован — реестр не трогается", () => {
     expect(job).toContain('version="$(jq -r .version package.json)"');
-    expect(job).not.toContain("GITHUB_REF_NAME");
     expect(job.indexOf("registry.npmjs.org/1c-odata-mcp/-/")).toBeGreaterThan(0);
-    expect(job.indexOf("registry.npmjs.org")).toBeLessThan(job.indexOf("mcp-publisher publish"));
+    expect(job.indexOf("registry.npmjs.org")).toBeLessThan(job.indexOf("mcp-publisher login"));
+    // Ожидание кончается ошибкой, а не публикацией: «exit 0» — только когда пакет найден.
+    const wait = job.slice(job.indexOf("Дождаться пакета в npm"), job.indexOf("Скачать и проверить"));
+    expect(wait).toMatch(/registry\.npmjs\.org[^\n]*&& exit 0/);
+    expect(wait.match(/exit \d/g)!.at(-1)).toBe("exit 1");
+  });
+
+  it("publish.yml: npm из комплекта Node, без установки поверх (Scorecard: Pinned-Dependencies)", () => {
+    expect(npm).not.toMatch(/npm install -g/);
+    expect(npm).toMatch(/node-version: 24\n/);
   });
 });

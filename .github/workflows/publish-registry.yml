@@ -1,25 +1,17 @@
 name: Publish to MCP registry
 
 # Официальный реестр MCP. Отдельным файлом, а не задачей в publish.yml: npm доверяет публикацию (Trusted Publishing)
-# по имени workflow, и OIDC-токен задачи из publish.yml годился бы и для npm. Запускается после успешной публикации по
-# тегу; если упадёт — npm и релиз уже вышли, повторить можно только этот запуск («Re-run failed jobs»).
+# по имени workflow, и OIDC-токен задачи из publish.yml годился бы и для npm. Запускается тем же тегом, что и
+# публикация в npm, и ждёт, пока пакет появится в npm; если npm не опубликуется, задача упадёт по ожиданию. Упала —
+# npm и релиз уже вышли, повторить можно только этот запуск («Re-run failed jobs»).
 on:
-  workflow_run:
-    workflows: ["Publish to npm"]
-    types: [completed]
+  push:
+    tags: ["v*"]
 
 permissions: {}
 
 jobs:
   registry:
-    # Только свой publish.yml, запущенный пушем тега в этом репозитории: workflow_run сработал бы и на одноимённый
-    # workflow из чужой ветки.
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.path == '.github/workflows/publish.yml' &&
-      github.event.workflow_run.head_repository.full_name == github.repository &&
-      startsWith(github.event.workflow_run.head_branch, 'v')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -30,26 +22,23 @@ jobs:
       MCP_PUBLISHER_VERSION: v1.8.16
       MCP_PUBLISHER_SHA256: 6e2f799550cf843c6fd3350498d56cc49be3dc0af1e6237eb0e6435c7a9d5c05
     steps:
-      # Из коммита выпуска берётся только server.json и номер версии; код из него не запускается.
+      # Из коммита тега берётся только server.json и номер версии; код из него не запускается.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
 
-      # Ветка с именем на «v» не должна выглядеть релизом: публикуем, только если запуск — тег vX.Y.Z этой версии.
-      - name: Проверить, что запуск — тег этой версии
-        env:
-          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      # Тег должен совпадать с версией в package.json: иначе в реестр ушла бы не та версия.
+      - name: Проверить, что тег — эта версия
         run: |
           version="$(jq -r .version package.json)"
-          [ "$HEAD_BRANCH" = "v$version" ] || { echo "Запуск $HEAD_BRANCH не совпадает с версией v$version"; exit 1; }
-          git ls-remote --exit-code --tags "https://github.com/$GITHUB_REPOSITORY.git" "refs/tags/v$version" >/dev/null
+          [ "$GITHUB_REF_NAME" = "v$version" ] || { echo "Тег $GITHUB_REF_NAME не совпадает с версией v$version"; exit 1; }
 
       # Реестр проверяет пакет в npm, а новая версия доезжает не сразу (в 1.2.0 архив несколько минут отвечал 404).
       - name: Дождаться пакета в npm
         run: |
           version="$(jq -r .version package.json)"
-          for attempt in $(seq 1 60); do
+          # Публикация в npm идёт после тестов, это несколько минут: ждём до 30 минут.
+          for attempt in $(seq 1 180); do
             curl --fail --silent --head "https://registry.npmjs.org/1c-odata-mcp/-/1c-odata-mcp-$version.tgz" >/dev/null && exit 0
             sleep 10
           done
