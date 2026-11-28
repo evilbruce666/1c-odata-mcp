@@ -3,10 +3,16 @@ import { CATALOGS, REGISTERS, TAX_NOTICES, TAX_REPORTS, resolveEntity } from "..
 import { accountingChart } from "../config/accounting.js";
 import { readByRefs, num } from "./accounting.js";
 import { fetchAll } from "./pagination.js";
-import { describeObject, refuseOnTrade, requireEntity } from "./publication.js";
+import { describeObject, requireEntity } from "./publication.js";
 import { and, cmp, odataGuid } from "./query.js";
 import { taxRules, type TaxRule } from "./tax-calendar-rules.js";
-import { taxRegimeReader, type TaxRegime, type TaxRegimeKey, type TaxRegimeResult } from "./tax-regime.js";
+import {
+  taxRegimeReader,
+  type TaxRegime,
+  type TaxRegimeKey,
+  type TaxRegimeResult,
+  vatPayerFromSettings,
+} from "./tax-regime.js";
 import { turnoversPath } from "./item-sales.js";
 import { readVatThreshold, type VatThresholdFact, type VatThresholdResult } from "./vat-threshold.js";
 import type { ODataEntity } from "../types/odata.js";
@@ -228,7 +234,6 @@ const ruleItem = (rule: TaxRule, status: CalendarItem["status"]): CalendarItem =
 
 export async function buildTaxCalendar(conn: Connection, input: CalendarInput): Promise<TaxCalendar> {
   const { orgRef, today, from, to } = input;
-  await refuseOnTrade(conn, "Налоговый календарь", "Календарь строится по налоговому учёту Бухгалтерии.");
   const accrualSet = await requireEntity(
     conn,
     REGISTERS.taxAccruals,
@@ -491,12 +496,19 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
 
   // ─── Порог НДС на УСН ─────────────────────────────────────────────────────
   let vat: VatThresholdResult | undefined;
-  if (regime.regimes.some((k) => k.startsWith("usn")) && now.regime?.vatPayerOnUsn !== true) {
+  const onUsn = regime.regimes.some((k) => k.startsWith("usn"));
+  let vatPayer = now.regime?.vatPayerOnUsn;
+  if (onUsn && input.regime)
+    vatPayer = await vatPayerFromSettings(conn, orgRef, today).catch((e: unknown) => {
+      s.missing.push(`Из настроек 1С не прочитано, плательщик ли НДС (${reason(e)}).`);
+      return undefined;
+    });
+  if (onUsn && vatPayer !== true) {
     vat = await readVatThreshold({
       taxpayer,
       today,
       registered,
-      vatPayer: now.regime?.vatPayerOnUsn,
+      vatPayer,
       thresholds: reference.vatThreshold,
       turnover: (book, since, until) =>
         optional(

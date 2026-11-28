@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { ServerContext } from "../context.js";
 import { InputError } from "../errors.js";
 import { resolveOrgOrDefault } from "../odata/orgs.js";
+import { refuseOnTrade } from "../odata/publication.js";
 import { buildTaxCalendar } from "../odata/tax-calendar.js";
 import { TAX_REGIME_KEYS } from "../odata/tax-regime.js";
 import { taxCalendarResultSchema } from "../schemas/output.js";
@@ -61,6 +62,12 @@ export function registerTaxCalendarTools(server: McpServer, ctx: ServerContext):
         if (days < 0) throw new InputError("to раньше from.");
         if (days > MAX_DAYS) throw new InputError("Окно календаря — не больше двух лет.");
         const conn = ctx.db(database);
+        // До выбора организации: иначе в Управлении торговлей сначала просили бы назвать её, а потом отказывали.
+        await refuseOnTrade(
+          conn,
+          "Налоговый календарь",
+          "Календарь строится по налоговому учёту Бухгалтерии.",
+        );
         const org = await resolveOrgOrDefault(conn, organization);
         const calendar = await buildTaxCalendar(conn, {
           orgRef: org.ref,

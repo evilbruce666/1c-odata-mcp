@@ -438,6 +438,20 @@ describe("границы", () => {
     await expect(callTool(TOOL, { from: "2027-02-30" })).rejects.toThrow();
   });
 
+  it("в Управлении торговлей с несколькими организациями отказ сразу, без просьбы выбрать", async () => {
+    const orgs = [1, 2].map((i) => ({ Ref_Key: ref(i), Description: `Организация ${i}` }));
+    const { result, queries } = await callTool(
+      TOOL,
+      {},
+      (q) => (q.base === SET.org ? orgs : undefined),
+      "ut11",
+    );
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain("налоговому учёту Бухгалтерии");
+    expect(JSON.stringify(result.content)).not.toContain("несколько организаций");
+    expect(queries).toEqual([]);
+  });
+
   it("в Управлении торговлей — отказ без совета публиковать регистры бухучёта", async () => {
     const { result } = await callTool(TOOL, {}, undefined, "ut11");
     expect(result.isError).toBe(true);
@@ -531,6 +545,31 @@ describe("порог НДС на УСН", () => {
     );
     expect(c.vatThreshold!.map((f) => f.year)).toEqual([2027]);
     expect(c.notes.join(" ")).not.toContain("2026 год не проверен");
+  });
+
+  it("режим назван параметром — «плательщик НДС» всё равно берётся из настроек 1С", async () => {
+    const named = { regime: ["usn_income"] };
+    const books = { [SET.usnBook]: { 2026: 21_000_000 } };
+    const payer = await calendar(
+      { [SET.settings]: [setting({ ПлательщикНДСПрименяющийУСН: true })] },
+      named,
+      { books },
+    );
+    expect(payer.vatThreshold).toBeUndefined();
+    expect(vatWarnings(payer)).toEqual([]);
+    expect(turnovers).toEqual([]);
+    const other = await calendar({ [SET.settings]: [notPayer] }, named, { books });
+    expect(vatWarnings(other)[0]).toContain("не плательщик НДС — проверьте");
+  });
+
+  it("настройки при названном режиме не читаются — порог проверяется, причина названа", async () => {
+    const c = await calendar(
+      { [SET.settings]: new Error("нет прав") },
+      { regime: ["usn_income"] },
+      { books: { [SET.usnBook]: { 2026: 1 } } },
+    );
+    expect(c.vatThreshold).toHaveLength(1);
+    expect(c.missing.join(" ")).toContain("плательщик ли НДС");
   });
 
   it("плательщику НДС и не на УСН порог не нужен: книги не читаются", async () => {

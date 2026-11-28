@@ -253,6 +253,20 @@ export async function taxRegimeReader(
 const publishedSettings = async (conn: Connection) =>
   resolveEntity(REGISTERS.taxSettings, await conn.available());
 
+/**
+ * «Плательщик НДС» по настройкам 1С — для случая, когда режим назвал пользователь: это отдельный факт 1С, и названный
+ * режим его не отменяет. undefined — настройки не опубликованы или этого не говорят.
+ */
+export async function vatPayerFromSettings(
+  conn: Connection,
+  orgRef: string,
+  asOf: string,
+): Promise<boolean | undefined> {
+  const settings = await publishedSettings(conn);
+  if (!settings) return undefined;
+  return fromSettings(await settingsHistory(conn, settings, orgRef, asOf), asOf).regime?.vatPayerOnUsn;
+}
+
 /** Режим организации на дату. */
 export async function readTaxRegime(
   conn: Connection,
