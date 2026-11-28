@@ -222,6 +222,17 @@ function paymentWithoutAccrual(rule: TaxRule): string {
   return "В 1С не начислено: период ещё не закрыт или начислять нечего.";
 }
 
+/**
+ * Была ли УСН в этот период, по ответу о режиме судить нельзя: режима нет вовсе; он выведен косвенно (отсутствие
+ * следов УСН не значит, что её не было); или в настройках УСН без объекта налогообложения. Другая известная система
+ * — не «неизвестно».
+ */
+function usnUnknown({ regime, noContributions }: TaxRegimeResult): boolean {
+  if (!regime) return true;
+  if (regime.regimes.some((k) => k.startsWith("usn"))) return false;
+  return regime.source === "inferred" || (regime.system === "Упрощенная" && !noContributions);
+}
+
 const ruleItem = (rule: TaxRule, status: CalendarItem["status"]): CalendarItem => ({
   kind: rule.kind,
   title: rule.title,
@@ -323,6 +334,8 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
       : { regimes: [], source: "unknown", asOf: today };
 
   const applicable: TaxRule[] = [];
+  /** Сроки УСН, про которые не известно, относятся ли они к организации: не показываются, но называются. */
+  const undecided: TaxRule[] = [];
   for (const rule of candidates) {
     // Режим — тот, что был в периоде обязанности: декларацию за год сдаёт тот, кто был на УСН в этом году.
     const at = await regimeAt(rule.period.to < today ? rule.period.to : today).catch((): TaxRegimeResult => ({
@@ -333,6 +346,7 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
       ? !at.noContributions
       : rule.regimes.some((k) => (at.regime?.regimes ?? []).includes(k));
     if (applies) applicable.push(rule);
+    else if (!rule.obligation.startsWith("ip_") && usnUnknown(at)) undecided.push(rule);
   }
   if (!regime.regimes.length)
     notes.push(
@@ -390,6 +404,17 @@ export async function buildTaxCalendar(conn: Connection, input: CalendarInput): 
             note: "За этот период в 1С есть начисление, но его счёт не прочитан: этот ли это платёж, неизвестно.",
           }
         : { ...ruleItem(rule, "not_accrued"), note: paymentWithoutAccrual(rule) },
+    );
+
+  // Режим не определён и на сегодня — об этом уже сказано выше. Начисленное в 1С показано и без режима.
+  const unshown = undecided
+    .filter((r) => inWindow(r.due) && !accrued.has(r.id))
+    .sort((a, b) => a.due.localeCompare(b.due) || a.title.localeCompare(b.title, "ru"));
+  if (unshown.length && (now.regime || input.regime))
+    warnings.push(
+      "Была ли УСН в периоде этих обязанностей, по данным 1С не установлено, поэтому они не показаны — проверьте, " +
+        `относятся ли они к вам: ${unshown.map((r) => `«${r.title}» — ${r.due}`).join("; ")}. ` +
+        "Если режим известен, назовите его параметром regime.",
     );
 
   // ─── Отчёты ───────────────────────────────────────────────────────────────

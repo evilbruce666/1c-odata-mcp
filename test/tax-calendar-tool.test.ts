@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TAX_PATENT_DOCUMENTS } from "../src/config/mapping.js";
 import { netAccruals } from "../src/odata/tax-calendar.js";
 import { callTool } from "./helpers/call-tool.js";
 
@@ -20,6 +21,7 @@ const SET = {
   calc: "InformationRegister_РасчетНалогаУСН_RecordType",
   usnBook: "AccumulationRegister_КнигаУчетаДоходовИРасходов",
   patentBook: "AccumulationRegister_КнигаУчетаДоходовПатент",
+  patents: TAX_PATENT_DOCUMENTS[0],
 } as const;
 const ACCOUNTS = [
   { Ref_Key: USN, Code: "68.12", Description: "Налог при УСН" },
@@ -121,6 +123,7 @@ async function calendar(
     [SET.calc]: [],
     [SET.usnBook]: [],
     [SET.patentBook]: [],
+    [SET.patents]: [],
     ...rows,
   };
   const { result, violations, fake } = await callTool(
@@ -685,4 +688,107 @@ describe("непрочитанный источник не выдаётся за
       expect(c.missing.join(" ")).toContain("Доход по патенту");
     });
   }
+});
+
+/**
+ * Сроки УСН берутся по режиму того периода, за который обязанность. Не знаем режим периода — не показываем сроки,
+ * но называем их: молча пропавшая декларация — пропущенный срок.
+ */
+describe("режим за период обязанности неизвестен", () => {
+  const WINDOW = { from: "2027-01-15", to: "2027-04-30" };
+  const ORGANIZATION = { type: "ЮридическоеЛицо" };
+  const hiddenWarnings = (c: Calendar) => c.warnings.filter((w) => w.includes("не показаны"));
+  const lost = ["«Декларация по УСН за 2026 год»", "«Налог по УСН за 2026 год"];
+
+  const expectNamed = (c: Calendar) => {
+    expect(find(c, /за 2026 год/).filter((i) => i.status !== "accrued")).toEqual([]);
+    expect(hiddenWarnings(c)).toHaveLength(1);
+    for (const title of lost) expect(hiddenWarnings(c)[0]).toContain(title);
+    // То, что режим позволяет показать, в предупреждение не попадает.
+    expect(hiddenWarnings(c)[0]).not.toContain("за 1 квартал 2027");
+    expect(find(c, /за 1 квартал 2027/).length).toBeGreaterThan(0);
+    expect(hiddenWarnings(c)[0]).toContain("параметром regime");
+  };
+
+  it("записи настроек начинаются позже периода — декларация и налог названы", async () => {
+    const c = await calendar(
+      { [SET.settings]: [setting({ Period: "2027-01-01T00:00:00" })] },
+      WINDOW,
+      ORGANIZATION,
+    );
+    expectNamed(c);
+    expect(hiddenWarnings(c)[0]).toMatch(/2027-03-\d\d/);
+  });
+
+  it("косвенно: расчёты УСН только с этого года — то же", async () => {
+    const c = await calendar(
+      { [SET.calc]: [{ ПериодРасчета: "2027-03-31T00:00:00", ОбъектНалогообложения: "Доходы" }] },
+      { from: "2027-01-15", to: "2027-04-30" },
+      { ...ORGANIZATION, hidden: [SET.settings] },
+    );
+    // На сегодня (15.01) расчётов ещё нет: режим не определён целиком, об этом говорит отдельная заметка.
+    expect(c.notes.join(" ")).toContain("Режим не определён");
+    expect(hiddenWarnings(c)).toEqual([]);
+  });
+
+  it("косвенно виден только патент — отсутствие следов УСН не значит, что её не было", async () => {
+    const c = await calendar(
+      {
+        [SET.patents]: [{ ДатаНачала: "2026-01-01T00:00:00", ДатаОкончания: "2027-12-31T00:00:00" }],
+      },
+      WINDOW,
+      { hidden: [SET.settings] },
+    );
+    expect(c.regime.regimes).toEqual(["psn"]);
+    expect(hiddenWarnings(c)).toHaveLength(1);
+    expect(hiddenWarnings(c)[0]).toContain(lost[0]);
+  });
+
+  it("«Упрощенная» без объекта налогообложения — сроки названы", async () => {
+    const c = await calendar(
+      { [SET.settings]: [setting({ ОбъектНалогообложенияУСН: "" })] },
+      WINDOW,
+      ORGANIZATION,
+    );
+    expect(hiddenWarnings(c)[0]).toContain(lost[0]);
+  });
+
+  it("в прошлом был другой известный режим — сроков УСН за него нет и предупреждать не о чем", async () => {
+    const c = await calendar(
+      {
+        [SET.settings]: [
+          setting({ Period: "2027-01-01T00:00:00" }),
+          setting({ Period: "2020-01-01T00:00:00", СистемаНалогообложения: "Общая" }),
+        ],
+      },
+      WINDOW,
+      ORGANIZATION,
+    );
+    expect(find(c, /за 2026 год/)).toEqual([]);
+    expect(hiddenWarnings(c)).toEqual([]);
+  });
+
+  it("срок вне окна не называется, начисленное в 1С не считается пропавшим", async () => {
+    const late = { [SET.settings]: [setting({ Period: "2027-01-01T00:00:00" })] };
+    const outside = await calendar(late, { from: "2027-05-01", to: "2027-06-30" }, ORGANIZATION);
+    expect(hiddenWarnings(outside)).toEqual([]);
+    const accrued = await calendar(
+      { ...late, [SET.accruals]: [accrual(USN, "2026-12-31", "2027-03-29", 10)] },
+      WINDOW,
+      ORGANIZATION,
+    );
+    expect(find(accrued, /^Налог по УСН за 2026/)).toMatchObject([{ status: "accrued", amount: 10 }]);
+    expect(hiddenWarnings(accrued)[0]).not.toContain("«Налог по УСН за 2026");
+    expect(hiddenWarnings(accrued)[0]).toContain(lost[0]);
+  });
+
+  it("режим назван параметром — пропавшего нет", async () => {
+    const c = await calendar(
+      { [SET.settings]: [setting({ Period: "2027-01-01T00:00:00" })] },
+      { ...WINDOW, regime: ["usn_income"] },
+      ORGANIZATION,
+    );
+    expect(find(c, /^Декларация по УСН за 2026/)).toHaveLength(1);
+    expect(hiddenWarnings(c)).toEqual([]);
+  });
 });
