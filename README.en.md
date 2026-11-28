@@ -59,8 +59,8 @@ Reference — [docs/TOOLS.md](docs/TOOLS.md), all parameters — [docs/TOOLS-REF
 }
 ```
 
-`TOOLS_PROFILE=read` exposes only the read tools: less for the model to read, and it cannot write to 1C. Remove
-this line to enable writing. On Windows, if the client cannot start `npx`, use
+`TOOLS_PROFILE=read` exposes only the read tools: less for the model to read. It is not the write guard — writing stays
+off until you set `READ_ONLY=false` and mark the database writable ([docs/WRITE.md](docs/WRITE.md)). On Windows, if the client cannot start `npx`, use
 `"command": "cmd", "args": ["/c", "npx", "-y", "1c-odata-mcp"]`.
 
 4. **Restart the client** and ask "check the connection to 1C" — a healthy answer names the OData version and the
@@ -74,7 +74,7 @@ the environment variables. JSON configs only.
 The same entry works in Cursor, LM Studio, Cline and JetBrains AI Assistant (`mcpServers`). VS Code uses
 `.vscode/mcp.json` with a `servers` section and `"type": "stdio"`; Codex uses `~/.codex/config.toml` with
 `[mcp_servers.1c-odata]` or `codex mcp add`; Claude Code — `claude mcp add`. For local models with a small context there is a
-ready 18-tool `TOOLS_ALLOW` lines (one for Accounting, one for Trade Management) in [docs/CONNECTING.md](docs/CONNECTING.md#меньше-инструментов-для-модели-опционально). Local models answer noticeably slower than
+ready `TOOLS_ALLOW` lines (19 tools for Accounting, 18 for Trade Management) in [docs/CONNECTING.md](docs/CONNECTING.md#меньше-инструментов-для-модели-опционально). Local models answer noticeably slower than
 cloud ones; measurements and setup notes are in [docs/LOCAL-MODELS.md](docs/LOCAL-MODELS.md) (in Russian). Exact snippets —
 [docs/INSTALL-WITH-AI.md](docs/INSTALL-WITH-AI.md#шаг-4-подключить-сервер-к-приложению). A browser-only chat cannot
 start a local server: use a desktop app or the HTTP mode below.
